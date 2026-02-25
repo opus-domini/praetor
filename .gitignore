@@ -11,20 +11,20 @@
 !/.gitignore
 
 !*.go
-!go.sum
-!go.mod
+!/go.sum
+!/go.mod
 
-!README.md
-!CONTRIBUTING.md
-!LICENSE
+!/.README.md
+!/CONTRIBUTING.md
+!/LICENSE
 
 !/.github/**/*
 !/docs/**/*
 
-!Makefile
-!.golangci.yml
+!/Makefile
+!/.golangci.yml
 
-!install.sh
+!/install.sh
 !/scripts/**/*
 
 # ...even if they are in subdirectories
