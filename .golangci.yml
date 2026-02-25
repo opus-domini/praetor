@@ -5,22 +5,26 @@ run:
 
 linters:
   enable:
+    - asasalint
+    - bidichk
+    - bodyclose
+    - containedctx
     - errcheck
+    - gocheckcompilerdirectives
     - govet
     - ineffassign
-    - staticcheck
-    - unused
-    - gosec
+    - intrange
+    - makezero
     - misspell
+    - nilerr
+    - nolintlint
+    - nosprintfhostport
+    - staticcheck
+    - unconvert
+    - unused
+    - usetesting
+    - wastedassign
     - whitespace
-  settings:
-    gosec:
-      excludes:
-        - G117 # APIKey field name is expected in provider options.
-        - G204 # This CLI must execute external tools (git, tmux, codex, claude).
-        - G301 # Runtime directories are operational data, not secret storage.
-        - G304 # File paths are intentionally dynamic (plans, state, logs).
-        - G306 # Runtime files are meant to be readable during operations.
 
 issues:
   max-issues-per-linter: 0

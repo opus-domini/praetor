@@ -472,7 +472,8 @@ func toTomlValue(value any, path string) (string, error) {
 		switch rv.Kind() {
 		case reflect.Slice, reflect.Array:
 			parts := make([]string, 0, rv.Len())
-			for i := 0; i < rv.Len(); i++ {
+			length := rv.Len()
+			for i := range length {
 				itemValue, err := toTomlValue(rv.Index(i).Interface(), fmt.Sprintf("%s[%d]", path, i))
 				if err != nil {
 					return "", err

@@ -90,7 +90,7 @@ func TestListSessionsLimit(t *testing.T) {
 		t.Fatalf("mkdir project: %v", err)
 	}
 
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		file := filepath.Join(project, fmt.Sprintf("00000000-0000-0000-0000-00000000000%d.jsonl", i))
 		if err := os.WriteFile(file, []byte(`{"type":"summary","summary":"s"}`+"\n"), 0o644); err != nil {
 			t.Fatalf("write session %d: %v", i, err)
