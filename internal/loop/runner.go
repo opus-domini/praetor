@@ -110,15 +110,15 @@ func (r *Runner) bootstrapRun(ctx context.Context, out io.Writer, planFile strin
 
 	runtime := r.runtime
 	if runtime == nil {
-		runtime = NewTMUXAgentRuntime(normalized.TMUXSession)
+		runtime = newComposedRuntime(defaultAgents(), newTmuxRunner(normalized.TMUXSession))
 	}
 	run.runtime = runtime
 
-	if tmuxRuntime, ok := runtime.(*TMUXAgentRuntime); ok {
-		if err := tmuxRuntime.EnsureSession(); err != nil {
+	if sm, ok := runtime.(SessionManager); ok {
+		if err := sm.EnsureSession(); err != nil {
 			return run, RunLock{}, cleanupRuntime, err
 		}
-		cleanupRuntime = tmuxRuntime.Cleanup
+		cleanupRuntime = sm.Cleanup
 	}
 
 	if ctxErr := ctx.Err(); ctxErr != nil {
@@ -177,8 +177,8 @@ func (r *Runner) bootstrapRun(ctx context.Context, out io.Writer, planFile strin
 	if normalized.Isolation == IsolationWorktree {
 		render.KV("Isolation:", "worktree")
 	}
-	if tmuxRuntime, ok := runtime.(*TMUXAgentRuntime); ok {
-		render.KV("tmux:", tmuxRuntime.SessionName())
+	if sm, ok := runtime.(SessionManager); ok {
+		render.KV("tmux:", sm.SessionName())
 	}
 
 	run.transitions = NewTransitionRecorder(store, planFile)

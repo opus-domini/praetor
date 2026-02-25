@@ -153,6 +153,45 @@ type AgentResult struct {
 	DurationS float64
 }
 
+// CommandSpec describes a process invocation, agnostic of how it will be executed.
+type CommandSpec struct {
+	Args  []string // Full command: ["codex", "exec", "--json", ...]
+	Env   []string // Additional environment variables (KEY=VALUE)
+	Dir   string   // Working directory
+	Stdin string   // Content to write to stdin ("" = no stdin)
+}
+
+// ProcessResult holds the raw output of a completed process.
+type ProcessResult struct {
+	Stdout   string
+	Stderr   string
+	ExitCode int
+}
+
+// AgentSpec knows how to build a CLI invocation for one agent
+// and how to interpret its output.
+type AgentSpec interface {
+	// BuildCommand produces the command-line invocation for this agent.
+	BuildCommand(req AgentRequest) (CommandSpec, error)
+
+	// ParseOutput interprets the agent's stdout and extracts
+	// the usable output text and cost (if available).
+	ParseOutput(stdout string) (output string, cost float64, err error)
+}
+
+// ProcessRunner executes a CommandSpec and returns raw process output.
+// The implementation decides how to run it (tmux, direct, etc.).
+type ProcessRunner interface {
+	Run(ctx context.Context, spec CommandSpec, runDir, prefix string) (ProcessResult, error)
+}
+
+// SessionManager is optionally implemented by runners that manage sessions.
+type SessionManager interface {
+	EnsureSession() error
+	Cleanup()
+	SessionName() string
+}
+
 // AgentRuntime executes prompts on a provider backend.
 type AgentRuntime interface {
 	Run(ctx context.Context, req AgentRequest) (AgentResult, error)

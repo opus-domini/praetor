@@ -2,7 +2,6 @@ package loop
 
 import (
 	"fmt"
-	"os/exec"
 	"strings"
 )
 
@@ -125,35 +124,4 @@ func truncateOutput(output string, maxLines int) string {
 		return output
 	}
 	return strings.Join(lines[len(lines)-maxLines:], "\n")
-}
-
-// CaptureGitDiff runs git diff in the given directory and returns the output
-// truncated to maxLines. Returns empty string on any error.
-func CaptureGitDiff(workdir string, maxLines int) string {
-	statCmd := exec.Command("git", "-C", workdir, "diff", "--stat")
-	statOut, err := statCmd.Output()
-	if err != nil {
-		return ""
-	}
-
-	diffCmd := exec.Command("git", "-C", workdir, "diff")
-	diffOut, err := diffCmd.Output()
-	if err != nil {
-		return strings.TrimSpace(string(statOut))
-	}
-
-	stat := strings.TrimSpace(string(statOut))
-	diff := truncateOutput(strings.TrimSpace(string(diffOut)), maxLines)
-	if stat == "" && diff == "" {
-		return ""
-	}
-
-	var b strings.Builder
-	if stat != "" {
-		fmt.Fprintf(&b, "%s\n\n", stat)
-	}
-	if diff != "" {
-		b.WriteString(diff)
-	}
-	return strings.TrimSpace(b.String())
 }
