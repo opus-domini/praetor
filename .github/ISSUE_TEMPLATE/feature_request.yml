@@ -1,0 +1,73 @@
+name: Feature request
+description: Suggest an improvement for praetor
+title: "[feature] "
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this template for new features and substantial improvements.
+
+  - type: input
+    id: summary
+    attributes:
+      label: Summary
+      description: Short feature title
+      placeholder: "Add a stream mode for run command"
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem statement
+      description: What pain point does this solve?
+      placeholder: "I cannot consume partial outputs while a provider is still running."
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: Describe your ideal approach
+      placeholder: "Add `praetor run --stream` to emit events as they arrive."
+    validations:
+      required: true
+
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope
+      description: Clarify if this affects CLI, orchestrator, or providers
+      placeholder: "CLI + orchestrator contract update"
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: What else did you evaluate?
+      placeholder: "Using provider-specific commands directly"
+
+  - type: textarea
+    id: impact
+    attributes:
+      label: API impact
+      description: Mention any expected API or behavior changes
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional context
+      description: Links, references, code examples, or use cases
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Checklist
+      options:
+        - label: I searched existing issues and did not find a duplicate.
+          required: true
+        - label: This request is scoped to one clear improvement.
+          required: false
