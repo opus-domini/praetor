@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -109,6 +110,39 @@ executor = "claude"
 	}
 }
 
+func TestLoadProjectSectionMatchesNormalizedPath(t *testing.T) {
+	dir := t.TempDir()
+	projectRoot := filepath.Join(dir, "project")
+	if err := os.MkdirAll(projectRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	symlinkPath := filepath.Join(dir, "project-link")
+	if err := os.Symlink(projectRoot, symlinkPath); err != nil {
+		t.Skipf("symlink unsupported: %v", err)
+	}
+
+	cfgPath := filepath.Join(dir, "config.toml")
+	content := `
+executor = "codex"
+
+[projects."` + projectRoot + `"]
+executor = "claude"
+	`
+	if err := os.WriteFile(cfgPath, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PRAETOR_CONFIG", cfgPath)
+
+	cfg, err := Load(symlinkPath)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Executor != "claude" {
+		t.Fatalf("expected normalized project override executor=claude, got %q", cfg.Executor)
+	}
+}
+
 func TestParserComments(t *testing.T) {
 	t.Parallel()
 	input := `# This is a comment
@@ -139,7 +173,10 @@ executor = "claude"
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg := configFromMap(sections[""])
+	cfg, err := configFromMap("global", sections[""])
+	if err != nil {
+		t.Fatalf("unexpected parse config error: %v", err)
+	}
 	if cfg.MaxRetries == nil || *cfg.MaxRetries != 5 {
 		t.Fatal("expected max-retries=5")
 	}
@@ -148,5 +185,114 @@ executor = "claude"
 	}
 	if cfg.Executor != "claude" {
 		t.Fatal("expected executor=claude")
+	}
+}
+
+func TestLoadRejectsUnknownKey(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.toml")
+	content := `
+executor = "codex"
+unknown-key = "value"
+	`
+	if err := os.WriteFile(cfgPath, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PRAETOR_CONFIG", cfgPath)
+
+	_, err := Load("")
+	if err == nil {
+		t.Fatal("expected unknown key error")
+	}
+}
+
+func TestLoadRejectsDuplicatedKey(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.toml")
+	content := `
+executor = "codex"
+executor = "claude"
+	`
+	if err := os.WriteFile(cfgPath, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PRAETOR_CONFIG", cfgPath)
+
+	_, err := Load("")
+	if err == nil {
+		t.Fatal("expected duplicated key error")
+	}
+}
+
+func TestLoadRejectsUnknownSection(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.toml")
+	content := `
+[defaults]
+executor = "codex"
+	`
+	if err := os.WriteFile(cfgPath, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PRAETOR_CONFIG", cfgPath)
+
+	_, err := Load("")
+	if err == nil {
+		t.Fatal("expected unknown section error")
+	}
+}
+
+func TestLoadRejectsInvalidTypes(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.toml")
+	content := `
+max-retries = "abc"
+no-review = "maybe"
+	`
+	if err := os.WriteFile(cfgPath, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PRAETOR_CONFIG", cfgPath)
+
+	_, err := Load("")
+	if err == nil {
+		t.Fatal("expected invalid type error")
+	}
+}
+
+func TestLoadRejectsInvalidTimeout(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.toml")
+	content := `
+timeout = "-5m"
+	`
+	if err := os.WriteFile(cfgPath, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PRAETOR_CONFIG", cfgPath)
+
+	_, err := Load("")
+	if err == nil {
+		t.Fatal("expected invalid timeout error")
+	}
+}
+
+func TestLoadErrorIncludesPath(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.toml")
+	content := `
+this is invalid
+	`
+	if err := os.WriteFile(cfgPath, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PRAETOR_CONFIG", cfgPath)
+
+	_, err := Load("")
+	if err == nil {
+		t.Fatal("expected parse error")
+	}
+	if !strings.Contains(err.Error(), cfgPath) {
+		t.Fatalf("expected error to include config path %q, got %v", cfgPath, err)
 	}
 }

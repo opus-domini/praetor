@@ -2,7 +2,9 @@ package loop
 
 import (
 	"context"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -140,6 +142,95 @@ func TestRunnerStopsImmediatelyOnCanceledContext(t *testing.T) {
 	}
 }
 
+func TestRunnerReleasesLockWhenBootstrapFailsAfterLock(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	planPath := filepath.Join(tmpDir, "plan.json")
+	writePlanFile(t, planPath, Plan{
+		Tasks: []Task{
+			{ID: "TASK-001", Title: "Task", Executor: AgentCodex, Reviewer: AgentNone},
+		},
+	})
+
+	stateRoot := filepath.Join(tmpDir, "state")
+	store := NewStore(stateRoot)
+	lockPath := store.LockFile(planPath)
+
+	runner := NewRunner(nilRuntime{})
+	_, err := runner.Run(context.Background(), ioDiscard{}, planPath, RunnerOptions{
+		StateRoot:       stateRoot,
+		Workdir:         tmpDir, // not a git repo -> prune orphans fails after lock acquisition
+		DefaultExecutor: AgentCodex,
+		DefaultReviewer: AgentNone,
+		MaxRetries:      3,
+		SkipReview:      true,
+		CodexBin:        mustExecutablePath(t),
+		ClaudeBin:       mustExecutablePath(t),
+		Isolation:       IsolationWorktree,
+	})
+	if err == nil {
+		t.Fatal("expected bootstrap failure in non-git workdir")
+	}
+	if _, statErr := os.Stat(lockPath); !os.IsNotExist(statErr) {
+		t.Fatalf("expected lock file to be released on bootstrap failure, stat err=%v", statErr)
+	}
+}
+
+func TestRunnerKeepsTaskOpenWhenMergeFails(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	git(t, tmpDir, "init")
+	git(t, tmpDir, "config", "user.email", "test@example.com")
+	git(t, tmpDir, "config", "user.name", "Praetor Test")
+
+	conflictFile := filepath.Join(tmpDir, "conflict.txt")
+	if err := os.WriteFile(conflictFile, []byte("base\n"), 0o644); err != nil {
+		t.Fatalf("write base file: %v", err)
+	}
+	git(t, tmpDir, "add", "-A")
+	git(t, tmpDir, "commit", "-m", "base commit")
+
+	planPath := filepath.Join(tmpDir, "plan.json")
+	writePlanFile(t, planPath, Plan{
+		Tasks: []Task{
+			{ID: "TASK-001", Title: "Task", Executor: AgentCodex, Reviewer: AgentNone},
+		},
+	})
+
+	runtime := &mergeConflictRuntime{mainDir: tmpDir}
+	stateRoot := filepath.Join(tmpDir, "state")
+	runner := NewRunner(runtime)
+
+	_, err := runner.Run(context.Background(), ioDiscard{}, planPath, RunnerOptions{
+		StateRoot:       stateRoot,
+		Workdir:         tmpDir,
+		DefaultExecutor: AgentCodex,
+		DefaultReviewer: AgentNone,
+		MaxRetries:      3,
+		SkipReview:      true,
+		CodexBin:        mustExecutablePath(t),
+		ClaudeBin:       mustExecutablePath(t),
+		Isolation:       IsolationWorktree,
+	})
+	if err == nil {
+		t.Fatal("expected merge conflict error")
+	}
+	if !strings.Contains(err.Error(), "merge conflict") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	store := NewStore(stateRoot)
+	state, readErr := store.ReadState(planPath)
+	if readErr != nil {
+		t.Fatalf("read state: %v", readErr)
+	}
+	if got := state.Tasks[0].Status; got != TaskStatusOpen {
+		t.Fatalf("expected task to remain open after merge conflict, got %s", got)
+	}
+}
+
 type nilRuntime struct{}
 
 func (nilRuntime) Run(context.Context, AgentRequest) (AgentResult, error) {
@@ -159,4 +250,52 @@ func mustExecutablePath(t *testing.T) string {
 		t.Fatalf("resolve executable path: %v", err)
 	}
 	return path
+}
+
+type mergeConflictRuntime struct {
+	mainDir string
+	done    bool
+}
+
+func (r *mergeConflictRuntime) Run(_ context.Context, req AgentRequest) (AgentResult, error) {
+	if req.Role != "execute" {
+		return AgentResult{Output: "PASS|ok"}, nil
+	}
+
+	target := filepath.Join(req.Workdir, "conflict.txt")
+	if err := os.WriteFile(target, []byte("worktree\n"), 0o644); err != nil {
+		return AgentResult{}, err
+	}
+
+	if !r.done {
+		mainFile := filepath.Join(r.mainDir, "conflict.txt")
+		if err := os.WriteFile(mainFile, []byte("main\n"), 0o644); err != nil {
+			return AgentResult{}, err
+		}
+		if err := runGitCommand(r.mainDir, "add", "-A"); err != nil {
+			return AgentResult{}, err
+		}
+		if err := runGitCommand(r.mainDir, "commit", "-m", "main side update"); err != nil {
+			return AgentResult{}, err
+		}
+		r.done = true
+	}
+
+	return AgentResult{Output: "RESULT: PASS\nSUMMARY: ok"}, nil
+}
+
+func git(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	if err := runGitCommand(dir, args...); err != nil {
+		t.Fatalf("git %s: %v", strings.Join(args, " "), err)
+	}
+}
+
+func runGitCommand(dir string, args ...string) error {
+	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))
+	}
+	return nil
 }

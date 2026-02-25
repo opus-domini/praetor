@@ -8,7 +8,7 @@ import (
 func TestReadPromptFromFlag(t *testing.T) {
 	t.Parallel()
 
-	prompt, err := readPrompt("  hello  ", strings.NewReader("ignored"))
+	prompt, err := readPrompt("  hello  ", strings.NewReader("ignored"), false)
 	if err != nil {
 		t.Fatalf("readPrompt returned error: %v", err)
 	}
@@ -20,7 +20,7 @@ func TestReadPromptFromFlag(t *testing.T) {
 func TestReadPromptFromStdin(t *testing.T) {
 	t.Parallel()
 
-	prompt, err := readPrompt("", strings.NewReader("  from stdin  "))
+	prompt, err := readPrompt("", strings.NewReader("  from stdin  "), false)
 	if err != nil {
 		t.Fatalf("readPrompt returned error: %v", err)
 	}
@@ -32,8 +32,17 @@ func TestReadPromptFromStdin(t *testing.T) {
 func TestReadPromptRequiresInput(t *testing.T) {
 	t.Parallel()
 
-	_, err := readPrompt("", strings.NewReader("\n\n"))
+	_, err := readPrompt("", strings.NewReader("\n\n"), false)
 	if err == nil {
 		t.Fatalf("expected input validation error")
+	}
+}
+
+func TestReadPromptRejectsInteractiveStdinWithoutPrompt(t *testing.T) {
+	t.Parallel()
+
+	_, err := readPrompt("", strings.NewReader(""), true)
+	if err == nil {
+		t.Fatal("expected interactive stdin validation error")
 	}
 }

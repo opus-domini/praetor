@@ -1,6 +1,8 @@
 package loop
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -19,12 +21,12 @@ func NewTransitionRecorder(store *Store, planFile string) *TransitionRecorder {
 	return &TransitionRecorder{store: store, planFile: planFile}
 }
 
-func (r *TransitionRecorder) WriteCheckpoint(entry CheckpointEntry) {
-	_ = r.store.WriteCheckpoint(r.planFile, entry)
+func (r *TransitionRecorder) WriteCheckpoint(entry CheckpointEntry) error {
+	return r.store.WriteCheckpoint(r.planFile, entry)
 }
 
-func (r *TransitionRecorder) WriteMetric(entry CostEntry) {
-	_ = r.store.WriteTaskMetrics(entry)
+func (r *TransitionRecorder) WriteMetric(entry CostEntry) error {
+	return r.store.WriteTaskMetrics(entry)
 }
 
 func (r *TransitionRecorder) RetryTask(signature, feedback string) (int, error) {
@@ -33,7 +35,9 @@ func (r *TransitionRecorder) RetryTask(signature, feedback string) (int, error) 
 		return 0, err
 	}
 	if feedback != "" {
-		_ = r.store.WriteFeedback(signature, feedback)
+		if err := r.store.WriteFeedback(signature, feedback); err != nil {
+			return 0, err
+		}
 	}
 	return nextRetry, nil
 }
@@ -49,7 +53,7 @@ func (r *TransitionRecorder) CompleteTask(state *State, index int, signature, ru
 	if err := r.store.ClearFeedback(signature); err != nil {
 		return err
 	}
-	r.WriteCheckpoint(CheckpointEntry{
+	return r.WriteCheckpoint(CheckpointEntry{
 		Timestamp: time.Now().UTC().Format(time.RFC3339),
 		Status:    "completed",
 		TaskID:    state.Tasks[index].ID,
@@ -57,7 +61,6 @@ func (r *TransitionRecorder) CompleteTask(state *State, index int, signature, ru
 		RunID:     runID,
 		Message:   message,
 	})
-	return nil
 }
 
 // worktreeInfo tracks one active worktree.
@@ -84,22 +87,26 @@ func NewIsolationPolicy(mainDir string, mode IsolationMode) *IsolationPolicy {
 
 // PrepareTask creates an isolated worktree for one task execution.
 // Returns the workdir the agent should use.
-func (p *IsolationPolicy) PrepareTask(runID, taskID string) (string, error) {
+func (p *IsolationPolicy) PrepareTask(ctx context.Context, runID, taskID string) (string, error) {
 	if p.mode == IsolationOff {
 		return p.mainDir, nil
 	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
 
-	branch := fmt.Sprintf("praetor/%s--%s", sanitizePathToken(taskID), runID[:8])
-	worktreePath := filepath.Join(p.mainDir, ".praetor", "worktrees", fmt.Sprintf("%s--%s", sanitizePathToken(taskID), runID[:8]))
+	runToken := shortToken(runID, 8)
+	branch := fmt.Sprintf("praetor/%s--%s", sanitizePathToken(taskID), runToken)
+	worktreePath := filepath.Join(p.mainDir, ".praetor", "worktrees", fmt.Sprintf("%s--%s", sanitizePathToken(taskID), runToken))
 
-	addCmd := exec.Command("git", "-C", p.mainDir, "worktree", "add", worktreePath, "-b", branch, "HEAD")
+	addCmd := exec.CommandContext(ctx, "git", "-C", p.mainDir, "worktree", "add", worktreePath, "-b", branch, "HEAD")
 	if out, err := addCmd.CombinedOutput(); err != nil {
 		return "", fmt.Errorf("git worktree add: %w: %s", err, strings.TrimSpace(string(out)))
 	}
 
 	// Initialize submodules if present.
 	if _, err := os.Stat(filepath.Join(p.mainDir, ".gitmodules")); err == nil {
-		subCmd := exec.Command("git", "-C", worktreePath, "submodule", "update", "--init", "--recursive")
+		subCmd := exec.CommandContext(ctx, "git", "-C", worktreePath, "submodule", "update", "--init", "--recursive")
 		_ = subCmd.Run()
 	}
 
@@ -108,68 +115,90 @@ func (p *IsolationPolicy) PrepareTask(runID, taskID string) (string, error) {
 }
 
 // CommitTask auto-commits changes in the worktree, merges into main, and cleans up.
-func (p *IsolationPolicy) CommitTask(runID string) error {
+func (p *IsolationPolicy) CommitTask(ctx context.Context, runID string) error {
 	info, ok := p.active[runID]
 	if !ok {
 		return nil
 	}
-	defer p.removeWorktree(runID)
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	defer p.removeWorktree(context.WithoutCancel(ctx), runID)
 
 	// Auto-commit if executor left uncommitted changes.
-	addCmd := exec.Command("git", "-C", info.path, "add", "-A")
+	addCmd := exec.CommandContext(ctx, "git", "-C", info.path, "add", "-A")
 	if out, err := addCmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("git add -A in worktree: %w: %s", err, strings.TrimSpace(string(out)))
 	}
 
-	diffCmd := exec.Command("git", "-C", info.path, "diff", "--cached", "--quiet")
-	if diffCmd.Run() != nil {
+	diffCmd := exec.CommandContext(ctx, "git", "-C", info.path, "diff", "--cached", "--quiet")
+	diffErr := diffCmd.Run()
+	hasStagedChanges := false
+	if diffErr != nil {
+		var exitErr *exec.ExitError
+		if errors.As(diffErr, &exitErr) && exitErr.ExitCode() == 1 {
+			hasStagedChanges = true
+		} else {
+			return fmt.Errorf("check staged changes in worktree: %w", diffErr)
+		}
+	}
+	if hasStagedChanges {
 		// There are staged changes — commit them.
-		commitCmd := exec.Command("git", "-C", info.path, "commit", "-m", fmt.Sprintf("praetor: %s", runID))
+		commitCmd := exec.CommandContext(ctx, "git", "-C", info.path, "commit", "-m", fmt.Sprintf("praetor: %s", runID))
 		if out, err := commitCmd.CombinedOutput(); err != nil {
 			return fmt.Errorf("auto-commit in worktree: %w: %s", err, strings.TrimSpace(string(out)))
 		}
 	}
 
 	// Merge worktree branch into main.
-	mergeCmd := exec.Command("git", "-C", p.mainDir, "merge", "--no-edit", info.branch)
+	mergeCmd := exec.CommandContext(ctx, "git", "-C", p.mainDir, "merge", "--no-edit", info.branch)
 	if out, err := mergeCmd.CombinedOutput(); err != nil {
 		// Abort the failed merge to leave main clean.
-		_ = exec.Command("git", "-C", p.mainDir, "merge", "--abort").Run()
+		_ = exec.CommandContext(context.WithoutCancel(ctx), "git", "-C", p.mainDir, "merge", "--abort").Run()
 		return fmt.Errorf("merge conflict: %w: %s", err, strings.TrimSpace(string(out)))
 	}
 	return nil
 }
 
 // RollbackTask removes the worktree and branch without merging.
-func (p *IsolationPolicy) RollbackTask(runID string, render *Renderer) {
+func (p *IsolationPolicy) RollbackTask(ctx context.Context, runID string, render *Renderer) {
 	if _, ok := p.active[runID]; !ok {
 		return
 	}
-	p.removeWorktree(runID)
+	p.removeWorktree(ctx, runID)
 }
 
 // Cleanup removes all active worktrees. Called from deferred cleanup.
 func (p *IsolationPolicy) Cleanup() {
 	for runID := range p.active {
-		p.removeWorktree(runID)
+		p.removeWorktree(context.Background(), runID)
 	}
 }
 
 // PruneOrphans cleans up worktree metadata from previous crashes.
-func (p *IsolationPolicy) PruneOrphans() {
+func (p *IsolationPolicy) PruneOrphans(ctx context.Context) error {
 	if p.mode == IsolationOff {
-		return
+		return nil
 	}
-	_ = exec.Command("git", "-C", p.mainDir, "worktree", "prune").Run()
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if out, err := exec.CommandContext(ctx, "git", "-C", p.mainDir, "worktree", "prune").CombinedOutput(); err != nil {
+		return fmt.Errorf("git worktree prune: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	return nil
 }
 
-func (p *IsolationPolicy) removeWorktree(runID string) {
+func (p *IsolationPolicy) removeWorktree(ctx context.Context, runID string) {
 	info, ok := p.active[runID]
 	if !ok {
 		return
 	}
 	delete(p.active, runID)
+	if ctx == nil {
+		ctx = context.Background()
+	}
 
-	_ = exec.Command("git", "-C", p.mainDir, "worktree", "remove", "--force", info.path).Run()
-	_ = exec.Command("git", "-C", p.mainDir, "branch", "-D", info.branch).Run()
+	_ = exec.CommandContext(ctx, "git", "-C", p.mainDir, "worktree", "remove", "--force", info.path).Run()
+	_ = exec.CommandContext(ctx, "git", "-C", p.mainDir, "branch", "-D", info.branch).Run()
 }

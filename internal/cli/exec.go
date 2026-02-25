@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 	"time"
 
@@ -29,11 +30,16 @@ Pass the prompt as an argument or pipe it via stdin.`,
   echo "Reply with OK" | praetor exec`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if timeout < 0 {
+				return errors.New("timeout cannot be negative")
+			}
+
 			prompt := ""
 			if len(args) > 0 {
 				prompt = args[0]
 			}
-			resolvedPrompt, err := readPrompt(prompt, cmd.InOrStdin())
+			stdin := cmd.InOrStdin()
+			resolvedPrompt, err := readPrompt(prompt, stdin, isInteractiveInput(stdin))
 			if err != nil {
 				return err
 			}
@@ -86,9 +92,12 @@ func buildProvider(id orchestrator.ProviderID) (orchestrator.Provider, error) {
 	}
 }
 
-func readPrompt(flagPrompt string, in io.Reader) (string, error) {
+func readPrompt(flagPrompt string, in io.Reader, interactive bool) (string, error) {
 	if prompt := strings.TrimSpace(flagPrompt); prompt != "" {
 		return prompt, nil
+	}
+	if interactive {
+		return "", errors.New("prompt is required when stdin is interactive: pass as argument or pipe via stdin")
 	}
 
 	data, err := io.ReadAll(in)
@@ -101,4 +110,16 @@ func readPrompt(flagPrompt string, in io.Reader) (string, error) {
 		return "", errors.New("prompt is required: pass as argument or pipe via stdin")
 	}
 	return prompt, nil
+}
+
+func isInteractiveInput(in io.Reader) bool {
+	file, ok := in.(*os.File)
+	if !ok {
+		return false
+	}
+	info, err := file.Stat()
+	if err != nil {
+		return false
+	}
+	return info.Mode()&os.ModeCharDevice != 0
 }

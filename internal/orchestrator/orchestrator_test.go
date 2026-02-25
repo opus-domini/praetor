@@ -86,3 +86,17 @@ func TestEngineRunZeroValueReturnsError(t *testing.T) {
 		t.Fatal("expected error for zero-value engine")
 	}
 }
+
+func TestRegisterOnZeroValueRegistry(t *testing.T) {
+	t.Parallel()
+
+	var registry Registry
+	if err := registry.Register(testProvider{id: ProviderCodex}); err != nil {
+		t.Fatalf("register provider on zero-value registry: %v", err)
+	}
+
+	provider, ok := registry.Get(ProviderCodex)
+	if !ok || provider == nil {
+		t.Fatal("expected provider to be available after register")
+	}
+}

@@ -44,6 +44,7 @@ type activeRun struct {
 func (r *Runner) Run(ctx context.Context, out io.Writer, planFile string, options RunnerOptions) (RunnerStats, error) {
 	run, lock, cleanupRuntime, err := r.bootstrapRun(ctx, out, planFile, options)
 	if err != nil {
+		r.cleanupBootstrapFailure(out, run, lock, cleanupRuntime)
 		return RunnerStats{}, err
 	}
 	defer cleanupRuntime()
@@ -65,65 +66,106 @@ func (r *Runner) Run(ctx context.Context, out io.Writer, planFile string, option
 	return run.stats, nil
 }
 
-func (r *Runner) bootstrapRun(_ context.Context, out io.Writer, planFile string, options RunnerOptions) (activeRun, RunLock, func(), error) {
+func (r *Runner) cleanupBootstrapFailure(out io.Writer, run activeRun, lock RunLock, cleanupRuntime func()) {
+	if cleanupRuntime != nil {
+		cleanupRuntime()
+	}
+	if run.isolation != nil {
+		run.isolation.Cleanup()
+	}
+	if run.store == nil || strings.TrimSpace(lock.Path) == "" {
+		return
+	}
+	if err := run.store.ReleaseRunLock(lock); err != nil {
+		_, _ = fmt.Fprintf(out, "warning: failed to release lock after bootstrap error: %v\n", err)
+	}
+}
+
+func (r *Runner) bootstrapRun(ctx context.Context, out io.Writer, planFile string, options RunnerOptions) (activeRun, RunLock, func(), error) {
 	planFile = strings.TrimSpace(planFile)
 	if planFile == "" {
 		return activeRun{}, RunLock{}, nil, errors.New("plan file is required")
 	}
 
+	cleanupRuntime := func() {}
+	run := activeRun{planFile: planFile}
+
 	plan, err := LoadPlan(planFile)
 	if err != nil {
 		return activeRun{}, RunLock{}, nil, err
 	}
+	run.plan = plan
 
 	normalized, err := normalizeRunnerOptions(options)
 	if err != nil {
-		return activeRun{}, RunLock{}, nil, err
+		return run, RunLock{}, cleanupRuntime, err
 	}
 	render := NewRenderer(out, normalized.NoColor)
+	run.options = normalized
+	run.render = render
+
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return run, RunLock{}, cleanupRuntime, ctxErr
+	}
 
 	runtime := r.runtime
-	cleanupRuntime := func() {}
 	if runtime == nil {
 		runtime = NewTMUXAgentRuntime(normalized.TMUXSession)
 	}
+	run.runtime = runtime
+
 	if tmuxRuntime, ok := runtime.(*TMUXAgentRuntime); ok {
 		if err := tmuxRuntime.EnsureSession(); err != nil {
-			return activeRun{}, RunLock{}, nil, err
+			return run, RunLock{}, cleanupRuntime, err
 		}
 		cleanupRuntime = tmuxRuntime.Cleanup
 	}
 
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return run, RunLock{}, cleanupRuntime, ctxErr
+	}
+
 	if err := validateRequiredBinaries(normalized, plan); err != nil {
-		return activeRun{}, RunLock{}, cleanupRuntime, err
+		return run, RunLock{}, cleanupRuntime, err
 	}
 
 	store := NewStore(normalized.StateRoot)
+	run.store = store
+
 	lock, err := store.AcquireRunLock(planFile, normalized.Force)
 	if err != nil {
-		return activeRun{}, RunLock{}, cleanupRuntime, err
+		return run, RunLock{}, cleanupRuntime, err
+	}
+
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return run, lock, cleanupRuntime, ctxErr
 	}
 
 	state, err := store.LoadOrInitializeState(planFile, plan)
 	if err != nil {
-		return activeRun{}, lock, cleanupRuntime, err
+		return run, lock, cleanupRuntime, err
 	}
+	run.state = state
 
 	stats := RunnerStats{
 		PlanFile:  planFile,
 		StateFile: store.StateFile(planFile),
 	}
+	run.stats = stats
 
 	stuck, err := store.DetectStuckTasks(planFile, state, normalized.MaxRetries)
 	if err != nil {
-		return activeRun{}, lock, cleanupRuntime, err
+		return run, lock, cleanupRuntime, err
 	}
 	if len(stuck) > 0 {
-		return activeRun{}, lock, cleanupRuntime, fmt.Errorf("tasks are stuck at retry limit:\n- %s", strings.Join(stuck, "\n- "))
+		return run, lock, cleanupRuntime, fmt.Errorf("tasks are stuck at retry limit:\n- %s", strings.Join(stuck, "\n- "))
 	}
 
 	isolation := NewIsolationPolicy(normalized.Workdir, normalized.Isolation)
-	isolation.PruneOrphans()
+	run.isolation = isolation
+	if err := isolation.PruneOrphans(ctx); err != nil {
+		return run, lock, cleanupRuntime, err
+	}
 
 	render.Header("Praetor Loop")
 	if planTitle := strings.TrimSpace(plan.Title); planTitle != "" {
@@ -139,33 +181,25 @@ func (r *Runner) bootstrapRun(_ context.Context, out io.Writer, planFile string,
 		render.KV("tmux:", tmuxRuntime.SessionName())
 	}
 
-	return activeRun{
-		planFile:    planFile,
-		plan:        plan,
-		options:     normalized,
-		runtime:     runtime,
-		render:      render,
-		store:       store,
-		transitions: NewTransitionRecorder(store, planFile),
-		isolation:   isolation,
-		state:       state,
-		stats:       stats,
-		loopStart:   time.Now(),
-		totalCost:   0,
-	}, lock, cleanupRuntime, nil
+	run.transitions = NewTransitionRecorder(store, planFile)
+	run.loopStart = time.Now()
+	run.totalCost = 0
+	return run, lock, cleanupRuntime, nil
 }
 
 func (r *Runner) runLoop(ctx context.Context, run *activeRun) error {
 	for {
 		if ctxErr := ctx.Err(); ctxErr != nil {
-			run.transitions.WriteCheckpoint(CheckpointEntry{
+			if err := run.transitions.WriteCheckpoint(CheckpointEntry{
 				Timestamp: time.Now().UTC().Format(time.RFC3339),
 				Status:    "canceled",
 				TaskID:    "",
 				Signature: "",
 				RunID:     "",
 				Message:   ctxErr.Error(),
-			})
+			}); err != nil {
+				return fmt.Errorf("write cancellation checkpoint: %w", err)
+			}
 			return ctxErr
 		}
 
@@ -199,24 +233,28 @@ func (r *Runner) runIteration(ctx context.Context, run *activeRun) (bool, error)
 
 		report := BlockedTasksReport(run.state, 5)
 		if len(report) == 0 {
-			run.transitions.WriteCheckpoint(CheckpointEntry{
+			if err := run.transitions.WriteCheckpoint(CheckpointEntry{
 				Timestamp: time.Now().UTC().Format(time.RFC3339),
 				Status:    "blocked",
 				TaskID:    "",
 				Signature: "",
 				RunID:     "",
 				Message:   "plan is blocked: open tasks exist but none are runnable",
-			})
+			}); err != nil {
+				return false, fmt.Errorf("write blocked checkpoint: %w", err)
+			}
 			return false, errors.New("plan is blocked: open tasks exist but none are runnable")
 		}
-		run.transitions.WriteCheckpoint(CheckpointEntry{
+		if err := run.transitions.WriteCheckpoint(CheckpointEntry{
 			Timestamp: time.Now().UTC().Format(time.RFC3339),
 			Status:    "blocked",
 			TaskID:    "",
 			Signature: "",
 			RunID:     "",
 			Message:   fmt.Sprintf("plan is blocked by dependencies: %s", strings.Join(report, ", ")),
-		})
+		}); err != nil {
+			return false, fmt.Errorf("write blocked checkpoint: %w", err)
+		}
 		return false, fmt.Errorf("plan is blocked by dependencies:\n- %s", strings.Join(report, "\n- "))
 	}
 
@@ -260,7 +298,7 @@ func (r *Runner) runIteration(ctx context.Context, run *activeRun) (bool, error)
 	}
 	runID := filepath.Base(runDir)
 
-	taskWorkdir, err := run.isolation.PrepareTask(runID, task.ID)
+	taskWorkdir, err := run.isolation.PrepareTask(ctx, runID, task.ID)
 	if err != nil {
 		return false, err
 	}
@@ -301,14 +339,14 @@ func (r *Runner) runIteration(ctx context.Context, run *activeRun) (bool, error)
 	if execErr != nil {
 		if isCancellationErr(execErr) || ctx.Err() != nil {
 			cancelErr := cancellationCause(ctx, execErr)
-			_, applyErr := r.applyTaskOutcome(run, selected, runID, taskOutcome{
+			_, applyErr := r.applyTaskOutcome(ctx, run, selected, runID, taskOutcome{
 				kind:      taskOutcomeCanceled,
 				message:   cancelErr.Error(),
 				cancelErr: cancelErr,
 			})
 			return false, applyErr
 		}
-		return r.applyTaskOutcome(run, selected, runID, taskOutcome{
+		return r.applyTaskOutcome(ctx, run, selected, runID, taskOutcome{
 			kind:         taskOutcomeRetry,
 			status:       "executor_crashed",
 			message:      fmt.Sprintf("executor process failed: %v", execErr),
@@ -338,7 +376,7 @@ func (r *Runner) runIteration(ctx context.Context, run *activeRun) (bool, error)
 		if result == ExecutorResultUnknown {
 			feedback = "executor output missing or invalid RESULT line"
 		}
-		return r.applyTaskOutcome(run, selected, runID, taskOutcome{
+		return r.applyTaskOutcome(ctx, run, selected, runID, taskOutcome{
 			kind:         taskOutcomeRetry,
 			status:       "executor_fail",
 			message:      fmt.Sprintf("executor reported RESULT: %s", result),
@@ -362,7 +400,7 @@ func (r *Runner) runIteration(ctx context.Context, run *activeRun) (bool, error)
 		})
 	}
 
-	run.transitions.WriteMetric(CostEntry{
+	if err := run.transitions.WriteMetric(CostEntry{
 		Timestamp: time.Now().UTC().Format(time.RFC3339),
 		RunID:     runID,
 		TaskID:    selected.task.ID,
@@ -371,7 +409,9 @@ func (r *Runner) runIteration(ctx context.Context, run *activeRun) (bool, error)
 		DurationS: execResult.DurationS,
 		Status:    "pass",
 		CostUSD:   execResult.CostUSD,
-	})
+	}); err != nil {
+		return false, fmt.Errorf("write executor metric: %w", err)
+	}
 
 	if run.options.PostTaskHook != "" {
 		run.render.Phase("hook", "post-task", run.options.PostTaskHook)
@@ -379,14 +419,14 @@ func (r *Runner) runIteration(ctx context.Context, run *activeRun) (bool, error)
 		if !hookPassed {
 			if ctx.Err() != nil {
 				cancelErr := cancellationCause(ctx, nil)
-				_, applyErr := r.applyTaskOutcome(run, selected, runID, taskOutcome{
+				_, applyErr := r.applyTaskOutcome(ctx, run, selected, runID, taskOutcome{
 					kind:      taskOutcomeCanceled,
 					message:   cancelErr.Error(),
 					cancelErr: cancelErr,
 				})
 				return false, applyErr
 			}
-			return r.applyTaskOutcome(run, selected, runID, taskOutcome{
+			return r.applyTaskOutcome(ctx, run, selected, runID, taskOutcome{
 				kind:         taskOutcomeRetry,
 				status:       "hook_failed",
 				message:      "post-task hook failed",
@@ -431,14 +471,14 @@ func (r *Runner) runIteration(ctx context.Context, run *activeRun) (bool, error)
 		if reviewErr != nil {
 			if isCancellationErr(reviewErr) || ctx.Err() != nil {
 				cancelErr := cancellationCause(ctx, reviewErr)
-				_, applyErr := r.applyTaskOutcome(run, selected, runID, taskOutcome{
+				_, applyErr := r.applyTaskOutcome(ctx, run, selected, runID, taskOutcome{
 					kind:      taskOutcomeCanceled,
 					message:   cancelErr.Error(),
 					cancelErr: cancelErr,
 				})
 				return false, applyErr
 			}
-			return r.applyTaskOutcome(run, selected, runID, taskOutcome{
+			return r.applyTaskOutcome(ctx, run, selected, runID, taskOutcome{
 				kind:         taskOutcomeRetry,
 				status:       "reviewer_crashed",
 				message:      fmt.Sprintf("reviewer process failed: %v", reviewErr),
@@ -462,7 +502,7 @@ func (r *Runner) runIteration(ctx context.Context, run *activeRun) (bool, error)
 			})
 		}
 
-		run.transitions.WriteMetric(CostEntry{
+		if err := run.transitions.WriteMetric(CostEntry{
 			Timestamp: time.Now().UTC().Format(time.RFC3339),
 			RunID:     runID,
 			TaskID:    selected.task.ID,
@@ -471,13 +511,15 @@ func (r *Runner) runIteration(ctx context.Context, run *activeRun) (bool, error)
 			DurationS: reviewResult.DurationS,
 			Status:    "pass",
 			CostUSD:   reviewResult.CostUSD,
-		})
+		}); err != nil {
+			return false, fmt.Errorf("write reviewer metric: %w", err)
+		}
 
 		decision = ParseReviewDecision(reviewerOutput)
 	}
 
 	if !decision.Pass {
-		return r.applyTaskOutcome(run, selected, runID, taskOutcome{
+		return r.applyTaskOutcome(ctx, run, selected, runID, taskOutcome{
 			kind:         taskOutcomeRetry,
 			status:       "review_rejected",
 			message:      decision.Reason,
@@ -489,7 +531,7 @@ func (r *Runner) runIteration(ctx context.Context, run *activeRun) (bool, error)
 		})
 	}
 
-	return r.applyTaskOutcome(run, selected, runID, taskOutcome{
+	return r.applyTaskOutcome(ctx, run, selected, runID, taskOutcome{
 		kind:         taskOutcomeComplete,
 		message:      fmt.Sprintf("task completed: %s", selected.task.Title),
 		renderFormat: "Completed: %s",
@@ -683,7 +725,8 @@ func prepareRunDir(logRoot string, task StateTask, signature string) (string, er
 		taskLabel = "task"
 	}
 	taskLabel = sanitizePathToken(taskLabel)
-	runID := fmt.Sprintf("%s-%s-%s", timestamp, taskLabel, signature[:8])
+	sigPart := shortToken(signature, 8)
+	runID := fmt.Sprintf("%s-%s-%s", timestamp, taskLabel, sigPart)
 	runDir := filepath.Join(logRoot, runID)
 	if err := os.MkdirAll(runDir, 0o755); err != nil {
 		return "", fmt.Errorf("create run log directory: %w", err)
@@ -698,6 +741,17 @@ func sanitizePathToken(value string) string {
 	}
 	replacer := strings.NewReplacer("/", "-", "\\", "-", " ", "-", ":", "-", "\t", "-")
 	return replacer.Replace(value)
+}
+
+func shortToken(value string, maxLen int) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "unknown"
+	}
+	if maxLen <= 0 || len(value) <= maxLen {
+		return value
+	}
+	return value[:maxLen]
 }
 
 func writeText(path, text string) error {

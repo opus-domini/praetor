@@ -162,8 +162,20 @@ func normalizedDependsOn(dependsOn []string) []string {
 
 func mergeState(planFile, checksum string, previous State, plan Plan) State {
 	statusByID := make(map[string]TaskStatus, len(previous.Tasks))
+	statusByAutoFingerprint := make(map[string]TaskStatus)
 	for _, task := range previous.Tasks {
 		statusByID[task.ID] = task.Status
+		if strings.HasPrefix(task.ID, "auto-") {
+			statusByAutoFingerprint[autoTaskFingerprint(
+				task.Title,
+				task.Executor,
+				task.Reviewer,
+				task.Model,
+				task.Description,
+				task.Criteria,
+				task.DependsOn,
+			)] = task.Status
+		}
 	}
 
 	now := time.Now().UTC().Format(time.RFC3339)
@@ -181,6 +193,20 @@ func mergeState(planFile, checksum string, previous State, plan Plan) State {
 	for i, task := range merged.Tasks {
 		if status, ok := statusByID[task.ID]; ok {
 			merged.Tasks[i].Status = status
+			continue
+		}
+		if strings.HasPrefix(task.ID, "auto-") {
+			if status, ok := statusByAutoFingerprint[autoTaskFingerprint(
+				task.Title,
+				task.Executor,
+				task.Reviewer,
+				task.Model,
+				task.Description,
+				task.Criteria,
+				task.DependsOn,
+			)]; ok {
+				merged.Tasks[i].Status = status
+			}
 		}
 	}
 	return merged

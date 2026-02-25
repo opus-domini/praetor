@@ -127,6 +127,8 @@ func inferPlanFromState(stateFile string) string {
 
 // IsPlanRunning reports whether the lock PID is alive.
 func (s *Store) IsPlanRunning(planFile string) (bool, int) {
+	hostname, _ := os.Hostname()
+	runtimeKey := s.RuntimeKey(planFile)
 	for _, lockPath := range s.lockCandidates(planFile) {
 		data, err := os.ReadFile(lockPath)
 		if err != nil {
@@ -136,7 +138,9 @@ func (s *Store) IsPlanRunning(planFile string) (bool, int) {
 		if meta.PID <= 0 {
 			continue
 		}
-		return processIsRunning(meta.PID), meta.PID
+		if lockIsActive(meta, hostname, runtimeKey) {
+			return true, meta.PID
+		}
 	}
 	return false, 0
 }

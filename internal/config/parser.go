@@ -2,9 +2,22 @@ package config
 
 import (
 	"fmt"
-	"strconv"
 	"strings"
 )
+
+var allowedKeys = map[string]struct{}{
+	"executor":       {},
+	"reviewer":       {},
+	"max-retries":    {},
+	"max-iterations": {},
+	"isolation":      {},
+	"no-review":      {},
+	"no-color":       {},
+	"codex-bin":      {},
+	"claude-bin":     {},
+	"hook":           {},
+	"timeout":        {},
+}
 
 // parse reads a flat TOML-compatible config file.
 // Returns a map of section -> key -> value.
@@ -38,6 +51,12 @@ func parse(input string) (map[string]map[string]string, error) {
 		if err != nil {
 			return nil, fmt.Errorf("line %d: %w", lineNum+1, err)
 		}
+		if _, ok := allowedKeys[key]; !ok {
+			return nil, fmt.Errorf("line %d: unknown key %q", lineNum+1, key)
+		}
+		if _, exists := sections[currentSection][key]; exists {
+			return nil, fmt.Errorf("line %d: duplicated key %q in section %q", lineNum+1, key, sectionName(currentSection))
+		}
 		sections[currentSection][key] = value
 	}
 	return sections, nil
@@ -46,11 +65,14 @@ func parse(input string) (map[string]map[string]string, error) {
 func parseSectionHeader(line string) (string, error) {
 	inner := strings.TrimSpace(line[1 : len(line)-1])
 	if !strings.HasPrefix(inner, "projects.") {
-		return inner, nil
+		return "", fmt.Errorf("unknown section %q (only [projects.\"<path>\"] is supported)", inner)
 	}
 
 	path := strings.TrimPrefix(inner, "projects.")
-	path = strings.Trim(path, "\"")
+	if len(path) < 2 || path[0] != '"' || path[len(path)-1] != '"' {
+		return "", fmt.Errorf("project section path must be quoted: %q", inner)
+	}
+	path = strings.Trim(path[1:len(path)-1], " ")
 	path = strings.TrimSpace(path)
 	if path == "" {
 		return "", fmt.Errorf("empty project path in section header")
@@ -79,23 +101,9 @@ func parseKeyValue(line string) (string, string, error) {
 	return key, value, nil
 }
 
-func intPtr(s string) *int {
-	n, err := strconv.Atoi(strings.TrimSpace(s))
-	if err != nil {
-		return nil
+func sectionName(section string) string {
+	if strings.TrimSpace(section) == "" {
+		return "global"
 	}
-	return &n
-}
-
-func boolPtr(s string) *bool {
-	s = strings.TrimSpace(strings.ToLower(s))
-	switch s {
-	case "true", "1", "yes":
-		b := true
-		return &b
-	case "false", "0", "no":
-		b := false
-		return &b
-	}
-	return nil
+	return section
 }

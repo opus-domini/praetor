@@ -41,7 +41,7 @@ func ValidatePlan(plan Plan) error {
 	}
 
 	errorsList := make([]string, 0)
-	taskIDs := make(map[string]int, len(plan.Tasks))
+	canonicalIDs := make(map[string]int, len(plan.Tasks))
 
 	for idx, task := range plan.Tasks {
 		title := strings.TrimSpace(task.Title)
@@ -49,12 +49,11 @@ func ValidatePlan(plan Plan) error {
 			errorsList = append(errorsList, fmt.Sprintf("tasks[%d]: title is required", idx))
 		}
 
-		if task.ID != "" {
-			if prev, exists := taskIDs[task.ID]; exists {
-				errorsList = append(errorsList, fmt.Sprintf("tasks[%d]: duplicated id %q already used by tasks[%d]", idx, task.ID, prev))
-			} else {
-				taskIDs[task.ID] = idx
-			}
+		id := canonicalTaskID(task, idx)
+		if prev, exists := canonicalIDs[id]; exists {
+			errorsList = append(errorsList, fmt.Sprintf("tasks[%d]: duplicated id %q already used by tasks[%d]", idx, id, prev))
+		} else {
+			canonicalIDs[id] = idx
 		}
 
 		if task.Executor != "" {
@@ -106,7 +105,44 @@ func canonicalTaskID(task Task, index int) string {
 	if id != "" {
 		return id
 	}
-	return fmt.Sprintf("auto-%d", index)
+	return autoTaskID(task)
+}
+
+func autoTaskID(task Task) string {
+	payload := autoTaskFingerprint(
+		task.Title,
+		task.Executor,
+		task.Reviewer,
+		task.Model,
+		task.Description,
+		task.Criteria,
+		task.DependsOn,
+	)
+	hash := sha256.Sum256([]byte(payload))
+	return "auto-" + hex.EncodeToString(hash[:])[:12]
+}
+
+func autoTaskFingerprint(title string, executor Agent, reviewer Agent, model, description, criteria string, dependsOn []string) string {
+	normalizedDeps := make([]string, 0, len(dependsOn))
+	for _, dep := range dependsOn {
+		dep = strings.TrimSpace(dep)
+		if dep == "" {
+			continue
+		}
+		normalizedDeps = append(normalizedDeps, dep)
+	}
+	sort.Strings(normalizedDeps)
+
+	parts := []string{
+		strings.TrimSpace(title),
+		string(normalizeAgent(executor)),
+		string(normalizeAgent(reviewer)),
+		strings.TrimSpace(model),
+		strings.TrimSpace(description),
+		strings.TrimSpace(criteria),
+		strings.Join(normalizedDeps, ","),
+	}
+	return strings.Join(parts, "\n")
 }
 
 // PlanChecksum computes a stable checksum for the immutable plan file.

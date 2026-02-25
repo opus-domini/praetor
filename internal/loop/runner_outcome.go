@@ -1,6 +1,7 @@
 package loop
 
 import (
+	"context"
 	"fmt"
 	"time"
 )
@@ -38,23 +39,27 @@ type taskOutcome struct {
 	cancelErr    error
 }
 
-func (r *Runner) applyTaskOutcome(run *activeRun, selected taskSelection, runID string, outcome taskOutcome) (bool, error) {
+func (r *Runner) applyTaskOutcome(ctx context.Context, run *activeRun, selected taskSelection, runID string, outcome taskOutcome) (bool, error) {
 	// All task-side transitions flow through this function so retries, metrics,
 	// checkpoints, and user-visible status stay consistent across branches.
 	for _, metric := range outcome.metrics {
-		run.transitions.WriteMetric(metric)
+		if err := run.transitions.WriteMetric(metric); err != nil {
+			return false, err
+		}
 	}
 
 	switch outcome.kind {
 	case taskOutcomeCanceled:
-		run.transitions.WriteCheckpoint(CheckpointEntry{
+		if err := run.transitions.WriteCheckpoint(CheckpointEntry{
 			Timestamp: time.Now().UTC().Format(time.RFC3339),
 			Status:    "canceled",
 			TaskID:    selected.task.ID,
 			Signature: selected.signature,
 			RunID:     runID,
 			Message:   outcome.message,
-		})
+		}); err != nil {
+			return false, err
+		}
 		return false, outcome.cancelErr
 
 	case taskOutcomeRetry:
@@ -64,16 +69,18 @@ func (r *Runner) applyTaskOutcome(run *activeRun, selected taskSelection, runID 
 			return false, err
 		}
 		if outcome.rollback {
-			run.isolation.RollbackTask(runID, run.render)
+			run.isolation.RollbackTask(context.WithoutCancel(ctx), runID, run.render)
 		}
-		run.transitions.WriteCheckpoint(CheckpointEntry{
+		if err := run.transitions.WriteCheckpoint(CheckpointEntry{
 			Timestamp: time.Now().UTC().Format(time.RFC3339),
 			Status:    outcome.status,
 			TaskID:    selected.task.ID,
 			Signature: selected.signature,
 			RunID:     runID,
 			Message:   outcome.message,
-		})
+		}); err != nil {
+			return false, err
+		}
 
 		renderArgs := append([]any{}, outcome.renderArgs...)
 		renderArgs = append(renderArgs, nextRetry, run.options.MaxRetries)
@@ -88,10 +95,10 @@ func (r *Runner) applyTaskOutcome(run *activeRun, selected taskSelection, runID 
 		return false, nil
 
 	case taskOutcomeComplete:
-		if err := run.transitions.CompleteTask(&run.state, selected.index, selected.signature, runID, outcome.message); err != nil {
+		if err := run.isolation.CommitTask(ctx, runID); err != nil {
 			return false, err
 		}
-		if err := run.isolation.CommitTask(runID); err != nil {
+		if err := run.transitions.CompleteTask(&run.state, selected.index, selected.signature, runID, outcome.message); err != nil {
 			return false, err
 		}
 		run.stats.TasksDone++

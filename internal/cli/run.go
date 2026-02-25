@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -54,14 +55,18 @@ isolation protects the main branch from partial changes.`,
 					return fmt.Errorf("resolve workdir path: %w", err)
 				}
 			}
+			projectRoot, err := loop.ResolveProjectRoot(absWorkdir)
+			if err != nil {
+				return err
+			}
 
-			resolvedStateRoot, err := resolveStateRoot(stateRoot, absWorkdir)
+			resolvedStateRoot, err := resolveStateRoot(stateRoot, projectRoot)
 			if err != nil {
 				return err
 			}
 
 			// Load user config and apply defaults for unset flags.
-			cfg, cfgErr := config.Load(absWorkdir)
+			cfg, cfgErr := config.Load(projectRoot)
 			if cfgErr != nil {
 				return cfgErr
 			}
@@ -97,9 +102,14 @@ isolation protects the main branch from partial changes.`,
 				postTaskHook = cfg.Hook
 			}
 			if !f.Changed("timeout") && cfg.Timeout != "" {
-				if d, parseErr := time.ParseDuration(cfg.Timeout); parseErr == nil {
-					timeout = d
+				d, parseErr := time.ParseDuration(cfg.Timeout)
+				if parseErr != nil {
+					return fmt.Errorf("invalid timeout from config: %w", parseErr)
 				}
+				timeout = d
+			}
+			if timeout < 0 {
+				return errors.New("timeout cannot be negative")
 			}
 
 			runner := loop.NewRunner(nil)

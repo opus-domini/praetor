@@ -45,10 +45,10 @@ func (s *Store) AcquireRunLock(planFile string, force bool) (RunLock, error) {
 			return RunLock{}, fmt.Errorf("read lock file: %w", err)
 		}
 		meta := parseLockFile(data)
-		if meta.PID > 0 && processIsRunning(meta.PID) && !force {
+		if lockIsActive(meta, hostname, runtimeKey) && !force {
 			return RunLock{}, fmt.Errorf("plan is already running (pid=%d, started=%s); use --force to override", meta.PID, meta.StartedAt)
 		}
-		if force || meta.PID <= 0 || !processIsRunning(meta.PID) {
+		if force || !lockIsActive(meta, hostname, runtimeKey) {
 			_ = os.Remove(legacyPath)
 		}
 	}
@@ -98,7 +98,7 @@ func (s *Store) AcquireRunLock(planFile string, force bool) (RunLock, error) {
 		}
 
 		existing := parseLockFile(data)
-		if existing.PID > 0 && processIsRunning(existing.PID) && !force {
+		if lockIsActive(existing, hostname, runtimeKey) && !force {
 			return RunLock{}, fmt.Errorf("plan is already running (pid=%d, started=%s); use --force to override", existing.PID, existing.StartedAt)
 		}
 		if removeErr := os.Remove(lockPath); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
@@ -159,6 +159,26 @@ func parseLockFile(data []byte) lockMeta {
 		PID:       pid,
 		StartedAt: started,
 	}
+}
+
+func lockIsActive(meta lockMeta, hostname, runtimeKey string) bool {
+	if meta.PID <= 0 {
+		return false
+	}
+
+	localHostname := strings.TrimSpace(hostname)
+	lockHostname := strings.TrimSpace(meta.Hostname)
+	if lockHostname != "" && localHostname != "" && !strings.EqualFold(lockHostname, localHostname) {
+		return false
+	}
+
+	expectedRuntime := strings.TrimSpace(runtimeKey)
+	lockRuntime := strings.TrimSpace(meta.Runtime)
+	if lockRuntime != "" && expectedRuntime != "" && lockRuntime != expectedRuntime {
+		return false
+	}
+
+	return processIsRunning(meta.PID)
 }
 
 func processIsRunning(pid int) bool {

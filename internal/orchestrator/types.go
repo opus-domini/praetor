@@ -1,13 +1,17 @@
 package orchestrator
 
-import "context"
+import (
+	"context"
+
+	"github.com/opus-domini/praetor/internal/providers"
+)
 
 // ProviderID identifies an AI provider implementation.
 type ProviderID string
 
 const (
-	ProviderClaude ProviderID = "claude"
-	ProviderCodex  ProviderID = "codex"
+	ProviderClaude ProviderID = ProviderID(providers.Claude)
+	ProviderCodex  ProviderID = ProviderID(providers.Codex)
 )
 
 // Request is the canonical execution input for a provider.

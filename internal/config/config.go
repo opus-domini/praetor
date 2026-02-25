@@ -2,9 +2,12 @@ package config
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"time"
 )
 
 // Config holds resolved configuration values.
@@ -48,65 +51,114 @@ func Load(projectRoot string) (Config, error) {
 		return Config{}, nil
 	}
 	if err != nil {
-		return Config{}, err
+		return Config{}, fmt.Errorf("load config %s: %w", path, err)
 	}
 
 	sections, err := parse(string(data))
 	if err != nil {
-		return Config{}, err
+		return Config{}, fmt.Errorf("load config %s: %w", path, err)
 	}
 
-	global := configFromMap(sections[""])
+	global, err := configFromMap("global", sections[""])
+	if err != nil {
+		return Config{}, fmt.Errorf("load config %s: %w", path, err)
+	}
 
-	projectRoot = strings.TrimSpace(projectRoot)
-	if projectRoot == "" {
+	normalizedProjectRoot, err := normalizeProjectPath(projectRoot)
+	if err != nil {
+		return Config{}, fmt.Errorf("load config %s: normalize project root: %w", path, err)
+	}
+	if normalizedProjectRoot == "" {
 		return global, nil
 	}
 
-	projectSection, ok := sections[projectRoot]
-	if !ok {
-		return global, nil
+	for section, values := range sections {
+		if section == "" {
+			continue
+		}
+		normalizedSection, normalizeErr := normalizeProjectPath(section)
+		if normalizeErr != nil {
+			return Config{}, fmt.Errorf("load config %s: normalize project section %q: %w", path, section, normalizeErr)
+		}
+		if normalizedSection != normalizedProjectRoot {
+			continue
+		}
+
+		project, parseErr := configFromMap(section, values)
+		if parseErr != nil {
+			return Config{}, fmt.Errorf("load config %s: %w", path, parseErr)
+		}
+		return mergeConfig(global, project), nil
 	}
-	project := configFromMap(projectSection)
-	return mergeConfig(global, project), nil
+	return global, nil
 }
 
-func configFromMap(m map[string]string) Config {
+func configFromMap(section string, m map[string]string) (Config, error) {
 	var cfg Config
 	if v, ok := m["executor"]; ok {
-		cfg.Executor = v
+		cfg.Executor = strings.TrimSpace(v)
 	}
 	if v, ok := m["reviewer"]; ok {
-		cfg.Reviewer = v
+		cfg.Reviewer = strings.TrimSpace(v)
 	}
 	if v, ok := m["max-retries"]; ok {
-		cfg.MaxRetries = intPtr(v)
+		value, err := strconv.Atoi(strings.TrimSpace(v))
+		if err != nil {
+			return Config{}, fmt.Errorf("section %q key %q: invalid integer %q", section, "max-retries", v)
+		}
+		if value <= 0 {
+			return Config{}, fmt.Errorf("section %q key %q: must be greater than zero", section, "max-retries")
+		}
+		cfg.MaxRetries = &value
 	}
 	if v, ok := m["max-iterations"]; ok {
-		cfg.MaxIterations = intPtr(v)
+		value, err := strconv.Atoi(strings.TrimSpace(v))
+		if err != nil {
+			return Config{}, fmt.Errorf("section %q key %q: invalid integer %q", section, "max-iterations", v)
+		}
+		if value < 0 {
+			return Config{}, fmt.Errorf("section %q key %q: cannot be negative", section, "max-iterations")
+		}
+		cfg.MaxIterations = &value
 	}
 	if v, ok := m["isolation"]; ok {
-		cfg.Isolation = v
+		cfg.Isolation = strings.TrimSpace(v)
 	}
 	if v, ok := m["no-review"]; ok {
-		cfg.NoReview = boolPtr(v)
+		value, err := parseBool(v)
+		if err != nil {
+			return Config{}, fmt.Errorf("section %q key %q: %w", section, "no-review", err)
+		}
+		cfg.NoReview = &value
 	}
 	if v, ok := m["no-color"]; ok {
-		cfg.NoColor = boolPtr(v)
+		value, err := parseBool(v)
+		if err != nil {
+			return Config{}, fmt.Errorf("section %q key %q: %w", section, "no-color", err)
+		}
+		cfg.NoColor = &value
 	}
 	if v, ok := m["codex-bin"]; ok {
-		cfg.CodexBin = v
+		cfg.CodexBin = strings.TrimSpace(v)
 	}
 	if v, ok := m["claude-bin"]; ok {
-		cfg.ClaudeBin = v
+		cfg.ClaudeBin = strings.TrimSpace(v)
 	}
 	if v, ok := m["hook"]; ok {
-		cfg.Hook = v
+		cfg.Hook = strings.TrimSpace(v)
 	}
 	if v, ok := m["timeout"]; ok {
-		cfg.Timeout = v
+		timeoutValue := strings.TrimSpace(v)
+		d, err := time.ParseDuration(timeoutValue)
+		if err != nil {
+			return Config{}, fmt.Errorf("section %q key %q: invalid duration %q", section, "timeout", v)
+		}
+		if d < 0 {
+			return Config{}, fmt.Errorf("section %q key %q: cannot be negative", section, "timeout")
+		}
+		cfg.Timeout = timeoutValue
 	}
-	return cfg
+	return cfg, nil
 }
 
 // mergeConfig overlays project values on top of global values.
@@ -147,4 +199,32 @@ func mergeConfig(global, project Config) Config {
 		merged.Timeout = project.Timeout
 	}
 	return merged
+}
+
+func parseBool(raw string) (bool, error) {
+	value := strings.TrimSpace(strings.ToLower(raw))
+	switch value {
+	case "true", "1", "yes":
+		return true, nil
+	case "false", "0", "no":
+		return false, nil
+	default:
+		return false, fmt.Errorf("invalid boolean %q", raw)
+	}
+}
+
+func normalizeProjectPath(path string) (string, error) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return "", nil
+	}
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	absPath = filepath.Clean(absPath)
+	if realPath, err := filepath.EvalSymlinks(absPath); err == nil {
+		absPath = realPath
+	}
+	return absPath, nil
 }

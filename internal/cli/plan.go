@@ -97,7 +97,7 @@ func newPlanListCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:     "list",
-		Short:   "List all tracked plans",
+		Short:   "List tracked plans for current project",
 		Example: `  praetor plan list`,
 		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -112,7 +112,7 @@ func newPlanListCmd() *cobra.Command {
 				return err
 			}
 			if len(statuses) == 0 {
-				_, err := fmt.Fprintf(cmd.OutOrStdout(), "No plans tracked in %s\n", store.StateDir())
+				_, err := fmt.Fprintf(cmd.OutOrStdout(), "No plans tracked for current project in %s\n", store.StateDir())
 				return err
 			}
 

@@ -3,14 +3,16 @@ package loop
 import (
 	"context"
 	"time"
+
+	"github.com/opus-domini/praetor/internal/providers"
 )
 
 // Agent identifies an execution agent used by the loop runner.
 type Agent string
 
 const (
-	AgentClaude Agent = "claude"
-	AgentCodex  Agent = "codex"
+	AgentClaude Agent = Agent(providers.Claude)
+	AgentCodex  Agent = Agent(providers.Codex)
 	AgentNone   Agent = "none"
 )
 

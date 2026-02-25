@@ -75,3 +75,40 @@ func TestValidatePlanValidModel(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
+
+func TestCanonicalTaskIDForImplicitTaskIsStableAcrossIndexes(t *testing.T) {
+	t.Parallel()
+
+	task := Task{
+		Title:       "Implement feature",
+		Executor:    AgentCodex,
+		Reviewer:    AgentClaude,
+		Description: "do work",
+		Criteria:    "tests passing",
+	}
+
+	idA := canonicalTaskID(task, 0)
+	idB := canonicalTaskID(task, 42)
+	if idA != idB {
+		t.Fatalf("expected stable implicit task id, got %q and %q", idA, idB)
+	}
+}
+
+func TestValidatePlanRejectsDuplicatedImplicitTaskIDs(t *testing.T) {
+	t.Parallel()
+
+	plan := Plan{
+		Tasks: []Task{
+			{Title: "Same task"},
+			{Title: "Same task"},
+		},
+	}
+
+	err := ValidatePlan(plan)
+	if err == nil {
+		t.Fatal("expected duplicate implicit id validation error")
+	}
+	if !strings.Contains(err.Error(), "duplicated id") {
+		t.Fatalf("unexpected validation error: %v", err)
+	}
+}

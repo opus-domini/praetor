@@ -115,7 +115,10 @@ func (r *TMUXAgentRuntime) Run(ctx context.Context, req AgentRequest) (AgentResu
 
 	channel := fmt.Sprintf("praetor-%d-%d", os.Getpid(), time.Now().UnixNano())
 	windowName := tmuxWindowName(req)
-	script := buildWrapperScript(req, promptFile, systemFile, stdoutFile, stderrFile, exitFile, channel)
+	script, err := buildWrapperScript(req, promptFile, systemFile, stdoutFile, stderrFile, exitFile, channel)
+	if err != nil {
+		return AgentResult{DurationS: time.Since(start).Seconds()}, err
+	}
 
 	if err := os.WriteFile(wrapperFile, []byte(script), 0o755); err != nil {
 		return AgentResult{DurationS: time.Since(start).Seconds()}, fmt.Errorf("write wrapper script: %w", err)
@@ -209,7 +212,7 @@ func tmuxWindowName(req AgentRequest) string {
 	return name
 }
 
-func buildWrapperScript(req AgentRequest, promptFile, systemFile, stdoutFile, stderrFile, exitFile, channel string) string {
+func buildWrapperScript(req AgentRequest, promptFile, systemFile, stdoutFile, stderrFile, exitFile, channel string) (string, error) {
 	agent := normalizeAgent(req.Agent)
 	workdir := strings.TrimSpace(req.Workdir)
 	if workdir == "" {
@@ -226,16 +229,19 @@ func buildWrapperScript(req AgentRequest, promptFile, systemFile, stdoutFile, st
 	model := strings.TrimSpace(req.Model)
 
 	var commandBlock string
-	if agent == AgentCodex {
+	switch agent {
+	case AgentCodex:
 		commandBlock = buildCodexCommandBlock(codexBin, model)
-	} else {
+	case AgentClaude:
 		commandBlock = buildClaudeCommandBlock(claudeBin, model, req.Verbose)
+	default:
+		return "", fmt.Errorf("unsupported agent %q", req.Agent)
 	}
 
 	return strings.TrimSpace(fmt.Sprintf(`#!/usr/bin/env bash
 _exit=1
 trap 'printf "%%s" "$_exit" > %s; tmux wait-for -S %s' EXIT
-set -uo pipefail
+set -euo pipefail
 
 PROMPT_FILE=%s
 SYSTEM_FILE=%s
@@ -246,7 +252,7 @@ WORKDIR=%s
 cd "$WORKDIR"
 
 %s
-`, shellQuote(exitFile), shellQuote(channel), shellQuote(promptFile), shellQuote(systemFile), shellQuote(stdoutFile), shellQuote(stderrFile), shellQuote(workdir), commandBlock)) + "\n"
+`, shellQuote(exitFile), shellQuote(channel), shellQuote(promptFile), shellQuote(systemFile), shellQuote(stdoutFile), shellQuote(stderrFile), shellQuote(workdir), commandBlock)) + "\n", nil
 }
 
 func buildCodexCommandBlock(codexBin, model string) string {
@@ -254,6 +260,7 @@ func buildCodexCommandBlock(codexBin, model string) string {
 	if model != "" {
 		modelClause = fmt.Sprintf("  --model %s \\\n", shellQuote(model))
 	}
+	approvalPolicyConfig := shellQuote(`approval_policy="never"`)
 
 	return fmt.Sprintf(`FULL_PROMPT="$(cat "$PROMPT_FILE")"
 if [[ -s "$SYSTEM_FILE" ]]; then
@@ -261,9 +268,13 @@ if [[ -s "$SYSTEM_FILE" ]]; then
 fi
 
 %s exec --json \
-%s  "$FULL_PROMPT" \
+%s  --sandbox workspace-write \
+  --skip-git-repo-check \
+  --config %s \
+  --cd "$WORKDIR" \
+  "$FULL_PROMPT" \
   2> >(tee "$STDERR_FILE" >&2) | tee "$STDOUT_FILE"
-_exit="${PIPESTATUS[0]}"`, shellQuote(codexBin), modelClause)
+_exit="${PIPESTATUS[0]}"`, shellQuote(codexBin), modelClause, approvalPolicyConfig)
 }
 
 func buildClaudeCommandBlock(claudeBin, model string, verbose bool) string {

@@ -31,6 +31,9 @@ func (r *Registry) Register(provider Provider) error {
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.providers == nil {
+		r.providers = map[ProviderID]Provider{}
+	}
 	if _, exists := r.providers[id]; exists {
 		return fmt.Errorf("provider already registered: %s", id)
 	}

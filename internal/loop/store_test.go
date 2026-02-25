@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestLoadOrInitializeStateMergesPlanChanges(t *testing.T) {
@@ -50,6 +51,52 @@ func TestLoadOrInitializeStateMergesPlanChanges(t *testing.T) {
 	}
 	if merged.Tasks[2].Status != TaskStatusOpen {
 		t.Fatalf("expected new task to be open")
+	}
+}
+
+func TestLoadOrInitializeStatePreservesImplicitTaskStatusAfterReorder(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	planPath := filepath.Join(tmpDir, "plan.json")
+
+	initialPlan := Plan{
+		Tasks: []Task{
+			{Title: "First task without explicit id"},
+			{Title: "Second task without explicit id"},
+		},
+	}
+	writePlanFile(t, planPath, initialPlan)
+
+	store := NewStore(filepath.Join(tmpDir, "state"))
+	state, err := store.LoadOrInitializeState(planPath, initialPlan)
+	if err != nil {
+		t.Fatalf("initialize state: %v", err)
+	}
+
+	state.Tasks[0].Status = TaskStatusDone
+	if err := store.WriteState(planPath, state); err != nil {
+		t.Fatalf("write state: %v", err)
+	}
+
+	reorderedPlan := Plan{
+		Tasks: []Task{
+			{Title: "Second task without explicit id"},
+			{Title: "First task without explicit id"},
+		},
+	}
+	writePlanFile(t, planPath, reorderedPlan)
+
+	merged, err := store.LoadOrInitializeState(planPath, reorderedPlan)
+	if err != nil {
+		t.Fatalf("merge state: %v", err)
+	}
+
+	if len(merged.Tasks) != 2 {
+		t.Fatalf("unexpected merged task count: %d", len(merged.Tasks))
+	}
+	if merged.Tasks[1].Status != TaskStatusDone {
+		t.Fatalf("expected reordered first task to remain done, got %s", merged.Tasks[1].Status)
 	}
 }
 
@@ -207,6 +254,84 @@ func TestReleaseRunLockRequiresOwnershipToken(t *testing.T) {
 
 	if err := store.ReleaseRunLock(RunLock{Path: lock.Path, Token: "wrong"}); err == nil {
 		t.Fatal("expected ownership mismatch error")
+	}
+	if err := store.ReleaseRunLock(lock); err != nil {
+		t.Fatalf("release lock: %v", err)
+	}
+}
+
+func TestIsPlanRunningIgnoresForeignHostLock(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	store := &Store{Root: filepath.Join(tmpDir, "state")}
+	if err := store.Init(); err != nil {
+		t.Fatal(err)
+	}
+
+	planPath := filepath.Join(tmpDir, "plan.json")
+	if err := os.WriteFile(planPath, []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	meta := lockMeta{
+		Version:   lockSchemaVersion,
+		PID:       os.Getpid(),
+		Hostname:  "remote-host",
+		StartedAt: time.Now().UTC().Format(time.RFC3339),
+		Token:     "token",
+		Runtime:   store.RuntimeKey(planPath),
+	}
+	data, err := json.Marshal(meta)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data = append(data, '\n')
+	if err := os.WriteFile(store.LockFile(planPath), data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	running, pid := store.IsPlanRunning(planPath)
+	if running || pid != 0 {
+		t.Fatalf("expected foreign-host lock to be ignored, got running=%v pid=%d", running, pid)
+	}
+}
+
+func TestAcquireRunLockIgnoresForeignRuntimeLock(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	store := &Store{Root: filepath.Join(tmpDir, "state")}
+	if err := store.Init(); err != nil {
+		t.Fatal(err)
+	}
+
+	planPath := filepath.Join(tmpDir, "plan.json")
+	if err := os.WriteFile(planPath, []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	hostname, _ := os.Hostname()
+	meta := lockMeta{
+		Version:   lockSchemaVersion,
+		PID:       os.Getpid(),
+		Hostname:  hostname,
+		StartedAt: time.Now().UTC().Format(time.RFC3339),
+		Token:     "token",
+		Runtime:   "different-runtime",
+	}
+	data, err := json.Marshal(meta)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data = append(data, '\n')
+	if err := os.WriteFile(store.LockFile(planPath), data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	lock, err := store.AcquireRunLock(planPath, false)
+	if err != nil {
+		t.Fatalf("expected acquire lock to ignore foreign runtime lock: %v", err)
 	}
 	if err := store.ReleaseRunLock(lock); err != nil {
 		t.Fatalf("release lock: %v", err)
