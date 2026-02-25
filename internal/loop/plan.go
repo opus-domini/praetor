@@ -1,7 +1,7 @@
 package loop
 
 import (
-	"crypto/sha1"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -111,7 +111,7 @@ func PlanChecksum(path string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("read plan file for checksum: %w", err)
 	}
-	hash := sha1.Sum(data)
+	hash := sha256.Sum256(data)
 	return hex.EncodeToString(hash[:]), nil
 }
 

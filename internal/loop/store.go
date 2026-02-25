@@ -1,7 +1,7 @@
 package loop
 
 import (
-	"crypto/sha1"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -242,7 +242,7 @@ func writeJSONFile(path string, value any) error {
 
 // TaskSignature returns a stable signature used by retries and feedback files.
 func TaskSignature(taskKey string) string {
-	hash := sha1.Sum([]byte(taskKey))
+	hash := sha256.Sum256([]byte(taskKey))
 	return hex.EncodeToString(hash[:])
 }
 

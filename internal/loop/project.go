@@ -1,7 +1,7 @@
 package loop
 
 import (
-	"crypto/sha1"
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -104,7 +104,7 @@ func projectRuntimeKey(projectRoot string) string {
 	replacer := strings.NewReplacer("/", "-", "\\", "-", " ", "-", ":", "-", "\t", "-", "\n", "-", "\r", "-")
 	baseName = replacer.Replace(baseName)
 
-	hash := sha1.Sum([]byte(projectRoot))
+	hash := sha256.Sum256([]byte(projectRoot))
 	hashPart := hex.EncodeToString(hash[:])[:12]
 	return baseName + "-" + hashPart
 }

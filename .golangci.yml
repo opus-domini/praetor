@@ -21,8 +21,6 @@ linters:
         - G301 # Runtime directories are operational data, not secret storage.
         - G304 # File paths are intentionally dynamic (plans, state, logs).
         - G306 # Runtime files are meant to be readable during operations.
-        - G401 # sha1 is used only for non-crypto IDs and checksums.
-        - G505 # sha1 import is intentional for non-security hashing.
 
 issues:
   max-issues-per-linter: 0
