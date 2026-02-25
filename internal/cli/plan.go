@@ -13,13 +13,14 @@ import (
 func newPlanCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "plan",
-		Short: "Create and manage task plans",
-		Long: `Create and manage task plans.
+		Short: "Create, manage, and execute task plans",
+		Long: `Create, manage, and execute task plans.
 
 Plans are JSON files that define a sequence of tasks with dependencies,
-executors, and reviewers. Use "praetor run <plan>" to execute a plan.`,
+executors, and reviewers. Use "praetor plan run <plan>" to execute a plan.`,
 	}
 
+	cmd.AddCommand(newRunCmd())
 	cmd.AddCommand(newPlanCreateCmd())
 	cmd.AddCommand(newPlanListCmd())
 	cmd.AddCommand(newPlanStatusCmd())
@@ -38,6 +39,7 @@ func newPlanCreateCmd() *cobra.Command {
   praetor plan create auth-refactor --base-dir /path/to/repo`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			cmd.SilenceUsage = true
 			root := strings.TrimSpace(baseDir)
 			if root == "" {
 				root = "."
@@ -69,6 +71,7 @@ func newPlanStatusCmd() *cobra.Command {
 		Example: `  praetor plan status docs/plans/my-plan.json`,
 		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			cmd.SilenceUsage = true
 			absPlan, err := filepath.Abs(strings.TrimSpace(args[0]))
 			if err != nil {
 				return fmt.Errorf("resolve plan path: %w", err)
@@ -101,6 +104,7 @@ func newPlanListCmd() *cobra.Command {
 		Example: `  praetor plan list`,
 		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			cmd.SilenceUsage = true
 			resolvedStateRoot, err := resolveStateRoot(stateRoot, ".")
 			if err != nil {
 				return err
@@ -153,6 +157,7 @@ func newPlanResetCmd() *cobra.Command {
 		Example: `  praetor plan reset docs/plans/my-plan.json`,
 		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			cmd.SilenceUsage = true
 			absPlan, err := filepath.Abs(strings.TrimSpace(args[0]))
 			if err != nil {
 				return fmt.Errorf("resolve plan path: %w", err)

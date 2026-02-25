@@ -38,11 +38,12 @@ func newRunCmd() *cobra.Command {
 Each task runs an executor agent, then an independent reviewer agent
 that gates promotion. Failed tasks are retried with feedback. Worktree
 isolation protects the main branch from partial changes.`,
-		Example: `  praetor run docs/plans/my-plan.json
-  praetor run docs/plans/my-plan.json --executor claude --reviewer claude
-  praetor run docs/plans/my-plan.json --hook ./scripts/lint.sh --timeout 1h`,
+		Example: `  praetor plan run docs/plans/my-plan.json
+  praetor plan run docs/plans/my-plan.json --executor claude --reviewer claude
+  praetor plan run docs/plans/my-plan.json --hook ./scripts/lint.sh --timeout 1h`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			cmd.SilenceUsage = true
 			absPlan, err := filepath.Abs(strings.TrimSpace(args[0]))
 			if err != nil {
 				return fmt.Errorf("resolve plan path: %w", err)

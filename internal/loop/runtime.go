@@ -31,6 +31,7 @@ func (r *composedRuntime) Run(ctx context.Context, req AgentRequest) (AgentResul
 	if err != nil {
 		return AgentResult{DurationS: time.Since(start).Seconds()}, err
 	}
+	spec.WindowHint = strings.TrimSpace(req.TaskLabel)
 
 	// Persist prompt and system prompt files for debugging.
 	if runDir := strings.TrimSpace(req.RunDir); runDir != "" {

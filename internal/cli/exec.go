@@ -30,6 +30,7 @@ Pass the prompt as an argument or pipe it via stdin.`,
   echo "Reply with OK" | praetor exec`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			cmd.SilenceUsage = true
 			if timeout < 0 {
 				return errors.New("timeout cannot be negative")
 			}

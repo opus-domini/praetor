@@ -94,17 +94,22 @@ func TestTmuxWindowName(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		prefix string
-		want   string
+		taskLabel string
+		role      string
+		want      string
 	}{
-		{"executor", "praetor-executor"},
-		{"", "praetor-agent"},
-		{"a/b:c d", "praetor-a-b-c-d"},
+		{"", "executor", "praetor-executor"},
+		{"", "", "praetor-agent"},
+		{"", "a/b:c d", "praetor-a-b-c-d"},
+		{"TASK-001", "executor", "TASK-001-executor"},
+		{"TASK-001", "reviewer", "TASK-001-reviewer"},
+		{"my feature", "executor", "my-feature-executor"},
+		{"#3", "executor", "#3-executor"},
 	}
 	for _, tt := range tests {
-		got := tmuxWindowName(tt.prefix)
+		got := tmuxWindowName(tt.taskLabel, tt.role)
 		if got != tt.want {
-			t.Errorf("tmuxWindowName(%q) = %q, want %q", tt.prefix, got, tt.want)
+			t.Errorf("tmuxWindowName(%q, %q) = %q, want %q", tt.taskLabel, tt.role, got, tt.want)
 		}
 	}
 }

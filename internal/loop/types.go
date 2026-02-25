@@ -155,10 +155,11 @@ type AgentResult struct {
 
 // CommandSpec describes a process invocation, agnostic of how it will be executed.
 type CommandSpec struct {
-	Args  []string // Full command: ["codex", "exec", "--json", ...]
-	Env   []string // Additional environment variables (KEY=VALUE)
-	Dir   string   // Working directory
-	Stdin string   // Content to write to stdin ("" = no stdin)
+	Args       []string // Full command: ["codex", "exec", "--json", ...]
+	Env        []string // Additional environment variables (KEY=VALUE)
+	Dir        string   // Working directory
+	Stdin      string   // Content to write to stdin ("" = no stdin)
+	WindowHint string   // Hint for tmux window naming (e.g. task label); ignored by non-tmux runners
 }
 
 // ProcessResult holds the raw output of a completed process.

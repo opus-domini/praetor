@@ -110,13 +110,18 @@ func (r *tmuxRunner) Run(ctx context.Context, spec CommandSpec, runDir, prefix s
 		return ProcessResult{}, fmt.Errorf("write wrapper script: %w", err)
 	}
 
-	windowName := tmuxWindowName(prefix)
+	windowName := tmuxWindowName(spec.WindowHint, prefix)
 	createWindow := exec.Command("tmux", "new-window", "-d", "-P", "-F", "#{window_id}", "-t", r.sessionName+":", "-n", windowName, "bash", wrapperFile)
 	windowOut, err := createWindow.CombinedOutput()
 	if err != nil {
 		return ProcessResult{}, fmt.Errorf("create tmux window: %w: %s", err, strings.TrimSpace(string(windowOut)))
 	}
 	windowID := strings.TrimSpace(string(windowOut))
+
+	// Keep pane visible after the script exits so users can inspect output.
+	_ = exec.Command("tmux", "set-option", "-t", windowID, "remain-on-exit", "on").Run()
+	// Focus this window so users attaching to the session see live output.
+	_ = exec.Command("tmux", "select-window", "-t", windowID).Run()
 
 	waitCmd := exec.CommandContext(ctx, "tmux", "wait-for", channel)
 	if output, err := waitCmd.CombinedOutput(); err != nil {
@@ -161,13 +166,19 @@ func killTMUXWindow(windowID string) {
 	_ = exec.Command("tmux", "kill-window", "-t", windowID).Run()
 }
 
-func tmuxWindowName(prefix string) string {
-	prefix = strings.TrimSpace(prefix)
-	if prefix == "" {
-		prefix = "agent"
+func tmuxWindowName(taskLabel, role string) string {
+	taskLabel = strings.TrimSpace(taskLabel)
+	role = strings.TrimSpace(role)
+	if role == "" {
+		role = "agent"
 	}
 	replacer := strings.NewReplacer("/", "-", "\\", "-", " ", "-", ":", "-")
-	name := "praetor-" + replacer.Replace(prefix)
+	var name string
+	if taskLabel != "" {
+		name = replacer.Replace(taskLabel) + "-" + replacer.Replace(role)
+	} else {
+		name = "praetor-" + replacer.Replace(role)
+	}
 	if len(name) > 48 {
 		name = name[:48]
 	}
