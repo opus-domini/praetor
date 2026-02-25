@@ -121,15 +121,18 @@ func (r *TMUXAgentRuntime) Run(ctx context.Context, req AgentRequest) (AgentResu
 		return AgentResult{DurationS: time.Since(start).Seconds()}, fmt.Errorf("write wrapper script: %w", err)
 	}
 
-	createWindow := exec.Command("tmux", "new-window", "-d", "-t", r.sessionName+":", "-n", windowName, "bash", wrapperFile)
-	if output, err := createWindow.CombinedOutput(); err != nil {
-		return AgentResult{DurationS: time.Since(start).Seconds()}, fmt.Errorf("create tmux window: %w: %s", err, strings.TrimSpace(string(output)))
+	createWindow := exec.Command("tmux", "new-window", "-d", "-P", "-F", "#{window_id}", "-t", r.sessionName+":", "-n", windowName, "bash", wrapperFile)
+	windowOut, err := createWindow.CombinedOutput()
+	if err != nil {
+		return AgentResult{DurationS: time.Since(start).Seconds()}, fmt.Errorf("create tmux window: %w: %s", err, strings.TrimSpace(string(windowOut)))
 	}
+	windowID := strings.TrimSpace(string(windowOut))
 
 	waitCmd := exec.CommandContext(ctx, "tmux", "wait-for", channel)
 	if output, err := waitCmd.CombinedOutput(); err != nil {
 		duration := time.Since(start)
 		if ctx.Err() != nil {
+			killTMUXWindow(windowID)
 			return AgentResult{DurationS: duration.Seconds()}, ctx.Err()
 		}
 		return AgentResult{DurationS: duration.Seconds()}, fmt.Errorf("wait for tmux channel: %w: %s", err, strings.TrimSpace(string(output)))
@@ -175,6 +178,14 @@ func (r *TMUXAgentRuntime) Run(ctx context.Context, req AgentRequest) (AgentResu
 		CostUSD:   costUSD,
 		DurationS: duration.Seconds(),
 	}, nil
+}
+
+func killTMUXWindow(windowID string) {
+	windowID = strings.TrimSpace(windowID)
+	if windowID == "" {
+		return
+	}
+	_ = exec.Command("tmux", "kill-window", "-t", windowID).Run()
 }
 
 func tmuxWindowName(req AgentRequest) string {

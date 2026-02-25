@@ -50,10 +50,7 @@ func (p *Provider) Run(ctx context.Context, req orchestrator.Request) (orchestra
 func decodePromptResult(msg SDKMessage) (string, error) {
 	result := ResultMessage{}
 	if err := json.Unmarshal(msg.Raw, &result); err != nil {
-		if strings.TrimSpace(string(msg.Raw)) == "" {
-			return "", nil
-		}
-		return strings.TrimSpace(string(msg.Raw)), nil
+		return "", err
 	}
 
 	if result.IsError {

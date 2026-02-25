@@ -38,7 +38,10 @@ func (s *Store) Status(planFile string) (PlanStatus, error) {
 		return PlanStatus{}, err
 	}
 
-	stateFile := s.StateFile(planFile)
+	stateFile, _, err := s.findStateFile(planFile)
+	if err != nil {
+		return PlanStatus{}, err
+	}
 	if _, err := os.Stat(stateFile); errors.Is(err, os.ErrNotExist) {
 		return PlanStatus{
 			PlanFile: planFile,
@@ -116,18 +119,24 @@ func (s *Store) ListPlanStatuses() ([]PlanStatus, error) {
 func inferPlanFromState(stateFile string) string {
 	base := filepath.Base(stateFile)
 	base = strings.TrimSuffix(base, ".state.json")
+	if idx := strings.LastIndex(base, "--"); idx > 0 {
+		base = base[:idx]
+	}
 	return base + ".json"
 }
 
 // IsPlanRunning reports whether the lock PID is alive.
 func (s *Store) IsPlanRunning(planFile string) (bool, int) {
-	data, err := os.ReadFile(s.LockFile(planFile))
-	if err != nil {
-		return false, 0
+	for _, lockPath := range s.lockCandidates(planFile) {
+		data, err := os.ReadFile(lockPath)
+		if err != nil {
+			continue
+		}
+		meta := parseLockFile(data)
+		if meta.PID <= 0 {
+			continue
+		}
+		return processIsRunning(meta.PID), meta.PID
 	}
-	pid, _ := parseLockFile(data)
-	if pid <= 0 {
-		return false, 0
-	}
-	return processIsRunning(pid), pid
+	return false, 0
 }

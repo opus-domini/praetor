@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"os"
 	"os/exec"
@@ -19,6 +20,7 @@ import (
 const (
 	internalOriginatorEnv = "CODEX_INTERNAL_ORIGINATOR_OVERRIDE"
 	goSDKOriginator       = "codex_sdk_go"
+	codexMaxLineBytes     = 32 * 1024 * 1024
 )
 
 type execRunArgs struct {
@@ -47,7 +49,7 @@ type codexExec struct {
 }
 
 func newCodexExec(opts CodexOptions) (*codexExec, error) {
-	exePath, err := resolveCodexPath(opts.CodexPathOverride)
+	exePath, err := resolveCodexPath(opts.CodexPathOverride, opts.AllowLocalExecutableFallback)
 	if err != nil {
 		return nil, err
 	}
@@ -165,33 +167,23 @@ func (e *codexExec) run(ctx context.Context, args execRunArgs, onLine func([]byt
 		close(writeErrCh)
 	}()
 
-	scanner := bufio.NewScanner(stdout)
-	scanner.Buffer(make([]byte, 64*1024), 16*1024*1024)
-	for scanner.Scan() {
-		line := bytes.TrimSpace(scanner.Bytes())
-		if len(line) == 0 {
-			continue
-		}
-		if err := onLine(line); err != nil {
-			_ = cmd.Process.Kill()
-			_ = cmd.Wait()
-			return err
-		}
+	readErr := readJSONLLinesLimited(stdout, codexMaxLineBytes, onLine)
+	if readErr != nil && cmd.Process != nil {
+		_ = cmd.Process.Kill()
 	}
 
 	writeErr := <-writeErrCh
-	scanErr := scanner.Err()
 	waitErr := cmd.Wait()
 
 	if writeErr != nil && !errors.Is(writeErr, os.ErrClosed) {
 		return fmt.Errorf("write codex stdin: %w", writeErr)
 	}
 
-	if scanErr != nil {
+	if readErr != nil {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		return fmt.Errorf("read codex stdout: %w", scanErr)
+		return fmt.Errorf("read codex stdout: %w", readErr)
 	}
 
 	if waitErr != nil {
@@ -205,6 +197,42 @@ func (e *codexExec) run(ctx context.Context, args execRunArgs, onLine func([]byt
 		return fmt.Errorf("codex exec failed: %w", waitErr)
 	}
 	return nil
+}
+
+func readJSONLLinesLimited(r io.Reader, maxLineBytes int, onLine func([]byte) error) error {
+	reader := bufio.NewReaderSize(r, 64*1024)
+	for {
+		line, err := readLimitedLine(reader, maxLineBytes)
+		if len(bytes.TrimSpace(line)) > 0 {
+			if handleErr := onLine(bytes.TrimSpace(line)); handleErr != nil {
+				return handleErr
+			}
+		}
+		if err == nil {
+			continue
+		}
+		if errors.Is(err, io.EOF) {
+			return nil
+		}
+		return err
+	}
+}
+
+func readLimitedLine(reader *bufio.Reader, maxBytes int) ([]byte, error) {
+	var line []byte
+	for {
+		chunk, err := reader.ReadSlice('\n')
+		if len(chunk) > 0 {
+			if len(line)+len(chunk) > maxBytes {
+				return nil, fmt.Errorf("jsonl event exceeds maximum size (%d bytes)", maxBytes)
+			}
+			line = append(line, chunk...)
+		}
+		if errors.Is(err, bufio.ErrBufferFull) {
+			continue
+		}
+		return line, err
+	}
 }
 
 func buildChildEnv(override map[string]string, baseURL, apiKey string) []string {
@@ -246,7 +274,7 @@ func buildChildEnv(override map[string]string, baseURL, apiKey string) []string 
 	return out
 }
 
-func resolveCodexPath(override string) (string, error) {
+func resolveCodexPath(override string, allowLocalFallback bool) (string, error) {
 	override = strings.TrimSpace(override)
 	if override != "" {
 		if strings.ContainsRune(override, os.PathSeparator) || strings.HasPrefix(override, ".") {
@@ -270,11 +298,13 @@ func resolveCodexPath(override string) (string, error) {
 		return path, nil
 	}
 
-	if path, ok := findNodeBinCodex(); ok {
-		return path, nil
-	}
-	if path, ok := findVendoredCodex(); ok {
-		return path, nil
+	if allowLocalFallback {
+		if path, ok := findNodeBinCodex(); ok {
+			return path, nil
+		}
+		if path, ok := findVendoredCodex(); ok {
+			return path, nil
+		}
 	}
 
 	return "", errors.New("unable to locate codex executable; set CodexPathOverride or ensure codex is installed")
@@ -290,7 +320,7 @@ func findNodeBinCodex() (string, bool) {
 	if err != nil {
 		return "", false
 	}
-	for _, root := range walkParents(cwd) {
+	for _, root := range walkParentsToRepoRoot(cwd) {
 		for _, name := range candidates {
 			path := filepath.Join(root, "node_modules", ".bin", name)
 			info, err := os.Stat(path)
@@ -317,7 +347,7 @@ func findVendoredCodex() (string, bool) {
 	if err != nil {
 		return "", false
 	}
-	for _, root := range walkParents(cwd) {
+	for _, root := range walkParentsToRepoRoot(cwd) {
 		path := filepath.Join(root, "node_modules", "@openai", "codex", "vendor", triple, "codex", binName)
 		info, err := os.Stat(path)
 		if err != nil || info.IsDir() {
@@ -366,6 +396,31 @@ func walkParents(dir string) []string {
 		out = append(out, parent)
 		dir = parent
 	}
+}
+
+func walkParentsToRepoRoot(dir string) []string {
+	repoRoot := repoRootForDir(dir)
+	if repoRoot == "" {
+		return []string{filepath.Clean(dir)}
+	}
+	parents := walkParents(dir)
+	trimmed := make([]string, 0, len(parents))
+	for _, root := range parents {
+		trimmed = append(trimmed, root)
+		if filepath.Clean(root) == filepath.Clean(repoRoot) {
+			break
+		}
+	}
+	return trimmed
+}
+
+func repoRootForDir(dir string) string {
+	cmd := exec.Command("git", "-C", dir, "rev-parse", "--show-toplevel")
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
 }
 
 func serializeConfigOverrides(config map[string]any) ([]string, error) {

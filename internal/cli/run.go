@@ -25,6 +25,8 @@ func newRunCmd() *cobra.Command {
 	var tmuxSession string
 	var noColor bool
 	var gitSafety bool
+	var gitSafetyMode string
+	var allowDirtyWorktree bool
 	var postTaskHook string
 	var timeout time.Duration
 
@@ -74,6 +76,8 @@ safety snapshots protect the working tree from partial changes.`,
 				TMUXSession:     tmuxSession,
 				NoColor:         noColor,
 				GitSafety:       gitSafety,
+				GitSafetyMode:   loop.GitSafetyMode(strings.ToLower(strings.TrimSpace(gitSafetyMode))),
+				AllowDirty:      allowDirtyWorktree,
 				PostTaskHook:    postTaskHook,
 			}
 
@@ -96,7 +100,7 @@ safety snapshots protect the working tree from partial changes.`,
 
 	cmd.Flags().StringVar(&executor, "executor", string(loop.AgentCodex), "Default executor agent: codex or claude")
 	cmd.Flags().StringVar(&reviewer, "reviewer", string(loop.AgentClaude), "Default reviewer agent: codex, claude, or none")
-	cmd.Flags().IntVar(&maxRetries, "max-retries", 3, "Maximum retries per task")
+	cmd.Flags().IntVar(&maxRetries, "max-retries", 3, "Maximum retries per task (must be > 0)")
 	cmd.Flags().IntVar(&maxIterations, "max-iterations", 0, "Maximum loop iterations (0 = unlimited)")
 	cmd.Flags().BoolVar(&noReview, "no-review", false, "Skip the reviewer gate and auto-approve executor outputs")
 	cmd.Flags().BoolVar(&force, "force", false, "Override an existing plan lock")
@@ -107,6 +111,8 @@ safety snapshots protect the working tree from partial changes.`,
 	cmd.Flags().StringVar(&stateRoot, "state-root", "", "State root directory (default: ~/.praetor/projects/<hash>)")
 	cmd.Flags().BoolVar(&noColor, "no-color", false, "Disable colored output")
 	cmd.Flags().BoolVar(&gitSafety, "git-safety", true, "Enable git snapshot/rollback on failure")
+	cmd.Flags().StringVar(&gitSafetyMode, "git-safety-mode", string(loop.GitSafetyModeStrict), "Git safety mode: strict or off")
+	cmd.Flags().BoolVar(&allowDirtyWorktree, "allow-dirty-worktree", false, "Allow execution with dirty worktree (disables rollback safety for this run)")
 	cmd.Flags().StringVar(&postTaskHook, "hook", "", "Script to run after executor, before reviewer")
 	cmd.Flags().DurationVar(&timeout, "timeout", 0, "Run timeout (e.g. 30m, 2h)")
 	return cmd

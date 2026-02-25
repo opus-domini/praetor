@@ -73,3 +73,16 @@ func TestRegistryRejectsDuplicateProvider(t *testing.T) {
 		t.Fatalf("expected duplicate provider error")
 	}
 }
+
+func TestEngineRunZeroValueReturnsError(t *testing.T) {
+	t.Parallel()
+
+	var engine Engine
+	_, err := engine.Run(context.Background(), Request{
+		Provider: ProviderCodex,
+		Prompt:   "hello",
+	})
+	if err == nil {
+		t.Fatal("expected error for zero-value engine")
+	}
+}

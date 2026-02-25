@@ -58,11 +58,15 @@ func (r *Runner) Run(ctx context.Context, out io.Writer, planFile string, option
 	}
 
 	store := NewStore(normalized.StateRoot)
-	lockPath, err := store.AcquireRunLock(planFile, normalized.Force)
+	lock, err := store.AcquireRunLock(planFile, normalized.Force)
 	if err != nil {
 		return RunnerStats{}, err
 	}
-	defer store.ReleaseRunLock(lockPath)
+	defer func() {
+		if releaseErr := store.ReleaseRunLock(lock); releaseErr != nil {
+			_, _ = fmt.Fprintf(out, "warning: failed to release lock: %v\n", releaseErr)
+		}
+	}()
 
 	state, err := store.LoadOrInitializeState(planFile, plan)
 	if err != nil {
@@ -79,7 +83,7 @@ func (r *Runner) Run(ctx context.Context, out io.Writer, planFile string, option
 		return stats, nil
 	}
 
-	stuck, err := store.DetectStuckTasks(state, normalized.MaxRetries)
+	stuck, err := store.DetectStuckTasks(planFile, state, normalized.MaxRetries)
 	if err != nil {
 		return stats, err
 	}
@@ -98,10 +102,37 @@ func (r *Runner) Run(ctx context.Context, out io.Writer, planFile string, option
 		render.KV("tmux:", tmuxRuntime.SessionName())
 	}
 
+	gitSafetyEnabled := normalized.GitSafetyMode != GitSafetyModeOff
+	if gitSafetyEnabled && normalized.GitSafetyMode == GitSafetyModeStrict {
+		dirty, dirtyErr := store.GitWorktreeDirty(normalized.Workdir)
+		if dirtyErr != nil {
+			return stats, dirtyErr
+		}
+		if dirty {
+			if !normalized.AllowDirty {
+				return stats, errors.New("git safety strict mode requires a clean worktree; commit/stash changes or pass --allow-dirty-worktree")
+			}
+			gitSafetyEnabled = false
+			render.Warn("Dirty worktree detected; git safety rollback disabled for this run")
+		}
+	}
+
 	var totalCost float64
 	loopStart := time.Now()
 
 	for {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			_ = store.WriteCheckpoint(planFile, CheckpointEntry{
+				Timestamp: time.Now().UTC().Format(time.RFC3339),
+				Status:    "canceled",
+				TaskID:    "",
+				Signature: "",
+				RunID:     "",
+				Message:   ctxErr.Error(),
+			})
+			return stats, ctxErr
+		}
+
 		if normalized.MaxIterations > 0 && stats.Iterations >= normalized.MaxIterations {
 			render.Warn(fmt.Sprintf("Stopped: max iterations reached (%d)", normalized.MaxIterations))
 			break
@@ -146,7 +177,7 @@ func (r *Runner) Run(ctx context.Context, out io.Writer, planFile string, option
 			return stats, fmt.Errorf("task %s: %w", task.ID, err)
 		}
 
-		signature := TaskSignature(TaskKey(index, task))
+		signature := store.TaskSignatureForPlan(planFile, index, task)
 		retries, err := store.ReadRetryCount(signature)
 		if err != nil {
 			return stats, err
@@ -168,9 +199,9 @@ func (r *Runner) Run(ctx context.Context, out io.Writer, planFile string, option
 		runID := filepath.Base(runDir)
 
 		// Git safety: save snapshot before executor (Step 9).
-		if normalized.GitSafety {
+		if gitSafetyEnabled {
 			if err := store.SaveGitSnapshot(runID, normalized.Workdir); err != nil {
-				render.Warn(fmt.Sprintf("git snapshot failed: %v", err))
+				return stats, err
 			}
 		}
 
@@ -207,13 +238,25 @@ func (r *Runner) Run(ctx context.Context, out io.Writer, planFile string, option
 		render.Phase("executor", string(executor), fmt.Sprintf("attempt %d/%d [%.1fs]", retries+1, normalized.MaxRetries, execResult.DurationS))
 
 		if execErr != nil {
+			if isCancellationErr(execErr) || ctx.Err() != nil {
+				cancelErr := cancellationCause(ctx, execErr)
+				_ = store.WriteCheckpoint(planFile, CheckpointEntry{
+					Timestamp: time.Now().UTC().Format(time.RFC3339),
+					Status:    "canceled",
+					TaskID:    task.ID,
+					Signature: signature,
+					RunID:     runID,
+					Message:   cancelErr.Error(),
+				})
+				return stats, cancelErr
+			}
 			stats.TasksRejected++
 			nextRetry, incErr := store.IncrementRetryCount(signature)
 			if incErr != nil {
 				return stats, incErr
 			}
 			_ = store.WriteFeedback(signature, fmt.Sprintf("executor process failed: %v", execErr))
-			if normalized.GitSafety {
+			if gitSafetyEnabled {
 				if rbErr := store.RollbackGitSnapshot(runID, normalized.Workdir); rbErr != nil {
 					render.Warn(fmt.Sprintf("git rollback failed: %v", rbErr))
 				}
@@ -242,14 +285,18 @@ func (r *Runner) Run(ctx context.Context, out io.Writer, planFile string, option
 		}
 
 		result := ParseExecutorResult(executorOutput)
-		if result == ExecutorResultFail {
+		if result != ExecutorResultPass {
 			stats.TasksRejected++
 			nextRetry, incErr := store.IncrementRetryCount(signature)
 			if incErr != nil {
 				return stats, incErr
 			}
-			_ = store.WriteFeedback(signature, "executor self-reported RESULT: FAIL")
-			if normalized.GitSafety {
+			if result == ExecutorResultUnknown {
+				_ = store.WriteFeedback(signature, "executor output missing or invalid RESULT line")
+			} else {
+				_ = store.WriteFeedback(signature, "executor self-reported RESULT: FAIL")
+			}
+			if gitSafetyEnabled {
 				if rbErr := store.RollbackGitSnapshot(runID, normalized.Workdir); rbErr != nil {
 					render.Warn(fmt.Sprintf("git rollback failed: %v", rbErr))
 				}
@@ -266,13 +313,13 @@ func (r *Runner) Run(ctx context.Context, out io.Writer, planFile string, option
 			})
 			_ = store.WriteCheckpoint(planFile, CheckpointEntry{
 				Timestamp: time.Now().UTC().Format(time.RFC3339),
-				Status:    "executor_self_fail",
+				Status:    "executor_fail",
 				TaskID:    task.ID,
 				Signature: signature,
 				RunID:     runID,
-				Message:   "executor self-reported RESULT: FAIL",
+				Message:   fmt.Sprintf("executor reported RESULT: %s", result),
 			})
-			render.Error(fmt.Sprintf("Executor reported FAIL (retry %d/%d)", nextRetry, normalized.MaxRetries))
+			render.Error(fmt.Sprintf("Executor reported %s (retry %d/%d)", result, nextRetry, normalized.MaxRetries))
 			stats.Iterations++
 			continue
 		}
@@ -294,13 +341,25 @@ func (r *Runner) Run(ctx context.Context, out io.Writer, planFile string, option
 			render.Phase("hook", "post-task", normalized.PostTaskHook)
 			hookPassed, hookFeedback := runPostTaskHook(ctx, normalized.PostTaskHook, normalized.Workdir, runDir)
 			if !hookPassed {
+				if ctx.Err() != nil {
+					cancelErr := cancellationCause(ctx, nil)
+					_ = store.WriteCheckpoint(planFile, CheckpointEntry{
+						Timestamp: time.Now().UTC().Format(time.RFC3339),
+						Status:    "canceled",
+						TaskID:    task.ID,
+						Signature: signature,
+						RunID:     runID,
+						Message:   cancelErr.Error(),
+					})
+					return stats, cancelErr
+				}
 				stats.TasksRejected++
 				nextRetry, incErr := store.IncrementRetryCount(signature)
 				if incErr != nil {
 					return stats, incErr
 				}
 				_ = store.WriteFeedback(signature, hookFeedback)
-				if normalized.GitSafety {
+				if gitSafetyEnabled {
 					if rbErr := store.RollbackGitSnapshot(runID, normalized.Workdir); rbErr != nil {
 						render.Warn(fmt.Sprintf("git rollback failed: %v", rbErr))
 					}
@@ -352,13 +411,25 @@ func (r *Runner) Run(ctx context.Context, out io.Writer, planFile string, option
 			render.Phase("reviewer", string(reviewer), fmt.Sprintf("review complete [%.1fs]", reviewResult.DurationS))
 
 			if reviewErr != nil {
+				if isCancellationErr(reviewErr) || ctx.Err() != nil {
+					cancelErr := cancellationCause(ctx, reviewErr)
+					_ = store.WriteCheckpoint(planFile, CheckpointEntry{
+						Timestamp: time.Now().UTC().Format(time.RFC3339),
+						Status:    "canceled",
+						TaskID:    task.ID,
+						Signature: signature,
+						RunID:     runID,
+						Message:   cancelErr.Error(),
+					})
+					return stats, cancelErr
+				}
 				stats.TasksRejected++
 				nextRetry, incErr := store.IncrementRetryCount(signature)
 				if incErr != nil {
 					return stats, incErr
 				}
 				_ = store.WriteFeedback(signature, fmt.Sprintf("reviewer process failed: %v", reviewErr))
-				if normalized.GitSafety {
+				if gitSafetyEnabled {
 					if rbErr := store.RollbackGitSnapshot(runID, normalized.Workdir); rbErr != nil {
 						render.Warn(fmt.Sprintf("git rollback failed: %v", rbErr))
 					}
@@ -408,7 +479,7 @@ func (r *Runner) Run(ctx context.Context, out io.Writer, planFile string, option
 				return stats, incErr
 			}
 			_ = store.WriteFeedback(signature, decision.Reason)
-			if normalized.GitSafety {
+			if gitSafetyEnabled {
 				if rbErr := store.RollbackGitSnapshot(runID, normalized.Workdir); rbErr != nil {
 					render.Warn(fmt.Sprintf("git rollback failed: %v", rbErr))
 				}
@@ -438,7 +509,7 @@ func (r *Runner) Run(ctx context.Context, out io.Writer, planFile string, option
 		}
 
 		// Git safety: discard snapshot on success (Step 9).
-		if normalized.GitSafety {
+		if gitSafetyEnabled {
 			_ = store.DiscardGitSnapshot(runID)
 		}
 
@@ -479,10 +550,21 @@ func normalizeRunnerOptions(options RunnerOptions) (RunnerOptions, error) {
 		normalized.StateRoot = stateRoot
 	}
 	if normalized.MaxRetries <= 0 {
-		normalized.MaxRetries = 3
+		return RunnerOptions{}, errors.New("max retries must be greater than zero")
 	}
 	if normalized.MaxIterations < 0 {
 		return RunnerOptions{}, errors.New("max iterations cannot be negative")
+	}
+	if !normalized.GitSafety {
+		normalized.GitSafetyMode = GitSafetyModeOff
+	}
+	if normalized.GitSafetyMode == "" && normalized.GitSafety {
+		normalized.GitSafetyMode = GitSafetyModeStrict
+	}
+	switch normalized.GitSafetyMode {
+	case GitSafetyModeOff, GitSafetyModeStrict:
+	default:
+		return RunnerOptions{}, fmt.Errorf("invalid git safety mode %q", normalized.GitSafetyMode)
 	}
 
 	normalized.DefaultExecutor = normalizeAgent(normalized.DefaultExecutor)
@@ -528,11 +610,13 @@ func validateRequiredBinaries(opts RunnerOptions, plan Plan) error {
 	if opts.DefaultExecutor == AgentClaude {
 		needed[opts.ClaudeBin] = "claude"
 	}
-	if opts.DefaultReviewer == AgentCodex {
-		needed[opts.CodexBin] = "codex"
-	}
-	if opts.DefaultReviewer == AgentClaude {
-		needed[opts.ClaudeBin] = "claude"
+	if !opts.SkipReview {
+		if opts.DefaultReviewer == AgentCodex {
+			needed[opts.CodexBin] = "codex"
+		}
+		if opts.DefaultReviewer == AgentClaude {
+			needed[opts.ClaudeBin] = "claude"
+		}
 	}
 
 	for _, task := range plan.Tasks {
@@ -543,12 +627,14 @@ func validateRequiredBinaries(opts RunnerOptions, plan Plan) error {
 		if agent == AgentClaude {
 			needed[opts.ClaudeBin] = "claude"
 		}
-		reviewer := normalizeAgent(task.Reviewer)
-		if reviewer == AgentCodex {
-			needed[opts.CodexBin] = "codex"
-		}
-		if reviewer == AgentClaude {
-			needed[opts.ClaudeBin] = "claude"
+		if !opts.SkipReview {
+			reviewer := normalizeAgent(task.Reviewer)
+			if reviewer == AgentCodex {
+				needed[opts.CodexBin] = "codex"
+			}
+			if reviewer == AgentClaude {
+				needed[opts.ClaudeBin] = "claude"
+			}
 		}
 	}
 
@@ -572,24 +658,33 @@ func runPostTaskHook(ctx context.Context, hookPath, workdir, runDir string) (boo
 	stdoutFile := filepath.Join(runDir, "post-hook.stdout")
 	stderrFile := filepath.Join(runDir, "post-hook.stderr")
 
-	stdout, err := cmd.Output()
-	_ = os.WriteFile(stdoutFile, stdout, 0o644)
+	var stdoutBuf strings.Builder
+	var stderrBuf strings.Builder
+	cmd.Stdout = &stdoutBuf
+	cmd.Stderr = &stderrBuf
 
-	if err != nil {
-		output := strings.TrimSpace(string(stdout))
-		lines := strings.Split(output, "\n")
-		if len(lines) > 50 {
-			lines = lines[len(lines)-50:]
-		}
-		feedback := "post-task hook failed"
-		if len(lines) > 0 && strings.TrimSpace(strings.Join(lines, "")) != "" {
-			feedback = strings.Join(lines, "\n")
-		}
-		_ = os.WriteFile(stderrFile, []byte(err.Error()), 0o644)
-		return false, feedback
+	err := cmd.Run()
+	stdout := stdoutBuf.String()
+	stderr := stderrBuf.String()
+	_ = os.WriteFile(stdoutFile, []byte(stdout), 0o644)
+	_ = os.WriteFile(stderrFile, []byte(stderr), 0o644)
+
+	if err == nil {
+		return true, ""
 	}
 
-	return true, ""
+	output := strings.TrimSpace(stdout)
+	lines := strings.Split(output, "\n")
+	if len(lines) > 50 {
+		lines = lines[len(lines)-50:]
+	}
+	feedback := "post-task hook failed"
+	if len(lines) > 0 && strings.TrimSpace(strings.Join(lines, "")) != "" {
+		feedback = strings.Join(lines, "\n")
+	} else if trimmedErr := strings.TrimSpace(stderr); trimmedErr != "" {
+		feedback = trimmedErr
+	}
+	return false, feedback
 }
 
 func resolveExecutor(task StateTask, defaultExecutor Agent) (Agent, error) {
@@ -647,4 +742,21 @@ func sanitizePathToken(value string) string {
 
 func writeText(path, text string) error {
 	return os.WriteFile(path, []byte(text), 0o644)
+}
+
+func isCancellationErr(err error) bool {
+	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
+}
+
+func cancellationCause(ctx context.Context, fallback error) error {
+	if err := context.Cause(ctx); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if fallback != nil {
+		return fallback
+	}
+	return context.Canceled
 }

@@ -22,6 +22,10 @@ func New(registry *Registry) *Engine {
 
 // Run dispatches one request to the target provider.
 func (e *Engine) Run(ctx context.Context, req Request) (Result, error) {
+	if e == nil || e.registry == nil {
+		return Result{}, errors.New("orchestrator engine is not initialized")
+	}
+
 	providerID := ProviderID(strings.TrimSpace(string(req.Provider)))
 	if providerID == "" {
 		return Result{}, errors.New("provider is required")
@@ -52,5 +56,8 @@ func (e *Engine) Run(ctx context.Context, req Request) (Result, error) {
 
 // Providers returns registered provider IDs.
 func (e *Engine) Providers() []ProviderID {
+	if e == nil || e.registry == nil {
+		return nil
+	}
 	return e.registry.IDs()
 }

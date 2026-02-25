@@ -156,7 +156,15 @@ func TestWriteCheckpoint(t *testing.T) {
 		RunID:     "run-001",
 		Message:   "task completed",
 	}
-	if err := store.WriteCheckpoint("test-plan.json", entry); err != nil {
+	planFile := filepath.Join(tmpDir, "plans", "test-plan.json")
+	if err := os.MkdirAll(filepath.Dir(planFile), 0o755); err != nil {
+		t.Fatalf("mkdir plans dir: %v", err)
+	}
+	if err := os.WriteFile(planFile, []byte("{}\n"), 0o644); err != nil {
+		t.Fatalf("write dummy plan: %v", err)
+	}
+
+	if err := store.WriteCheckpoint(planFile, entry); err != nil {
 		t.Fatalf("write checkpoint: %v", err)
 	}
 
@@ -169,12 +177,77 @@ func TestWriteCheckpoint(t *testing.T) {
 		t.Error("expected task ID in history")
 	}
 
-	currentPath := filepath.Join(store.CheckpointsDir(), "test-plan.state")
+	currentPath := filepath.Join(store.CheckpointsDir(), store.RuntimeKey(planFile)+".state")
 	data, err = os.ReadFile(currentPath)
 	if err != nil {
 		t.Fatalf("read current checkpoint: %v", err)
 	}
 	if !strings.Contains(string(data), "status=completed") {
 		t.Error("expected status in current checkpoint")
+	}
+}
+
+func TestStateFilesDoNotCollideForSameBasename(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	store := &Store{Root: filepath.Join(tmpDir, "state")}
+	if err := store.Init(); err != nil {
+		t.Fatal(err)
+	}
+
+	planA := filepath.Join(tmpDir, "a", "plan.json")
+	planB := filepath.Join(tmpDir, "b", "plan.json")
+	for _, p := range []string{planA, planB} {
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	stateA := store.StateFile(planA)
+	stateB := store.StateFile(planB)
+	if stateA == stateB {
+		t.Fatalf("state files must not collide: %s", stateA)
+	}
+}
+
+func TestTaskSignatureForPlanIsPlanScoped(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	store := &Store{Root: tmpDir}
+	task := StateTask{ID: "TASK-001", Title: "Task"}
+
+	sigA := store.TaskSignatureForPlan(filepath.Join(tmpDir, "a", "plan.json"), 0, task)
+	sigB := store.TaskSignatureForPlan(filepath.Join(tmpDir, "b", "plan.json"), 0, task)
+	if sigA == sigB {
+		t.Fatal("task signatures must differ between plans")
+	}
+}
+
+func TestReleaseRunLockRequiresOwnershipToken(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	store := &Store{Root: filepath.Join(tmpDir, "state")}
+	if err := store.Init(); err != nil {
+		t.Fatal(err)
+	}
+
+	planPath := filepath.Join(tmpDir, "plan.json")
+	if err := os.WriteFile(planPath, []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	lock, err := store.AcquireRunLock(planPath, false)
+	if err != nil {
+		t.Fatalf("acquire lock: %v", err)
+	}
+
+	if err := store.ReleaseRunLock(RunLock{Path: lock.Path, Token: "wrong"}); err == nil {
+		t.Fatal("expected ownership mismatch error")
+	}
+	if err := store.ReleaseRunLock(lock); err != nil {
+		t.Fatalf("release lock: %v", err)
 	}
 }

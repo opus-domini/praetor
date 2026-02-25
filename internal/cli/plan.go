@@ -145,6 +145,7 @@ func newPlanListCmd() *cobra.Command {
 
 func newPlanResetCmd() *cobra.Command {
 	var stateRoot string
+	var force bool
 
 	cmd := &cobra.Command{
 		Use:     "reset <plan-file>",
@@ -168,6 +169,10 @@ func newPlanResetCmd() *cobra.Command {
 			}
 
 			store := loop.NewStore(resolvedStateRoot)
+			running, pid := store.IsPlanRunning(absPlan)
+			if running && !force {
+				return fmt.Errorf("plan is currently running (pid=%d); use --force to reset anyway", pid)
+			}
 			removed, err := store.ResetPlanRuntime(absPlan, plan)
 			if err != nil {
 				return err
@@ -182,6 +187,7 @@ func newPlanResetCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&stateRoot, "state-root", "", "State root directory (default: ~/.praetor/projects/<hash>)")
+	cmd.Flags().BoolVar(&force, "force", false, "Force reset even if a running lock exists")
 	return cmd
 }
 

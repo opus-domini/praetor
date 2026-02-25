@@ -52,19 +52,15 @@ func TestValidatePlanDuplicateID(t *testing.T) {
 	}
 }
 
-func TestValidatePlanInvalidModel(t *testing.T) {
+func TestValidatePlanAcceptsProviderSpecificModel(t *testing.T) {
 	t.Parallel()
 	plan := Plan{
 		Tasks: []Task{
 			{Title: "test task", Model: "gpt-4"},
 		},
 	}
-	err := ValidatePlan(plan)
-	if err == nil {
-		t.Fatal("expected validation error for invalid model")
-	}
-	if !strings.Contains(err.Error(), "invalid model") {
-		t.Fatalf("expected model validation error, got: %s", err)
+	if err := ValidatePlan(plan); err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 

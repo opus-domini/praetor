@@ -38,7 +38,7 @@ Pass the prompt as an argument or pipe it via stdin.`,
 				return err
 			}
 
-			providerID := orchestrator.ProviderID(strings.TrimSpace(provider))
+			providerID := orchestrator.ProviderID(strings.ToLower(strings.TrimSpace(provider)))
 			p, err := buildProvider(providerID)
 			if err != nil {
 				return err

@@ -16,12 +16,6 @@ import (
 
 var slugPattern = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?$`)
 
-var validModels = map[string]struct{}{
-	"sonnet": {},
-	"opus":   {},
-	"haiku":  {},
-}
-
 // LoadPlan reads and validates a plan file.
 func LoadPlan(path string) (Plan, error) {
 	data, err := os.ReadFile(path)
@@ -75,10 +69,8 @@ func ValidatePlan(plan Plan) error {
 			}
 		}
 
-		if task.Model != "" {
-			if _, ok := validModels[strings.ToLower(strings.TrimSpace(task.Model))]; !ok {
-				errorsList = append(errorsList, fmt.Sprintf("tasks[%d]: invalid model %q (allowed: sonnet, opus, haiku)", idx, task.Model))
-			}
+		if task.Model != "" && strings.TrimSpace(task.Model) == "" {
+			errorsList = append(errorsList, fmt.Sprintf("tasks[%d]: model cannot be blank", idx))
 		}
 	}
 

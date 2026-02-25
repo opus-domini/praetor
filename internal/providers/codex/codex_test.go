@@ -1,8 +1,13 @@
 package codex
 
 import (
+	"bufio"
+	"bytes"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -219,5 +224,60 @@ func TestCreateOutputSchemaFileWritesJSON(t *testing.T) {
 	data, err := json.Marshal(file.schemaPath)
 	if err != nil || len(data) == 0 {
 		t.Fatalf("expected schema path to be serializable")
+	}
+}
+
+func TestReadJSONLLinesLimitedRejectsOversizedEvent(t *testing.T) {
+	t.Parallel()
+
+	var seen int
+	err := readJSONLLinesLimited(strings.NewReader(`{"type":"x","value":"1234567890"}`+"\n"), 8, func(_ []byte) error {
+		seen++
+		return nil
+	})
+	if err == nil {
+		t.Fatal("expected oversized event error")
+	}
+	if seen != 0 {
+		t.Fatalf("expected no parsed events, got %d", seen)
+	}
+}
+
+func TestResolveCodexPathHonorsLocalFallbackPolicy(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Chdir(tmpDir)
+	t.Setenv("PATH", "")
+
+	localBin := filepath.Join(tmpDir, "node_modules", ".bin", "codex")
+	if err := os.MkdirAll(filepath.Dir(localBin), 0o755); err != nil {
+		t.Fatalf("mkdir local bin: %v", err)
+	}
+	if err := os.WriteFile(localBin, []byte("#!/usr/bin/env bash\necho ok\n"), 0o755); err != nil {
+		t.Fatalf("write local codex: %v", err)
+	}
+
+	if _, err := resolveCodexPath("", false); err == nil {
+		t.Fatal("expected failure when local fallback is disabled")
+	}
+
+	path, err := resolveCodexPath("", true)
+	if err != nil {
+		t.Fatalf("expected local fallback success: %v", err)
+	}
+	if !strings.Contains(path, filepath.Join("node_modules", ".bin")) {
+		t.Fatalf("unexpected resolved path: %s", path)
+	}
+}
+
+func TestReadLimitedLine(t *testing.T) {
+	t.Parallel()
+
+	reader := bufio.NewReader(bytes.NewReader([]byte("hello\n")))
+	line, err := readLimitedLine(reader, 32)
+	if err != nil {
+		t.Fatalf("read limited line: %v", err)
+	}
+	if string(line) != "hello\n" {
+		t.Fatalf("unexpected line: %q", string(line))
 	}
 }

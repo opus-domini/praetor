@@ -1,6 +1,7 @@
 package loop
 
 import (
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -15,9 +16,28 @@ import (
 	"time"
 )
 
+const (
+	lockSchemaVersion = 2
+)
+
 // Store manages mutable runner state files and runtime artifacts.
 type Store struct {
 	Root string
+}
+
+// RunLock represents one acquired runtime lock owned by this process.
+type RunLock struct {
+	Path  string
+	Token string
+}
+
+type lockMeta struct {
+	Version   int    `json:"version"`
+	PID       int    `json:"pid"`
+	Hostname  string `json:"hostname"`
+	StartedAt string `json:"started_at"`
+	Token     string `json:"token"`
+	Runtime   string `json:"runtime_key"`
 }
 
 // NewStore builds a store with a validated root path.
@@ -96,14 +116,97 @@ func (s *Store) PlanBaseName(planFile string) string {
 	return strings.TrimSuffix(filepath.Base(planFile), filepath.Ext(planFile))
 }
 
+// RuntimeKey returns the collision-resistant key used for all plan runtime artifacts.
+func (s *Store) RuntimeKey(planFile string) string {
+	clean := strings.TrimSpace(planFile)
+	if abs, err := filepath.Abs(clean); err == nil {
+		clean = abs
+	}
+	if real, err := filepath.EvalSymlinks(clean); err == nil {
+		clean = real
+	}
+
+	baseName := strings.TrimSpace(filepath.Base(clean))
+	baseName = strings.TrimSuffix(baseName, filepath.Ext(baseName))
+	baseName = sanitizePathToken(baseName)
+	if baseName == "" {
+		baseName = "plan"
+	}
+
+	hash := sha256.Sum256([]byte(clean))
+	return fmt.Sprintf("%s--%s", baseName, hex.EncodeToString(hash[:])[:12])
+}
+
+func (s *Store) legacyPlanBaseName(planFile string) string {
+	return strings.TrimSuffix(filepath.Base(planFile), filepath.Ext(planFile))
+}
+
+func (s *Store) stateFileV2(planFile string) string {
+	return filepath.Join(s.StateDir(), s.RuntimeKey(planFile)+".state.json")
+}
+
+func (s *Store) stateFileLegacy(planFile string) string {
+	return filepath.Join(s.StateDir(), s.legacyPlanBaseName(planFile)+".state.json")
+}
+
 // StateFile returns the mutable state file path for a plan.
 func (s *Store) StateFile(planFile string) string {
-	return filepath.Join(s.StateDir(), s.PlanBaseName(planFile)+".state.json")
+	return s.stateFileV2(planFile)
+}
+
+func (s *Store) findStateFile(planFile string) (string, bool, error) {
+	v2 := s.stateFileV2(planFile)
+	if _, err := os.Stat(v2); err == nil {
+		return v2, false, nil
+	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return "", false, fmt.Errorf("stat state file: %w", err)
+	}
+
+	legacy := s.stateFileLegacy(planFile)
+	if _, err := os.Stat(legacy); err == nil {
+		return legacy, true, nil
+	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return "", false, fmt.Errorf("stat legacy state file: %w", err)
+	}
+	return v2, false, nil
+}
+
+func (s *Store) migrateStateFileIfNeeded(planFile, source string, state State) error {
+	target := s.stateFileV2(planFile)
+	if source == target {
+		return nil
+	}
+	if err := writeJSONFile(target, state); err != nil {
+		return fmt.Errorf("migrate legacy state file: %w", err)
+	}
+	_ = os.Remove(source)
+	return nil
+}
+
+func (s *Store) lockFileV2(planFile string) string {
+	return filepath.Join(s.LocksDir(), s.RuntimeKey(planFile)+".lock")
+}
+
+func (s *Store) lockFileLegacy(planFile string) string {
+	return filepath.Join(s.LocksDir(), s.legacyPlanBaseName(planFile)+".lock")
 }
 
 // LockFile returns the lock file path for a plan.
 func (s *Store) LockFile(planFile string) string {
-	return filepath.Join(s.LocksDir(), s.PlanBaseName(planFile)+".lock")
+	return s.lockFileV2(planFile)
+}
+
+func (s *Store) lockCandidates(planFile string) []string {
+	v2 := s.lockFileV2(planFile)
+	legacy := s.lockFileLegacy(planFile)
+	if v2 == legacy {
+		return []string{v2}
+	}
+	return []string{v2, legacy}
+}
+
+func (s *Store) currentCheckpointFile(planFile string) string {
+	return filepath.Join(s.CheckpointsDir(), s.RuntimeKey(planFile)+".state")
 }
 
 // LoadOrInitializeState creates state from plan or merges existing state after plan changes.
@@ -117,7 +220,10 @@ func (s *Store) LoadOrInitializeState(planFile string, plan Plan) (State, error)
 		return State{}, err
 	}
 
-	stateFile := s.StateFile(planFile)
+	stateFile, legacy, err := s.findStateFile(planFile)
+	if err != nil {
+		return State{}, err
+	}
 	now := time.Now().UTC().Format(time.RFC3339)
 
 	if _, err := os.Stat(stateFile); errors.Is(err, os.ErrNotExist) {
@@ -128,7 +234,7 @@ func (s *Store) LoadOrInitializeState(planFile string, plan Plan) (State, error)
 			UpdatedAt:    now,
 			Tasks:        stateTasksFromPlan(plan),
 		}
-		if err := writeJSONFile(stateFile, state); err != nil {
+		if err := writeJSONFile(s.StateFile(planFile), state); err != nil {
 			return State{}, err
 		}
 		return state, nil
@@ -142,19 +248,30 @@ func (s *Store) LoadOrInitializeState(planFile string, plan Plan) (State, error)
 	}
 
 	if state.PlanChecksum == checksum {
+		if legacy {
+			if migrateErr := s.migrateStateFileIfNeeded(planFile, stateFile, state); migrateErr != nil {
+				return State{}, migrateErr
+			}
+		}
 		return state, nil
 	}
 
 	merged := mergeState(planFile, checksum, state, plan)
-	if err := writeJSONFile(stateFile, merged); err != nil {
+	if err := writeJSONFile(s.StateFile(planFile), merged); err != nil {
 		return State{}, err
+	}
+	if legacy {
+		_ = os.Remove(stateFile)
 	}
 	return merged, nil
 }
 
 // ReadState reads state from disk.
 func (s *Store) ReadState(planFile string) (State, error) {
-	path := s.StateFile(planFile)
+	path, legacy, err := s.findStateFile(planFile)
+	if err != nil {
+		return State{}, err
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return State{}, fmt.Errorf("read state file: %w", err)
@@ -162,6 +279,11 @@ func (s *Store) ReadState(planFile string) (State, error) {
 	var state State
 	if err := json.Unmarshal(data, &state); err != nil {
 		return State{}, fmt.Errorf("decode state file: %w", err)
+	}
+	if legacy {
+		if migrateErr := s.migrateStateFileIfNeeded(planFile, path, state); migrateErr != nil {
+			return State{}, migrateErr
+		}
 	}
 	return state, nil
 }
@@ -265,6 +387,12 @@ func TaskKey(index int, task StateTask) string {
 	return fmt.Sprintf("index:%d:title:%s", index, strings.TrimSpace(task.Title))
 }
 
+// TaskSignatureForPlan returns the stable, plan-scoped signature for retries/feedback.
+func (s *Store) TaskSignatureForPlan(planFile string, index int, task StateTask) string {
+	scope := s.RuntimeKey(planFile) + "|" + TaskKey(index, task)
+	return TaskSignature(scope)
+}
+
 // ReadRetryCount reads current retry count for one task signature.
 func (s *Store) ReadRetryCount(signature string) (int, error) {
 	path := filepath.Join(s.RetriesDir(), signature+".count")
@@ -342,47 +470,138 @@ func (s *Store) ClearFeedback(signature string) error {
 }
 
 // AcquireRunLock acquires a lock for one plan run.
-func (s *Store) AcquireRunLock(planFile string, force bool) (string, error) {
+func (s *Store) AcquireRunLock(planFile string, force bool) (RunLock, error) {
 	if err := s.Init(); err != nil {
-		return "", err
+		return RunLock{}, err
 	}
 
+	runtimeKey := s.RuntimeKey(planFile)
 	lockPath := s.LockFile(planFile)
-	if data, err := os.ReadFile(lockPath); err == nil {
-		pid, started := parseLockFile(data)
-		if pid > 0 && processIsRunning(pid) && !force {
-			return "", fmt.Errorf("plan is already running (pid=%d, started=%s); use --force to override", pid, started)
+	hostname, _ := os.Hostname()
+
+	for _, legacyPath := range s.lockCandidates(planFile)[1:] {
+		data, err := os.ReadFile(legacyPath)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
 		}
-	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return "", fmt.Errorf("read lock file: %w", err)
+		if err != nil {
+			return RunLock{}, fmt.Errorf("read lock file: %w", err)
+		}
+		meta := parseLockFile(data)
+		if meta.PID > 0 && processIsRunning(meta.PID) && !force {
+			return RunLock{}, fmt.Errorf("plan is already running (pid=%d, started=%s); use --force to override", meta.PID, meta.StartedAt)
+		}
+		if force || meta.PID <= 0 || !processIsRunning(meta.PID) {
+			_ = os.Remove(legacyPath)
+		}
 	}
 
-	content := fmt.Sprintf("%d\n%s\n", os.Getpid(), time.Now().UTC().Format(time.RFC3339))
-	if err := os.WriteFile(lockPath, []byte(content), 0o644); err != nil {
-		return "", fmt.Errorf("write lock file: %w", err)
+	for range 4 {
+		token, err := randomHex(12)
+		if err != nil {
+			return RunLock{}, err
+		}
+		meta := lockMeta{
+			Version:   lockSchemaVersion,
+			PID:       os.Getpid(),
+			Hostname:  strings.TrimSpace(hostname),
+			StartedAt: time.Now().UTC().Format(time.RFC3339),
+			Token:     token,
+			Runtime:   runtimeKey,
+		}
+		payload, err := json.Marshal(meta)
+		if err != nil {
+			return RunLock{}, fmt.Errorf("encode lock metadata: %w", err)
+		}
+		payload = append(payload, '\n')
+
+		file, err := os.OpenFile(lockPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+		if err == nil {
+			if _, writeErr := file.Write(payload); writeErr != nil {
+				_ = file.Close()
+				_ = os.Remove(lockPath)
+				return RunLock{}, fmt.Errorf("write lock file: %w", writeErr)
+			}
+			if closeErr := file.Close(); closeErr != nil {
+				_ = os.Remove(lockPath)
+				return RunLock{}, fmt.Errorf("close lock file: %w", closeErr)
+			}
+			return RunLock{Path: lockPath, Token: token}, nil
+		}
+		if !errors.Is(err, os.ErrExist) {
+			return RunLock{}, fmt.Errorf("open lock file: %w", err)
+		}
+
+		data, readErr := os.ReadFile(lockPath)
+		if readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
+			return RunLock{}, fmt.Errorf("read lock file: %w", readErr)
+		}
+		if errors.Is(readErr, os.ErrNotExist) {
+			continue
+		}
+
+		existing := parseLockFile(data)
+		if existing.PID > 0 && processIsRunning(existing.PID) && !force {
+			return RunLock{}, fmt.Errorf("plan is already running (pid=%d, started=%s); use --force to override", existing.PID, existing.StartedAt)
+		}
+		if removeErr := os.Remove(lockPath); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+			return RunLock{}, fmt.Errorf("remove stale lock file: %w", removeErr)
+		}
 	}
-	return lockPath, nil
+	return RunLock{}, errors.New("unable to acquire lock after multiple attempts")
 }
 
 // ReleaseRunLock releases a plan lock.
-func (s *Store) ReleaseRunLock(lockPath string) {
-	if strings.TrimSpace(lockPath) == "" {
-		return
+func (s *Store) ReleaseRunLock(lock RunLock) error {
+	lockPath := strings.TrimSpace(lock.Path)
+	if lockPath == "" {
+		return nil
 	}
-	_ = os.Remove(lockPath)
+
+	data, err := os.ReadFile(lockPath)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("read lock file: %w", err)
+	}
+	existing := parseLockFile(data)
+	if existing.Token == "" {
+		return errors.New("lock file does not contain ownership token")
+	}
+	if strings.TrimSpace(lock.Token) == "" || existing.Token != strings.TrimSpace(lock.Token) {
+		return fmt.Errorf("lock ownership mismatch for %s", lockPath)
+	}
+	if err := os.Remove(lockPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("remove lock file: %w", err)
+	}
+	return nil
 }
 
-func parseLockFile(data []byte) (int, string) {
-	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+func parseLockFile(data []byte) lockMeta {
+	trimmed := strings.TrimSpace(string(data))
+	if trimmed == "" {
+		return lockMeta{}
+	}
+
+	var meta lockMeta
+	if err := json.Unmarshal([]byte(trimmed), &meta); err == nil {
+		return meta
+	}
+
+	lines := strings.Split(trimmed, "\n")
 	if len(lines) == 0 {
-		return 0, ""
+		return lockMeta{}
 	}
 	pid, _ := strconv.Atoi(strings.TrimSpace(lines[0]))
 	started := ""
 	if len(lines) > 1 {
 		started = strings.TrimSpace(lines[1])
 	}
-	return pid, started
+	return lockMeta{
+		PID:       pid,
+		StartedAt: started,
+	}
 }
 
 func processIsRunning(pid int) bool {
@@ -399,8 +618,19 @@ func processIsRunning(pid int) bool {
 	return true
 }
 
+func randomHex(size int) (string, error) {
+	if size <= 0 {
+		return "", errors.New("random size must be positive")
+	}
+	buf := make([]byte, size)
+	if _, err := rand.Read(buf); err != nil {
+		return "", fmt.Errorf("generate random token: %w", err)
+	}
+	return hex.EncodeToString(buf), nil
+}
+
 // DetectStuckTasks reports open tasks that already reached retry limit.
-func (s *Store) DetectStuckTasks(state State, maxRetries int) ([]string, error) {
+func (s *Store) DetectStuckTasks(planFile string, state State, maxRetries int) ([]string, error) {
 	if maxRetries <= 0 {
 		return nil, nil
 	}
@@ -410,7 +640,7 @@ func (s *Store) DetectStuckTasks(state State, maxRetries int) ([]string, error) 
 		if task.Status != TaskStatusOpen {
 			continue
 		}
-		signature := TaskSignature(TaskKey(idx, task))
+		signature := s.TaskSignatureForPlan(planFile, idx, task)
 		retries, err := s.ReadRetryCount(signature)
 		if err != nil {
 			return nil, err
@@ -425,23 +655,25 @@ func (s *Store) DetectStuckTasks(state State, maxRetries int) ([]string, error) 
 // ResetPlanRuntime removes state, lock, retries and feedback for plan tasks.
 func (s *Store) ResetPlanRuntime(planFile string, plan Plan) (int, error) {
 	removed := 0
-	statePath := s.StateFile(planFile)
-	if err := os.Remove(statePath); err == nil {
-		removed++
-	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return removed, fmt.Errorf("remove state file: %w", err)
+	for _, statePath := range []string{s.stateFileV2(planFile), s.stateFileLegacy(planFile)} {
+		if err := os.Remove(statePath); err == nil {
+			removed++
+		} else if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return removed, fmt.Errorf("remove state file: %w", err)
+		}
 	}
 
-	lockPath := s.LockFile(planFile)
-	if err := os.Remove(lockPath); err == nil {
-		removed++
-	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return removed, fmt.Errorf("remove lock file: %w", err)
+	for _, lockPath := range s.lockCandidates(planFile) {
+		if err := os.Remove(lockPath); err == nil {
+			removed++
+		} else if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return removed, fmt.Errorf("remove lock file: %w", err)
+		}
 	}
 
 	stateTasks := stateTasksFromPlan(plan)
 	for idx, task := range stateTasks {
-		signature := TaskSignature(TaskKey(idx, task))
+		signature := s.TaskSignatureForPlan(planFile, idx, task)
 		retryPath := filepath.Join(s.RetriesDir(), signature+".count")
 		if err := os.Remove(retryPath); err == nil {
 			removed++
@@ -489,6 +721,16 @@ func (s *Store) SaveGitSnapshot(runID, workdir string) error {
 		return fmt.Errorf("write git snapshot: %w", err)
 	}
 	return nil
+}
+
+// GitWorktreeDirty reports whether tracked or untracked changes exist.
+func (s *Store) GitWorktreeDirty(workdir string) (bool, error) {
+	cmd := exec.Command("git", "-C", workdir, "status", "--porcelain")
+	out, err := cmd.Output()
+	if err != nil {
+		return false, fmt.Errorf("git status --porcelain: %w", err)
+	}
+	return strings.TrimSpace(string(out)) != "", nil
 }
 
 // RollbackGitSnapshot resets the working tree to the saved snapshot.
@@ -543,20 +785,23 @@ type CostEntry struct {
 // WriteTaskMetrics appends one cost entry to the tracking ledger.
 func (s *Store) WriteTaskMetrics(entry CostEntry) error {
 	path := filepath.Join(s.CostsDir(), "tracking.tsv")
-
-	needsHeader := false
-	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
-		needsHeader = true
-	}
-
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
 		return fmt.Errorf("open cost tracking file: %w", err)
 	}
 	defer func() { _ = f.Close() }()
 
-	if needsHeader {
-		if _, err := fmt.Fprintf(f, "timestamp\trun_id\ttask_id\tagent\trole\tduration_s\tstatus\tcost_usd\n"); err != nil {
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+		return fmt.Errorf("lock cost tracking file: %w", err)
+	}
+	defer func() { _ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN) }()
+
+	info, err := f.Stat()
+	if err != nil {
+		return fmt.Errorf("stat cost tracking file: %w", err)
+	}
+	if info.Size() == 0 {
+		if _, err := fmt.Fprint(f, "timestamp\trun_id\ttask_id\tagent\trole\tduration_s\tstatus\tcost_usd\n"); err != nil {
 			return fmt.Errorf("write cost header: %w", err)
 		}
 	}
@@ -582,20 +827,23 @@ type CheckpointEntry struct {
 // WriteCheckpoint appends to the history log and overwrites the current checkpoint.
 func (s *Store) WriteCheckpoint(planFile string, entry CheckpointEntry) error {
 	historyPath := filepath.Join(s.CheckpointsDir(), "history.tsv")
-
-	needsHeader := false
-	if _, err := os.Stat(historyPath); errors.Is(err, os.ErrNotExist) {
-		needsHeader = true
-	}
-
 	f, err := os.OpenFile(historyPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
 		return fmt.Errorf("open checkpoint history: %w", err)
 	}
 	defer func() { _ = f.Close() }()
 
-	if needsHeader {
-		if _, err := fmt.Fprintf(f, "timestamp\tstatus\ttask_id\tsignature\trun_id\tmessage\n"); err != nil {
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+		return fmt.Errorf("lock checkpoint history: %w", err)
+	}
+	defer func() { _ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN) }()
+
+	info, err := f.Stat()
+	if err != nil {
+		return fmt.Errorf("stat checkpoint history: %w", err)
+	}
+	if info.Size() == 0 {
+		if _, err := fmt.Fprint(f, "timestamp\tstatus\ttask_id\tsignature\trun_id\tmessage\n"); err != nil {
 			return fmt.Errorf("write checkpoint header: %w", err)
 		}
 	}
@@ -606,7 +854,7 @@ func (s *Store) WriteCheckpoint(planFile string, entry CheckpointEntry) error {
 		return fmt.Errorf("write checkpoint entry: %w", err)
 	}
 
-	currentPath := filepath.Join(s.CheckpointsDir(), s.PlanBaseName(planFile)+".state")
+	currentPath := s.currentCheckpointFile(planFile)
 	content := fmt.Sprintf("timestamp=%s\nstatus=%s\ntask_id=%s\nsignature=%s\nrun_id=%s\nmessage=%s\n",
 		entry.Timestamp, entry.Status, entry.TaskID, entry.Signature,
 		entry.RunID, entry.Message)

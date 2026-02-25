@@ -184,8 +184,10 @@ type ThreadOptions struct {
 type CodexOptions struct {
 	// CodexPathOverride overrides automatic executable resolution.
 	CodexPathOverride string
-	BaseURL           string
-	APIKey            string
+	// AllowLocalExecutableFallback enables searching local node_modules binaries when codex is not on PATH.
+	AllowLocalExecutableFallback bool
+	BaseURL                      string
+	APIKey                       string
 	// Config emits repeated --config key=value CLI flags.
 	Config map[string]any
 	// Env, when provided, becomes the full environment for the child process.

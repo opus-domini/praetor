@@ -22,10 +22,11 @@ type processTransport struct {
 	stdout io.ReadCloser
 	waitCh chan error
 
-	writeMu sync.Mutex
-	closeMu sync.Mutex
-	closed  bool
+	mu     sync.Mutex
+	closed bool
 }
+
+const claudeMaxLineBytes = 16 * 1024 * 1024
 
 func newProcessTransport(ctx context.Context, opts Options) (*processTransport, error) {
 	command := strings.TrimSpace(opts.PathToClaudeCodeExecutable)
@@ -230,6 +231,9 @@ func buildCLIArgs(opts Options) ([]string, error) {
 		sort.Strings(keys)
 		for _, k := range keys {
 			flag := "--" + strings.TrimLeft(k, "-")
+			if isProtocolInvariantFlag(flag) {
+				return nil, fmt.Errorf("extra flag %q is not allowed because it overrides protocol settings", flag)
+			}
 			val := opts.ExtraFlagArgs[k]
 			if val == nil {
 				args = append(args, flag)
@@ -239,6 +243,9 @@ func buildCLIArgs(opts Options) ([]string, error) {
 		}
 	}
 
+	if err := validateExtraArgs(opts.ExtraArgs); err != nil {
+		return nil, err
+	}
 	args = append(args, opts.ExtraArgs...)
 	return args, nil
 }
@@ -285,8 +292,8 @@ func (t *processTransport) writeJSONLine(v any) error {
 }
 
 func (t *processTransport) writeLine(line []byte) error {
-	t.writeMu.Lock()
-	defer t.writeMu.Unlock()
+	t.mu.Lock()
+	defer t.mu.Unlock()
 
 	if t.closed {
 		return errors.New("transport is closed")
@@ -307,9 +314,15 @@ func (t *processTransport) writeLine(line []byte) error {
 }
 
 func (t *processTransport) readLines(handle func([]byte) error) error {
-	reader := bufio.NewReader(t.stdout)
+	t.mu.Lock()
+	stdout := t.stdout
+	t.mu.Unlock()
+	if stdout == nil {
+		return errors.New("stdout is closed")
+	}
+	reader := bufio.NewReaderSize(stdout, 64*1024)
 	for {
-		line, err := reader.ReadBytes('\n')
+		line, err := readLineLimited(reader, claudeMaxLineBytes)
 		if len(bytes.TrimSpace(line)) > 0 {
 			if handleErr := handle(bytes.TrimSpace(line)); handleErr != nil {
 				return handleErr
@@ -319,11 +332,8 @@ func (t *processTransport) readLines(handle func([]byte) error) error {
 			continue
 		}
 		if errors.Is(err, io.EOF) {
-			if t.waitCh != nil {
-				waitErr := <-t.waitCh
-				if waitErr != nil {
-					return fmt.Errorf("process exited: %w", waitErr)
-				}
+			if waitErr := t.waitProcess(); waitErr != nil {
+				return fmt.Errorf("process exited: %w", waitErr)
 			}
 			return nil
 		}
@@ -332,8 +342,8 @@ func (t *processTransport) readLines(handle func([]byte) error) error {
 }
 
 func (t *processTransport) endInput() error {
-	t.closeMu.Lock()
-	defer t.closeMu.Unlock()
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	if t.closed || t.stdin == nil {
 		return nil
 	}
@@ -345,33 +355,91 @@ func (t *processTransport) endInput() error {
 }
 
 func (t *processTransport) close() error {
-	t.closeMu.Lock()
-	defer t.closeMu.Unlock()
-
+	t.mu.Lock()
 	if t.closed {
+		t.mu.Unlock()
 		return nil
 	}
 	t.closed = true
+	stdin := t.stdin
+	t.stdin = nil
+	stdout := t.stdout
+	t.stdout = nil
+	cmd := t.cmd
+	t.mu.Unlock()
 
 	var closeErr error
-	if t.stdin != nil {
-		_ = t.stdin.Close()
-		t.stdin = nil
+	if stdin != nil {
+		_ = stdin.Close()
 	}
-
-	if t.cmd != nil && t.cmd.Process != nil {
-		_ = t.cmd.Process.Kill()
-		if t.waitCh != nil {
-			<-t.waitCh
-		}
+	if cmd != nil && cmd.Process != nil {
+		_ = cmd.Process.Kill()
+		_ = t.waitProcess()
 	}
-
-	if t.stdout != nil {
-		if err := t.stdout.Close(); err != nil && closeErr == nil {
+	if stdout != nil {
+		if err := stdout.Close(); err != nil && closeErr == nil {
 			closeErr = err
 		}
-		t.stdout = nil
 	}
-
 	return closeErr
+}
+
+func (t *processTransport) waitProcess() error {
+	t.mu.Lock()
+	waitCh := t.waitCh
+	t.waitCh = nil
+	t.mu.Unlock()
+	if waitCh == nil {
+		return nil
+	}
+	waitErr, ok := <-waitCh
+	if !ok {
+		return nil
+	}
+	return waitErr
+}
+
+func readLineLimited(reader *bufio.Reader, maxBytes int) ([]byte, error) {
+	var line []byte
+	for {
+		chunk, err := reader.ReadSlice('\n')
+		if len(chunk) > 0 {
+			if len(line)+len(chunk) > maxBytes {
+				return nil, fmt.Errorf("line exceeds maximum size (%d bytes)", maxBytes)
+			}
+			line = append(line, chunk...)
+		}
+		if errors.Is(err, bufio.ErrBufferFull) {
+			continue
+		}
+		return line, err
+	}
+}
+
+func isProtocolInvariantFlag(flag string) bool {
+	switch flag {
+	case "--input-format", "--output-format":
+		return true
+	default:
+		return false
+	}
+}
+
+func validateExtraArgs(extra []string) error {
+	for _, raw := range extra {
+		token := strings.TrimSpace(raw)
+		if token == "" {
+			continue
+		}
+		if token == "--" {
+			return nil
+		}
+		if strings.Contains(token, "=") {
+			token = strings.SplitN(token, "=", 2)[0]
+		}
+		if strings.HasPrefix(token, "-") && isProtocolInvariantFlag(token) {
+			return fmt.Errorf("extra argument %q is not allowed because it overrides protocol settings", raw)
+		}
+	}
+	return nil
 }

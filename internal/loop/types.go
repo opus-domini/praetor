@@ -106,8 +106,18 @@ type RunnerOptions struct {
 	Verbose         bool
 	NoColor         bool
 	GitSafety       bool
+	GitSafetyMode   GitSafetyMode
+	AllowDirty      bool
 	PostTaskHook    string
 }
+
+// GitSafetyMode controls precondition and rollback behavior.
+type GitSafetyMode string
+
+const (
+	GitSafetyModeOff    GitSafetyMode = "off"
+	GitSafetyModeStrict GitSafetyMode = "strict"
+)
 
 // RunnerStats summarizes one run invocation.
 type RunnerStats struct {

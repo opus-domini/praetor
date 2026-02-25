@@ -38,7 +38,11 @@ type Query struct {
 	initErr    error
 	initResult *InitializeResponse
 
-	closeOnce sync.Once
+	workers      sync.WaitGroup
+	closeOnce    sync.Once
+	finalizeOnce sync.Once
+	closeErrMu   sync.Mutex
+	closeErr     error
 }
 
 // NewQuery starts a new Claude Code process and begins async initialization.
@@ -62,8 +66,15 @@ func NewQuery(ctx context.Context, opts Options) (*Query, error) {
 		initDone:         make(chan struct{}),
 	}
 
-	go q.readLoop()
-	go q.initializeAsync(opts)
+	q.workers.Add(2)
+	go func() {
+		defer q.workers.Done()
+		q.readLoop()
+	}()
+	go func() {
+		defer q.workers.Done()
+		q.initializeAsync(opts)
+	}()
 	return q, nil
 }
 
@@ -79,29 +90,11 @@ func (q *Query) Errors() <-chan error {
 
 // Close terminates the query and underlying process.
 func (q *Query) Close() error {
-	var closeErr error
-	q.closeOnce.Do(func() {
-		close(q.done)
-
-		q.pendingMu.Lock()
-		for id, ch := range q.pending {
-			close(ch)
-			delete(q.pending, id)
-		}
-		q.pendingMu.Unlock()
-
-		q.incomingCancelMu.Lock()
-		for id, cancel := range q.incomingCancel {
-			cancel()
-			delete(q.incomingCancel, id)
-		}
-		q.incomingCancelMu.Unlock()
-
-		closeErr = q.transport.close()
-		close(q.msgCh)
-		close(q.errCh)
-	})
-	return closeErr
+	q.beginClose()
+	q.finalizeClose()
+	q.closeErrMu.Lock()
+	defer q.closeErrMu.Unlock()
+	return q.closeErr
 }
 
 // WaitInitialized waits for async initialize request completion.
@@ -552,7 +545,8 @@ func (q *Query) readLoop() {
 	if err != nil && !errors.Is(err, context.Canceled) {
 		q.pushErr(err)
 	}
-	_ = q.Close()
+	q.beginClose()
+	go q.finalizeClose()
 }
 
 func (q *Query) cancelIncomingControlRequest(requestID string) {
@@ -747,6 +741,38 @@ func (q *Query) pushErr(err error) {
 	case q.errCh <- err:
 	default:
 	}
+}
+
+func (q *Query) beginClose() {
+	q.closeOnce.Do(func() {
+		close(q.done)
+
+		q.pendingMu.Lock()
+		for id, ch := range q.pending {
+			close(ch)
+			delete(q.pending, id)
+		}
+		q.pendingMu.Unlock()
+
+		q.incomingCancelMu.Lock()
+		for id, cancel := range q.incomingCancel {
+			cancel()
+			delete(q.incomingCancel, id)
+		}
+		q.incomingCancelMu.Unlock()
+
+		q.closeErrMu.Lock()
+		q.closeErr = q.transport.close()
+		q.closeErrMu.Unlock()
+	})
+}
+
+func (q *Query) finalizeClose() {
+	q.finalizeOnce.Do(func() {
+		q.workers.Wait()
+		close(q.msgCh)
+		close(q.errCh)
+	})
 }
 
 // ParseAssistantMessage decodes an "assistant" SDKMessage.
