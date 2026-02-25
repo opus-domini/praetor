@@ -6,20 +6,21 @@
 
 # Praetor Documentation
 
-`praetor` is a Go CLI that orchestrates multiple AI providers through one command surface.
+`praetor` is a Go CLI that orchestrates AI agent providers through a single execution surface. It drives Claude Code and Codex as subprocess agents, coordinated by an executor/reviewer pipeline with git safety, cost tracking, and crash recovery.
 
-## Read this first
+## Core documentation
 
-- [Architecture](architecture.md)
-- [Loop orchestration](loop.md)
-- [Providers overview](providers/README.md)
+- [Architecture](architecture.md) — package boundaries, execution flow, and design rationale
+- [Loop orchestration](loop.md) — plan format, runtime model, safety mechanisms, and CLI reference
+- [Providers overview](providers/README.md) — how providers are abstracted and integrated
 
-## Provider docs
+## Provider documentation
 
-- [Claude provider](providers/claude.md)
-- [Codex provider](providers/codex.md)
+- [Claude provider](providers/claude.md) — Claude Code SDK port, stream-json transport, session control
+- [Codex provider](providers/codex.md) — Codex SDK port, JSONL transport, thread model
 
 ## Documentation standard
 
 - All technical documentation is written in English.
-- `docs/` is the canonical source for project documentation.
+- `docs/` is the canonical source for project documentation, served with docsify.
+- Provider-specific `README.md` files inside `internal/` are minimal pointers to canonical docs here.

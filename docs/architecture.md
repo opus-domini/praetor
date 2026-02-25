@@ -1,53 +1,118 @@
 # Architecture
 
-## Context
+## Overview
 
 `praetor` is a CLI-first orchestrator with two complementary execution modes:
 
-- Single prompt dispatch (`praetor run`)
-- Plan-driven loop orchestration (`praetor loop run`)
+- **Single-prompt dispatch** (`praetor run`) — send one prompt to one provider, get the response.
+- **Plan-driven loop** (`praetor loop run`) — execute a dependency-ordered sequence of tasks through an executor/reviewer pipeline inside tmux sessions.
 
-The current providers are:
-
-- Claude
-- Codex
+Current providers: **Claude Code** and **Codex**.
 
 ## Package boundaries
 
-- `cmd/praetor`: command-line parsing, runtime wiring, and process exit behavior.
-- `internal/loop`: immutable plan model, mutable state store, dependency graph evaluation, and loop runner pipeline.
-- `internal/orchestrator`: provider contract (`Provider`), request/response types, provider registry, and dispatch engine.
-- `internal/providers/claude`: Claude SDK port and orchestrator adapter.
-- `internal/providers/codex`: Codex SDK port and orchestrator adapter.
-- `docs/plans`: plan files for loop execution.
-- `docs/schemas/loop-plan.schema.json`: JSON schema reference for plan authoring.
-- `docs/providers`: canonical provider documentation.
+```text
+cmd/praetor/                      CLI entrypoint (main.go)
+internal/
+├── cli/                          Cobra command wiring and flag parsing
+│   ├── root.go                   Root command, provider registry
+│   ├── run.go                    praetor run (single-prompt)
+│   ├── loop.go                   praetor loop (parent command)
+│   ├── loop_run.go               praetor loop run
+│   └── loop_plan.go              praetor loop plan {new,status,list,reset}
+├── loop/                         Plan-driven orchestration runtime
+│   ├── types.go                  Plan, Task, State, AgentRuntime interface
+│   ├── plan.go                   Plan loading, validation, checksum, scaffolding
+│   ├── store.go                  Mutable state, locks, retries, feedback, snapshots, costs, checkpoints
+│   ├── runner.go                 Main loop: dependency resolution, executor/reviewer pipeline
+│   ├── agents.go                 SDKAgentRuntime (in-process Claude/Codex SDK calls)
+│   ├── agents_tmux.go            TMUXAgentRuntime (tmux-window subprocess execution)
+│   ├── prompts.go                Executor/reviewer prompt builders, git diff capture
+│   ├── output.go                 Colored terminal renderer
+│   └── state.go                  Dependency graph evaluation, blocked task detection
+├── orchestrator/                 Provider contract and dispatch engine
+│   ├── orchestrator.go           Engine, Registry, Request, Response types
+│   └── provider.go               Provider interface definition
+└── providers/
+    ├── claude/                   Claude Code SDK port
+    │   ├── types.go              SDKMessage, ResultMessage, AssistantMessage, etc.
+    │   ├── options.go            Options, PermissionUpdate, SandboxSettings, hooks
+    │   ├── query.go              Query lifecycle, message handling, parse helpers
+    │   ├── prompt.go             One-shot Prompt() helper
+    │   ├── sessions.go           ListSessions for persisted local sessions
+    │   ├── transport_process.go  Subprocess transport (stdin/stdout stream-json)
+    │   └── adapter.go            Orchestrator adapter (Provider interface)
+    └── codex/                    Codex SDK port
+        ├── types.go              Stream items, thread options, turn results
+        ├── codex.go              Client, thread management, turn execution
+        └── adapter.go            Orchestrator adapter (Provider interface)
+```
+
+### Package responsibilities
+
+| Package | Responsibility |
+|---------|---------------|
+| `cmd/praetor` | Process entrypoint. Calls `cli.NewRootCmd().Execute()`. |
+| `internal/cli` | Cobra command tree, flag parsing, provider construction. No business logic. |
+| `internal/loop` | Immutable plan model, mutable state store, dependency graph, runner pipeline, agent runtimes, prompt construction, terminal output. |
+| `internal/orchestrator` | Provider contract (`Provider` interface), request/response types, provider registry, dispatch engine. |
+| `internal/providers/claude` | Full Go port of `@anthropic-ai/claude-agent-sdk`. Communicates with the `claude` CLI process over `stream-json`. |
+| `internal/providers/codex` | Full Go port of `@openai/codex-sdk`. Communicates with the `codex` CLI process over JSONL. |
 
 ## Execution flow
 
-Single prompt mode:
+### Single-prompt mode (`praetor run`)
 
-1. CLI parses provider and prompt.
-2. CLI builds one provider implementation.
+1. CLI parses `--provider` and `--prompt` (or reads stdin).
+2. `buildProvider()` constructs the selected provider implementation.
 3. Provider is registered in the orchestration registry.
-4. Orchestration engine validates input and dispatches request.
-5. Provider adapter translates between orchestrator contract and provider-specific SDK surface.
+4. Orchestration engine validates the request and dispatches to the provider.
+5. Provider adapter translates between the orchestrator contract and the provider-specific SDK surface.
+6. Response is printed to stdout.
 
-Loop mode:
+### Plan-driven loop (`praetor loop run`)
 
-1. CLI loads and validates a plan JSON file.
-2. State store initializes or merges mutable state for the plan.
-3. Runner selects the next runnable task based on dependency completion.
-4. Executor agent runs task prompt and emits `RESULT: PASS|FAIL|UNKNOWN`.
-5. Reviewer agent decides `PASS|reason` or `FAIL|reason`.
-6. Runner marks task as done on pass, or increments retry and stores feedback on fail.
-7. Loop exits when all tasks are done, blocked by dependencies, or retry/iteration limits are reached.
-8. Every agent invocation executes inside a tmux session window for live operational visibility.
+1. CLI loads and validates the plan JSON file (immutable input).
+2. Runner acquires a PID-based lock to prevent concurrent runs of the same plan.
+3. State store initializes or merges mutable state, detecting plan changes via SHA-256 checksum.
+4. Pre-flight validation checks that required binaries (`claude`, `codex`, `tmux`) are in PATH.
+5. Runner selects the next runnable task based on dependency completion.
+6. **Git safety**: `HEAD` commit hash is saved as a snapshot before each task.
+7. **Executor phase**: agent runs the task prompt in a tmux window, producing output and cost data.
+8. **Post-task hook** (optional): custom script runs for validation (linters, tests). Failure triggers retry.
+9. **Reviewer phase**: independent agent evaluates executor output + git diff, returns `PASS|reason` or `FAIL|reason`.
+10. On pass: task is marked done, state is persisted, git snapshot is discarded.
+11. On fail: retry counter increments, feedback is stored, git is rolled back to snapshot.
+12. **Cost tracking**: per-invocation costs are recorded in a TSV ledger.
+13. **Checkpoint audit**: every state transition is logged to `checkpoints/history.tsv`.
+14. Loop exits when all tasks complete, dependencies block progress, or retry/iteration limits are reached.
+15. Summary reports total tasks done, rejected, iterations, accumulated cost, and duration.
 
-## Why this layout
+## Agent runtimes
 
-- Keeps command handling separate from orchestration logic.
-- Prevents provider internals from leaking outside the module (`internal/`).
-- Enables adding providers incrementally without changing CLI core behavior.
-- Preserves a clear migration path toward multi-provider, parallel scheduling, and richer execution gates.
-- Keeps implementation folders lightweight while centralizing narrative docs in one place.
+The `AgentRuntime` interface decouples task execution from the transport mechanism:
+
+```go
+type AgentRuntime interface {
+    Run(ctx context.Context, req AgentRequest) (AgentResult, error)
+}
+```
+
+Two implementations:
+
+| Runtime | How it works |
+|---------|-------------|
+| `TMUXAgentRuntime` | Creates a wrapper shell script, launches it in a tmux window, uses `tmux wait-for` to block until completion. Captures stdout/stderr/exit code as files. Extracts cost from Codex JSON output. Default runtime for `loop run`. |
+| `SDKAgentRuntime` | Calls the Claude/Codex Go SDK ports directly in-process. Used by `praetor run` (single-prompt mode). |
+
+## Dependencies
+
+One external dependency: [`cobra`](https://github.com/spf13/cobra) for CLI parsing. Everything else is Go standard library.
+
+## Design rationale
+
+- **Packages are small and focused.** Each package owns one concept and exposes a minimal surface.
+- **Explicit dependencies over global state.** No `init()` functions, no package-level mutable state.
+- **Provider isolation.** Provider-specific logic never leaks outside `internal/providers/`. The orchestrator and loop packages interact only through the `Provider` and `AgentRuntime` interfaces.
+- **Immutable plans, mutable state.** Plan files are never modified at runtime. All mutable data lives under `~/.praetor/projects/<project-hash>/` and can be safely deleted or reset.
+- **Observable execution.** Every agent step runs in a visible tmux window. Prompts, outputs, and scripts are persisted as files for debugging.
