@@ -11,6 +11,7 @@
 ## Read this first
 
 - [Architecture](architecture.md)
+- [Loop orchestration](loop.md)
 - [Providers overview](providers/README.md)
 
 ## Provider docs

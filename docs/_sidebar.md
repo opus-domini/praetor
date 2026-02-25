@@ -1,5 +1,6 @@
 - [Home](/)
 - [Architecture](architecture.md)
+- [Loop Orchestration](loop.md)
 - Providers
   - [Overview](providers/README.md)
   - [Claude](providers/claude.md)

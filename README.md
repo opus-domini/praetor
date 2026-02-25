@@ -18,6 +18,7 @@ The initial scope is provider orchestration for:
 ├── cmd/
 │   └── praetor/                 # CLI entrypoint
 ├── internal/
+│   ├── loop/                    # Plan/state orchestration runtime
 │   ├── orchestrator/            # Provider contracts and dispatch engine
 │   └── providers/
 │       ├── claude/              # Claude SDK port + adapter
@@ -46,6 +47,27 @@ List supported providers:
 
 ```bash
 ./build/praetor providers
+```
+
+Create a new loop plan:
+
+```bash
+./build/praetor loop plan new feature-slug
+```
+
+Run a loop plan:
+
+```bash
+./build/praetor loop run --plan docs/plans/PLAN-PRAETOR-2026-02-25-feature-slug.json
+```
+
+Default loop runtime state is isolated per git project under `~/.praetor/projects/<project-hash>/`.
+Loop execution requires `tmux` and runs agent steps inside tmux windows.
+
+Check plan status:
+
+```bash
+./build/praetor loop plan status --plan docs/plans/PLAN-PRAETOR-2026-02-25-feature-slug.json
 ```
 
 Run with Codex:
@@ -88,3 +110,5 @@ make ci
 - Prefer explicit dependencies over global state.
 - Keep provider-specific logic isolated behind a common interface.
 - Build a simple core that can evolve without breaking package boundaries.
+- Keep plan files immutable and execution state mutable and isolated under `~/.praetor/projects/<project-hash>`.
+- Keep agent execution observable in tmux sessions for real-time monitoring.
