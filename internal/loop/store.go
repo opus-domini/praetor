@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -42,10 +43,12 @@ func NewStore(root string) *Store {
 func (s *Store) Init() error {
 	dirs := []string{
 		s.CheckpointsDir(),
+		s.CostsDir(),
 		s.FeedbackDir(),
 		s.LocksDir(),
 		s.LogsDir(),
 		s.RetriesDir(),
+		s.SnapshotsDir(),
 		s.StateDir(),
 	}
 	for _, dir := range dirs {
@@ -74,6 +77,14 @@ func (s *Store) LogsDir() string {
 
 func (s *Store) RetriesDir() string {
 	return filepath.Join(s.Root, "retries")
+}
+
+func (s *Store) SnapshotsDir() string {
+	return filepath.Join(s.Root, "snapshots")
+}
+
+func (s *Store) CostsDir() string {
+	return filepath.Join(s.Root, "costs")
 }
 
 func (s *Store) StateDir() string {
@@ -460,4 +471,147 @@ func (s *Store) ListStates() ([]string, error) {
 		return nil, nil
 	}
 	return matches, nil
+}
+
+// SaveGitSnapshot records the current HEAD commit for a run.
+func (s *Store) SaveGitSnapshot(runID, workdir string) error {
+	cmd := exec.Command("git", "-C", workdir, "rev-parse", "HEAD")
+	out, err := cmd.Output()
+	if err != nil {
+		return fmt.Errorf("git rev-parse HEAD: %w", err)
+	}
+	sha := strings.TrimSpace(string(out))
+	if sha == "" {
+		return errors.New("git rev-parse HEAD returned empty")
+	}
+	path := filepath.Join(s.SnapshotsDir(), runID+".sha")
+	if err := os.WriteFile(path, []byte(sha+"\n"), 0o644); err != nil {
+		return fmt.Errorf("write git snapshot: %w", err)
+	}
+	return nil
+}
+
+// RollbackGitSnapshot resets the working tree to the saved snapshot.
+func (s *Store) RollbackGitSnapshot(runID, workdir string) error {
+	path := filepath.Join(s.SnapshotsDir(), runID+".sha")
+	data, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("read git snapshot: %w", err)
+	}
+	sha := strings.TrimSpace(string(data))
+	if sha == "" {
+		return nil
+	}
+
+	resetCmd := exec.Command("git", "-C", workdir, "reset", "--hard", sha)
+	if out, err := resetCmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("git reset --hard %s: %w: %s", sha, err, strings.TrimSpace(string(out)))
+	}
+	cleanCmd := exec.Command("git", "-C", workdir, "clean", "-fd")
+	if out, err := cleanCmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("git clean -fd: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+
+	_ = os.Remove(path)
+	return nil
+}
+
+// DiscardGitSnapshot removes a snapshot file without rollback.
+func (s *Store) DiscardGitSnapshot(runID string) error {
+	path := filepath.Join(s.SnapshotsDir(), runID+".sha")
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("discard git snapshot: %w", err)
+	}
+	return nil
+}
+
+// CostEntry records one agent invocation's metrics.
+type CostEntry struct {
+	Timestamp string
+	RunID     string
+	TaskID    string
+	Agent     string
+	Role      string
+	DurationS float64
+	Status    string
+	CostUSD   float64
+}
+
+// WriteTaskMetrics appends one cost entry to the tracking ledger.
+func (s *Store) WriteTaskMetrics(entry CostEntry) error {
+	path := filepath.Join(s.CostsDir(), "tracking.tsv")
+
+	needsHeader := false
+	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
+		needsHeader = true
+	}
+
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return fmt.Errorf("open cost tracking file: %w", err)
+	}
+	defer func() { _ = f.Close() }()
+
+	if needsHeader {
+		if _, err := fmt.Fprintf(f, "timestamp\trun_id\ttask_id\tagent\trole\tduration_s\tstatus\tcost_usd\n"); err != nil {
+			return fmt.Errorf("write cost header: %w", err)
+		}
+	}
+
+	if _, err := fmt.Fprintf(f, "%s\t%s\t%s\t%s\t%s\t%.2f\t%s\t%.6f\n",
+		entry.Timestamp, entry.RunID, entry.TaskID, entry.Agent, entry.Role,
+		entry.DurationS, entry.Status, entry.CostUSD); err != nil {
+		return fmt.Errorf("write cost entry: %w", err)
+	}
+	return nil
+}
+
+// CheckpointEntry records one state transition in the audit log.
+type CheckpointEntry struct {
+	Timestamp string
+	Status    string
+	TaskID    string
+	Signature string
+	RunID     string
+	Message   string
+}
+
+// WriteCheckpoint appends to the history log and overwrites the current checkpoint.
+func (s *Store) WriteCheckpoint(planFile string, entry CheckpointEntry) error {
+	historyPath := filepath.Join(s.CheckpointsDir(), "history.tsv")
+
+	needsHeader := false
+	if _, err := os.Stat(historyPath); errors.Is(err, os.ErrNotExist) {
+		needsHeader = true
+	}
+
+	f, err := os.OpenFile(historyPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return fmt.Errorf("open checkpoint history: %w", err)
+	}
+	defer func() { _ = f.Close() }()
+
+	if needsHeader {
+		if _, err := fmt.Fprintf(f, "timestamp\tstatus\ttask_id\tsignature\trun_id\tmessage\n"); err != nil {
+			return fmt.Errorf("write checkpoint header: %w", err)
+		}
+	}
+
+	if _, err := fmt.Fprintf(f, "%s\t%s\t%s\t%s\t%s\t%s\n",
+		entry.Timestamp, entry.Status, entry.TaskID, entry.Signature,
+		entry.RunID, entry.Message); err != nil {
+		return fmt.Errorf("write checkpoint entry: %w", err)
+	}
+
+	currentPath := filepath.Join(s.CheckpointsDir(), s.PlanBaseName(planFile)+".state")
+	content := fmt.Sprintf("timestamp=%s\nstatus=%s\ntask_id=%s\nsignature=%s\nrun_id=%s\nmessage=%s\n",
+		entry.Timestamp, entry.Status, entry.TaskID, entry.Signature,
+		entry.RunID, entry.Message)
+	if err := os.WriteFile(currentPath, []byte(content), 0o644); err != nil {
+		return fmt.Errorf("write current checkpoint: %w", err)
+	}
+	return nil
 }

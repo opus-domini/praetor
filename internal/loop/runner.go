@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 )
@@ -47,6 +49,12 @@ func (r *Runner) Run(ctx context.Context, out io.Writer, planFile string, option
 		if err := tmuxRuntime.EnsureSession(); err != nil {
 			return RunnerStats{}, err
 		}
+		defer tmuxRuntime.Cleanup()
+	}
+
+	// Pre-flight binary validation (Step 15).
+	if err := validateRequiredBinaries(normalized, plan); err != nil {
+		return RunnerStats{}, err
 	}
 
 	store := NewStore(normalized.StateRoot)
@@ -90,6 +98,9 @@ func (r *Runner) Run(ctx context.Context, out io.Writer, planFile string, option
 		render.KV("tmux:", tmuxRuntime.SessionName())
 	}
 
+	var totalCost float64
+	loopStart := time.Now()
+
 	for {
 		if normalized.MaxIterations > 0 && stats.Iterations >= normalized.MaxIterations {
 			render.Warn(fmt.Sprintf("Stopped: max iterations reached (%d)", normalized.MaxIterations))
@@ -105,8 +116,24 @@ func (r *Runner) Run(ctx context.Context, out io.Writer, planFile string, option
 
 			report := BlockedTasksReport(state, 5)
 			if len(report) == 0 {
+				_ = store.WriteCheckpoint(planFile, CheckpointEntry{
+					Timestamp: time.Now().UTC().Format(time.RFC3339),
+					Status:    "blocked",
+					TaskID:    "",
+					Signature: "",
+					RunID:     "",
+					Message:   "plan is blocked: open tasks exist but none are runnable",
+				})
 				return stats, errors.New("plan is blocked: open tasks exist but none are runnable")
 			}
+			_ = store.WriteCheckpoint(planFile, CheckpointEntry{
+				Timestamp: time.Now().UTC().Format(time.RFC3339),
+				Status:    "blocked",
+				TaskID:    "",
+				Signature: "",
+				RunID:     "",
+				Message:   fmt.Sprintf("plan is blocked by dependencies: %s", strings.Join(report, ", ")),
+			})
 			return stats, fmt.Errorf("plan is blocked by dependencies:\n- %s", strings.Join(report, "\n- "))
 		}
 
@@ -138,6 +165,14 @@ func (r *Runner) Run(ctx context.Context, out io.Writer, planFile string, option
 		if err != nil {
 			return stats, err
 		}
+		runID := filepath.Base(runDir)
+
+		// Git safety: save snapshot before executor (Step 9).
+		if normalized.GitSafety {
+			if err := store.SaveGitSnapshot(runID, normalized.Workdir); err != nil {
+				render.Warn(fmt.Sprintf("git snapshot failed: %v", err))
+			}
+		}
 
 		taskLabel := task.ID
 		if strings.TrimSpace(taskLabel) == "" {
@@ -151,7 +186,7 @@ func (r *Runner) Run(ctx context.Context, out io.Writer, planFile string, option
 		_ = writeText(filepath.Join(runDir, "executor.system.txt"), executorSystemPrompt)
 		_ = writeText(filepath.Join(runDir, "executor.prompt.txt"), executorTaskPrompt)
 
-		executorOutput, execErr := runtime.Run(ctx, AgentRequest{
+		execResult, execErr := runtime.Run(ctx, AgentRequest{
 			Role:         "execute",
 			Agent:        executor,
 			Prompt:       executorTaskPrompt,
@@ -165,7 +200,11 @@ func (r *Runner) Run(ctx context.Context, out io.Writer, planFile string, option
 			ClaudeBin:    normalized.ClaudeBin,
 			Verbose:      normalized.Verbose,
 		})
+		executorOutput := execResult.Output
+		totalCost += execResult.CostUSD
 		_ = writeText(filepath.Join(runDir, "executor.output.txt"), executorOutput)
+
+		render.Phase("executor", string(executor), fmt.Sprintf("attempt %d/%d [%.1fs]", retries+1, normalized.MaxRetries, execResult.DurationS))
 
 		if execErr != nil {
 			stats.TasksRejected++
@@ -174,6 +213,29 @@ func (r *Runner) Run(ctx context.Context, out io.Writer, planFile string, option
 				return stats, incErr
 			}
 			_ = store.WriteFeedback(signature, fmt.Sprintf("executor process failed: %v", execErr))
+			if normalized.GitSafety {
+				if rbErr := store.RollbackGitSnapshot(runID, normalized.Workdir); rbErr != nil {
+					render.Warn(fmt.Sprintf("git rollback failed: %v", rbErr))
+				}
+			}
+			_ = store.WriteTaskMetrics(CostEntry{
+				Timestamp: time.Now().UTC().Format(time.RFC3339),
+				RunID:     runID,
+				TaskID:    task.ID,
+				Agent:     string(executor),
+				Role:      "executor",
+				DurationS: execResult.DurationS,
+				Status:    "fail",
+				CostUSD:   execResult.CostUSD,
+			})
+			_ = store.WriteCheckpoint(planFile, CheckpointEntry{
+				Timestamp: time.Now().UTC().Format(time.RFC3339),
+				Status:    "executor_crashed",
+				TaskID:    task.ID,
+				Signature: signature,
+				RunID:     runID,
+				Message:   fmt.Sprintf("executor process failed: %v", execErr),
+			})
 			render.Error(fmt.Sprintf("Executor failed: %v (retry %d/%d)", execErr, nextRetry, normalized.MaxRetries))
 			stats.Iterations++
 			continue
@@ -187,20 +249,89 @@ func (r *Runner) Run(ctx context.Context, out io.Writer, planFile string, option
 				return stats, incErr
 			}
 			_ = store.WriteFeedback(signature, "executor self-reported RESULT: FAIL")
+			if normalized.GitSafety {
+				if rbErr := store.RollbackGitSnapshot(runID, normalized.Workdir); rbErr != nil {
+					render.Warn(fmt.Sprintf("git rollback failed: %v", rbErr))
+				}
+			}
+			_ = store.WriteTaskMetrics(CostEntry{
+				Timestamp: time.Now().UTC().Format(time.RFC3339),
+				RunID:     runID,
+				TaskID:    task.ID,
+				Agent:     string(executor),
+				Role:      "executor",
+				DurationS: execResult.DurationS,
+				Status:    "fail",
+				CostUSD:   execResult.CostUSD,
+			})
+			_ = store.WriteCheckpoint(planFile, CheckpointEntry{
+				Timestamp: time.Now().UTC().Format(time.RFC3339),
+				Status:    "executor_self_fail",
+				TaskID:    task.ID,
+				Signature: signature,
+				RunID:     runID,
+				Message:   "executor self-reported RESULT: FAIL",
+			})
 			render.Error(fmt.Sprintf("Executor reported FAIL (retry %d/%d)", nextRetry, normalized.MaxRetries))
 			stats.Iterations++
 			continue
 		}
 
+		// Write executor pass metrics.
+		_ = store.WriteTaskMetrics(CostEntry{
+			Timestamp: time.Now().UTC().Format(time.RFC3339),
+			RunID:     runID,
+			TaskID:    task.ID,
+			Agent:     string(executor),
+			Role:      "executor",
+			DurationS: execResult.DurationS,
+			Status:    "pass",
+			CostUSD:   execResult.CostUSD,
+		})
+
+		// Post-task hook (Step 12).
+		if normalized.PostTaskHook != "" {
+			render.Phase("hook", "post-task", normalized.PostTaskHook)
+			hookPassed, hookFeedback := runPostTaskHook(ctx, normalized.PostTaskHook, normalized.Workdir, runDir)
+			if !hookPassed {
+				stats.TasksRejected++
+				nextRetry, incErr := store.IncrementRetryCount(signature)
+				if incErr != nil {
+					return stats, incErr
+				}
+				_ = store.WriteFeedback(signature, hookFeedback)
+				if normalized.GitSafety {
+					if rbErr := store.RollbackGitSnapshot(runID, normalized.Workdir); rbErr != nil {
+						render.Warn(fmt.Sprintf("git rollback failed: %v", rbErr))
+					}
+				}
+				_ = store.WriteCheckpoint(planFile, CheckpointEntry{
+					Timestamp: time.Now().UTC().Format(time.RFC3339),
+					Status:    "hook_failed",
+					TaskID:    task.ID,
+					Signature: signature,
+					RunID:     runID,
+					Message:   "post-task hook failed",
+				})
+				render.Error(fmt.Sprintf("Post-task hook failed (retry %d/%d)", nextRetry, normalized.MaxRetries))
+				stats.Iterations++
+				continue
+			}
+		}
+
 		decision := ReviewDecision{Pass: true, Reason: "review skipped"}
 		if reviewer != AgentNone {
 			render.Phase("reviewer", string(reviewer), "reviewing task result")
+
+			// Capture git diff for reviewer prompt (Step 11).
+			gitDiff := CaptureGitDiff(normalized.Workdir, 500)
+
 			reviewerSystemPrompt := buildReviewerSystemPrompt()
-			reviewerTaskPrompt := buildReviewerTaskPrompt(planFile, task, executorOutput, normalized.Workdir, plan.Title, progress)
+			reviewerTaskPrompt := buildReviewerTaskPrompt(planFile, task, executorOutput, normalized.Workdir, plan.Title, progress, gitDiff)
 			_ = writeText(filepath.Join(runDir, "reviewer.system.txt"), reviewerSystemPrompt)
 			_ = writeText(filepath.Join(runDir, "reviewer.prompt.txt"), reviewerTaskPrompt)
 
-			reviewerOutput, reviewErr := runtime.Run(ctx, AgentRequest{
+			reviewResult, reviewErr := runtime.Run(ctx, AgentRequest{
 				Role:         "review",
 				Agent:        reviewer,
 				Prompt:       reviewerTaskPrompt,
@@ -214,7 +345,11 @@ func (r *Runner) Run(ctx context.Context, out io.Writer, planFile string, option
 				ClaudeBin:    normalized.ClaudeBin,
 				Verbose:      normalized.Verbose,
 			})
+			reviewerOutput := reviewResult.Output
+			totalCost += reviewResult.CostUSD
 			_ = writeText(filepath.Join(runDir, "reviewer.output.txt"), reviewerOutput)
+
+			render.Phase("reviewer", string(reviewer), fmt.Sprintf("review complete [%.1fs]", reviewResult.DurationS))
 
 			if reviewErr != nil {
 				stats.TasksRejected++
@@ -223,10 +358,45 @@ func (r *Runner) Run(ctx context.Context, out io.Writer, planFile string, option
 					return stats, incErr
 				}
 				_ = store.WriteFeedback(signature, fmt.Sprintf("reviewer process failed: %v", reviewErr))
+				if normalized.GitSafety {
+					if rbErr := store.RollbackGitSnapshot(runID, normalized.Workdir); rbErr != nil {
+						render.Warn(fmt.Sprintf("git rollback failed: %v", rbErr))
+					}
+				}
+				_ = store.WriteTaskMetrics(CostEntry{
+					Timestamp: time.Now().UTC().Format(time.RFC3339),
+					RunID:     runID,
+					TaskID:    task.ID,
+					Agent:     string(reviewer),
+					Role:      "reviewer",
+					DurationS: reviewResult.DurationS,
+					Status:    "fail",
+					CostUSD:   reviewResult.CostUSD,
+				})
+				_ = store.WriteCheckpoint(planFile, CheckpointEntry{
+					Timestamp: time.Now().UTC().Format(time.RFC3339),
+					Status:    "reviewer_crashed",
+					TaskID:    task.ID,
+					Signature: signature,
+					RunID:     runID,
+					Message:   fmt.Sprintf("reviewer process failed: %v", reviewErr),
+				})
 				render.Error(fmt.Sprintf("Reviewer failed: %v (retry %d/%d)", reviewErr, nextRetry, normalized.MaxRetries))
 				stats.Iterations++
 				continue
 			}
+
+			// Write reviewer metrics.
+			_ = store.WriteTaskMetrics(CostEntry{
+				Timestamp: time.Now().UTC().Format(time.RFC3339),
+				RunID:     runID,
+				TaskID:    task.ID,
+				Agent:     string(reviewer),
+				Role:      "reviewer",
+				DurationS: reviewResult.DurationS,
+				Status:    "pass",
+				CostUSD:   reviewResult.CostUSD,
+			})
 
 			decision = ParseReviewDecision(reviewerOutput)
 		}
@@ -238,6 +408,19 @@ func (r *Runner) Run(ctx context.Context, out io.Writer, planFile string, option
 				return stats, incErr
 			}
 			_ = store.WriteFeedback(signature, decision.Reason)
+			if normalized.GitSafety {
+				if rbErr := store.RollbackGitSnapshot(runID, normalized.Workdir); rbErr != nil {
+					render.Warn(fmt.Sprintf("git rollback failed: %v", rbErr))
+				}
+			}
+			_ = store.WriteCheckpoint(planFile, CheckpointEntry{
+				Timestamp: time.Now().UTC().Format(time.RFC3339),
+				Status:    "review_rejected",
+				TaskID:    task.ID,
+				Signature: signature,
+				RunID:     runID,
+				Message:   decision.Reason,
+			})
 			render.Warn(fmt.Sprintf("Review rejected: %s (retry %d/%d)", decision.Reason, nextRetry, normalized.MaxRetries))
 			stats.Iterations++
 			continue
@@ -254,12 +437,28 @@ func (r *Runner) Run(ctx context.Context, out io.Writer, planFile string, option
 			return stats, err
 		}
 
+		// Git safety: discard snapshot on success (Step 9).
+		if normalized.GitSafety {
+			_ = store.DiscardGitSnapshot(runID)
+		}
+
+		_ = store.WriteCheckpoint(planFile, CheckpointEntry{
+			Timestamp: time.Now().UTC().Format(time.RFC3339),
+			Status:    "completed",
+			TaskID:    task.ID,
+			Signature: signature,
+			RunID:     runID,
+			Message:   fmt.Sprintf("task completed: %s", task.Title),
+		})
+
 		stats.TasksDone++
 		stats.Iterations++
 		render.Success(fmt.Sprintf("Completed: %s", taskLabel))
 	}
 
-	render.Summary(stats.TasksDone, stats.TasksRejected, stats.Iterations)
+	stats.TotalCostUSD = totalCost
+	stats.TotalDuration = time.Since(loopStart)
+	render.Summary(stats.TasksDone, stats.TasksRejected, stats.Iterations, stats.TotalCostUSD, stats.TotalDuration)
 	return stats, nil
 }
 
@@ -318,6 +517,79 @@ func normalizeRunnerOptions(options RunnerOptions) (RunnerOptions, error) {
 	}
 
 	return normalized, nil
+}
+
+func validateRequiredBinaries(opts RunnerOptions, plan Plan) error {
+	needed := map[string]string{}
+
+	if opts.DefaultExecutor == AgentCodex {
+		needed[opts.CodexBin] = "codex"
+	}
+	if opts.DefaultExecutor == AgentClaude {
+		needed[opts.ClaudeBin] = "claude"
+	}
+	if opts.DefaultReviewer == AgentCodex {
+		needed[opts.CodexBin] = "codex"
+	}
+	if opts.DefaultReviewer == AgentClaude {
+		needed[opts.ClaudeBin] = "claude"
+	}
+
+	for _, task := range plan.Tasks {
+		agent := normalizeAgent(task.Executor)
+		if agent == AgentCodex {
+			needed[opts.CodexBin] = "codex"
+		}
+		if agent == AgentClaude {
+			needed[opts.ClaudeBin] = "claude"
+		}
+		reviewer := normalizeAgent(task.Reviewer)
+		if reviewer == AgentCodex {
+			needed[opts.CodexBin] = "codex"
+		}
+		if reviewer == AgentClaude {
+			needed[opts.ClaudeBin] = "claude"
+		}
+	}
+
+	var missing []string
+	for bin, label := range needed {
+		if _, err := exec.LookPath(bin); err != nil {
+			missing = append(missing, fmt.Sprintf("%s (%s)", label, bin))
+		}
+	}
+	if len(missing) > 0 {
+		sort.Strings(missing)
+		return fmt.Errorf("required binaries not found: %s", strings.Join(missing, ", "))
+	}
+	return nil
+}
+
+func runPostTaskHook(ctx context.Context, hookPath, workdir, runDir string) (bool, string) {
+	cmd := exec.CommandContext(ctx, hookPath)
+	cmd.Dir = workdir
+
+	stdoutFile := filepath.Join(runDir, "post-hook.stdout")
+	stderrFile := filepath.Join(runDir, "post-hook.stderr")
+
+	stdout, err := cmd.Output()
+	_ = os.WriteFile(stdoutFile, stdout, 0o644)
+
+	if err != nil {
+		output := strings.TrimSpace(string(stdout))
+		lines := strings.Split(output, "\n")
+		if len(lines) > 50 {
+			lines = lines[len(lines)-50:]
+		}
+		feedback := "post-task hook failed"
+		if len(lines) > 0 && strings.TrimSpace(strings.Join(lines, "")) != "" {
+			feedback = strings.Join(lines, "\n")
+		}
+		_ = os.WriteFile(stderrFile, []byte(err.Error()), 0o644)
+		return false, feedback
+	}
+
+	return true, ""
 }
 
 func resolveExecutor(task StateTask, defaultExecutor Agent) (Agent, error) {

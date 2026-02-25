@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/opus-domini/praetor/internal/providers/claude"
 	"github.com/opus-domini/praetor/internal/providers/codex"
@@ -14,14 +15,24 @@ import (
 type SDKAgentRuntime struct{}
 
 // Run executes one role prompt on one agent runtime.
-func (r SDKAgentRuntime) Run(ctx context.Context, req AgentRequest) (string, error) {
+func (r SDKAgentRuntime) Run(ctx context.Context, req AgentRequest) (AgentResult, error) {
+	start := time.Now()
 	switch normalizeAgent(req.Agent) {
 	case AgentCodex:
-		return runCodex(ctx, req)
+		output, err := runCodex(ctx, req)
+		return AgentResult{
+			Output:    output,
+			DurationS: time.Since(start).Seconds(),
+		}, err
 	case AgentClaude:
-		return runClaude(ctx, req)
+		output, costUSD, err := runClaude(ctx, req)
+		return AgentResult{
+			Output:    output,
+			CostUSD:   costUSD,
+			DurationS: time.Since(start).Seconds(),
+		}, err
 	default:
-		return "", fmt.Errorf("unsupported agent %q", req.Agent)
+		return AgentResult{}, fmt.Errorf("unsupported agent %q", req.Agent)
 	}
 }
 
@@ -58,7 +69,7 @@ func runCodex(ctx context.Context, req AgentRequest) (string, error) {
 	return strings.TrimSpace(turn.FinalResponse), nil
 }
 
-func runClaude(ctx context.Context, req AgentRequest) (string, error) {
+func runClaude(ctx context.Context, req AgentRequest) (string, float64, error) {
 	persistSession := false
 	options := claude.Options{
 		Command:                         strings.TrimSpace(req.ClaudeBin),
@@ -78,24 +89,24 @@ func runClaude(ctx context.Context, req AgentRequest) (string, error) {
 
 	message, err := claude.Prompt(ctx, strings.TrimSpace(req.Prompt), options)
 	if err != nil {
-		return "", err
+		return "", 0, err
 	}
 
-	decoded, err := decodeClaudeResponse(message)
+	decoded, costUSD, err := decodeClaudeResponse(message)
 	if err != nil {
-		return "", err
+		return "", 0, err
 	}
-	return decoded, nil
+	return decoded, costUSD, nil
 }
 
-func decodeClaudeResponse(message claude.SDKMessage) (string, error) {
+func decodeClaudeResponse(message claude.SDKMessage) (string, float64, error) {
 	result, err := claude.ParseResultMessage(message)
 	if err != nil {
 		trimmed := strings.TrimSpace(string(message.Raw))
 		if trimmed == "" {
-			return "", nil
+			return "", 0, nil
 		}
-		return trimmed, nil
+		return trimmed, 0, nil
 	}
 
 	if result.IsError {
@@ -103,11 +114,11 @@ func decodeClaudeResponse(message claude.SDKMessage) (string, error) {
 		if reason == "" {
 			reason = "claude returned an error result"
 		}
-		return "", errors.New(reason)
+		return "", 0, errors.New(reason)
 	}
 
 	if trimmed := strings.TrimSpace(result.Result); trimmed != "" {
-		return trimmed, nil
+		return trimmed, result.TotalCostUSD, nil
 	}
-	return strings.TrimSpace(string(message.Raw)), nil
+	return strings.TrimSpace(string(message.Raw)), result.TotalCostUSD, nil
 }

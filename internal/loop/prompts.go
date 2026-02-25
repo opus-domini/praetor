@@ -2,6 +2,7 @@ package loop
 
 import (
 	"fmt"
+	"os/exec"
 	"strings"
 )
 
@@ -27,8 +28,12 @@ func buildExecutorTaskPrompt(planFile string, taskIndex int, task StateTask, pre
 	var b strings.Builder
 
 	if previousFeedback != "" && retryCount > 0 {
-		fmt.Fprintf(&b, "RETRY CONTEXT (attempt %d)\n", retryCount+1)
-		fmt.Fprintf(&b, "%s\n\n", previousFeedback)
+		fmt.Fprintf(&b, "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n")
+		fmt.Fprintf(&b, "!! RETRY — attempt %d\n", retryCount+1)
+		fmt.Fprintf(&b, "!! Your previous attempt was REJECTED.\n")
+		fmt.Fprintf(&b, "!! Read the feedback below carefully and fix ALL issues.\n")
+		fmt.Fprintf(&b, "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n\n")
+		fmt.Fprintf(&b, "PREVIOUS FEEDBACK:\n%s\n\n", previousFeedback)
 	}
 
 	fmt.Fprintf(&b, "TASK\n")
@@ -73,7 +78,7 @@ Review principles:
 - Prefer concise, actionable feedback.`)
 }
 
-func buildReviewerTaskPrompt(planFile string, task StateTask, executorOutput, workdir, planTitle, progress string) string {
+func buildReviewerTaskPrompt(planFile string, task StateTask, executorOutput, workdir, planTitle, progress, gitDiff string) string {
 	var b strings.Builder
 
 	fmt.Fprintf(&b, "TASK\n")
@@ -100,7 +105,55 @@ func buildReviewerTaskPrompt(planFile string, task StateTask, executorOutput, wo
 		fmt.Fprintf(&b, "\nACCEPTANCE CRITERIA\n%s\n", task.Criteria)
 	}
 
-	fmt.Fprintf(&b, "\nEXECUTOR OUTPUT\n%s\n", strings.TrimSpace(executorOutput))
+	fmt.Fprintf(&b, "\nEXECUTOR OUTPUT (last 300 lines)\n%s\n", truncateOutput(executorOutput, 300))
 
+	if strings.TrimSpace(gitDiff) != "" {
+		fmt.Fprintf(&b, "\nGIT DIFF\n%s\n", strings.TrimSpace(gitDiff))
+	}
+
+	return strings.TrimSpace(b.String())
+}
+
+// truncateOutput keeps only the last maxLines lines of output.
+func truncateOutput(output string, maxLines int) string {
+	output = strings.TrimSpace(output)
+	if output == "" || maxLines <= 0 {
+		return output
+	}
+	lines := strings.Split(output, "\n")
+	if len(lines) <= maxLines {
+		return output
+	}
+	return strings.Join(lines[len(lines)-maxLines:], "\n")
+}
+
+// CaptureGitDiff runs git diff in the given directory and returns the output
+// truncated to maxLines. Returns empty string on any error.
+func CaptureGitDiff(workdir string, maxLines int) string {
+	statCmd := exec.Command("git", "-C", workdir, "diff", "--stat")
+	statOut, err := statCmd.Output()
+	if err != nil {
+		return ""
+	}
+
+	diffCmd := exec.Command("git", "-C", workdir, "diff")
+	diffOut, err := diffCmd.Output()
+	if err != nil {
+		return strings.TrimSpace(string(statOut))
+	}
+
+	stat := strings.TrimSpace(string(statOut))
+	diff := truncateOutput(strings.TrimSpace(string(diffOut)), maxLines)
+	if stat == "" && diff == "" {
+		return ""
+	}
+
+	var b strings.Builder
+	if stat != "" {
+		fmt.Fprintf(&b, "%s\n\n", stat)
+	}
+	if diff != "" {
+		b.WriteString(diff)
+	}
 	return strings.TrimSpace(b.String())
 }

@@ -122,8 +122,12 @@ func buildCLIArgs(opts Options) ([]string, error) {
 	if len(opts.Betas) > 0 {
 		args = append(args, "--betas", strings.Join(opts.Betas, ","))
 	}
-	if len(opts.JSONSchema) > 0 {
-		args = append(args, "--json-schema", string(opts.JSONSchema))
+	jsonSchema := opts.JSONSchema
+	if opts.OutputFormat != nil && len(opts.OutputFormat.Schema) > 0 {
+		jsonSchema = opts.OutputFormat.Schema
+	}
+	if len(jsonSchema) > 0 {
+		args = append(args, "--json-schema", string(jsonSchema))
 	}
 	if opts.DebugFile != "" {
 		args = append(args, "--debug-file", opts.DebugFile)
@@ -210,7 +214,7 @@ func buildCLIArgs(opts Options) ([]string, error) {
 		}
 		args = append(args, "--add-dir", dir)
 	}
-	if len(opts.Sandbox) > 0 {
+	if opts.Sandbox != nil {
 		settingsObj := map[string]any{"sandbox": opts.Sandbox}
 		j, err := json.Marshal(settingsObj)
 		if err != nil {

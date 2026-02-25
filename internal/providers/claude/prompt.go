@@ -1,6 +1,9 @@
 package claude
 
-import "context"
+import (
+	"context"
+	"fmt"
+)
 
 // Prompt is a one-shot helper that sends one user prompt and waits for result.
 func Prompt(ctx context.Context, prompt string, opts Options) (SDKMessage, error) {
@@ -12,6 +15,9 @@ func Prompt(ctx context.Context, prompt string, opts Options) (SDKMessage, error
 		_ = q.Close()
 	}()
 
+	if err := q.WaitInitialized(ctx); err != nil {
+		return SDKMessage{}, fmt.Errorf("initialization failed: %w", err)
+	}
 	if err := q.SendUserText(prompt); err != nil {
 		return SDKMessage{}, err
 	}

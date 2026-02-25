@@ -71,10 +71,28 @@ type ThreadError struct {
 	Message string `json:"message"`
 }
 
+// PatchApplyStatus describes the result of a file change patch.
+type PatchApplyStatus string
+
+const (
+	PatchApplyStatusCompleted PatchApplyStatus = "completed"
+	PatchApplyStatusFailed    PatchApplyStatus = "failed"
+)
+
+// McpToolCallStatus describes the state of an MCP tool call.
+type McpToolCallStatus string
+
+const (
+	McpToolCallStatusInProgress McpToolCallStatus = "in_progress"
+	McpToolCallStatusCompleted  McpToolCallStatus = "completed"
+	McpToolCallStatusFailed     McpToolCallStatus = "failed"
+)
+
 // FileUpdateChange describes one changed file in a patch.
 type FileUpdateChange struct {
-	Path string `json:"path"`
-	Kind string `json:"kind"`
+	Path   string `json:"path"`
+	Kind   string `json:"kind"`
+	Status string `json:"status,omitempty"`
 }
 
 // TodoItem is one entry in the agent todo list.

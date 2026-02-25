@@ -1,6 +1,9 @@
 package loop
 
-import "context"
+import (
+	"context"
+	"time"
+)
 
 // Agent identifies an execution agent used by the loop runner.
 type Agent string
@@ -102,6 +105,8 @@ type RunnerOptions struct {
 	TMUXSession     string
 	Verbose         bool
 	NoColor         bool
+	GitSafety       bool
+	PostTaskHook    string
 }
 
 // RunnerStats summarizes one run invocation.
@@ -111,6 +116,8 @@ type RunnerStats struct {
 	Iterations    int
 	TasksDone     int
 	TasksRejected int
+	TotalCostUSD  float64
+	TotalDuration time.Duration
 }
 
 // AgentRequest is one execution request for an agent runtime.
@@ -129,7 +136,14 @@ type AgentRequest struct {
 	Verbose      bool
 }
 
+// AgentResult holds output and metrics from one agent invocation.
+type AgentResult struct {
+	Output    string
+	CostUSD   float64
+	DurationS float64
+}
+
 // AgentRuntime executes prompts on a provider backend.
 type AgentRuntime interface {
-	Run(ctx context.Context, req AgentRequest) (string, error)
+	Run(ctx context.Context, req AgentRequest) (AgentResult, error)
 }

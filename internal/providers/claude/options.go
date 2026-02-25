@@ -109,11 +109,33 @@ type PermissionRuleValue struct {
 	RuleContent string `json:"ruleContent,omitempty"`
 }
 
-// PermissionUpdate suggests adding permission rules.
+// PermissionBehavior is the allow/deny posture of a permission rule.
+type PermissionBehavior string
+
+const (
+	PermissionBehaviorAllow PermissionBehavior = "allow"
+	PermissionBehaviorDeny  PermissionBehavior = "deny"
+)
+
+// PermissionUpdateDestination is the target settings scope.
+type PermissionUpdateDestination string
+
+const (
+	PermissionDestinationUser    PermissionUpdateDestination = "userSettings"
+	PermissionDestinationProject PermissionUpdateDestination = "projectSettings"
+	PermissionDestinationLocal   PermissionUpdateDestination = "localSettings"
+	PermissionDestinationSession PermissionUpdateDestination = "session"
+	PermissionDestinationCLIArg  PermissionUpdateDestination = "cliArg"
+)
+
+// PermissionUpdate describes a permission rule mutation.
 type PermissionUpdate struct {
-	Type        string                `json:"type"`
-	Rules       []PermissionRuleValue `json:"rules,omitempty"`
-	Destination string                `json:"destination,omitempty"`
+	Type        string                      `json:"type"`
+	Rules       []PermissionRuleValue       `json:"rules,omitempty"`
+	Behavior    PermissionBehavior          `json:"behavior,omitempty"`
+	Destination PermissionUpdateDestination `json:"destination,omitempty"`
+	Mode        PermissionMode              `json:"mode,omitempty"`
+	Directories []string                    `json:"directories,omitempty"`
 }
 
 // CanUseToolRequest is sent when CLI requests a permission decision.
@@ -219,8 +241,73 @@ type ThinkingConfig struct {
 	BudgetTokens *int         `json:"budgetTokens,omitempty"`
 }
 
-// SandboxSettings is passed through to CLI via --settings.
-type SandboxSettings = map[string]any
+// SandboxNetworkConfig controls network sandbox rules.
+type SandboxNetworkConfig struct {
+	AllowedDomains          []string `json:"allowedDomains,omitempty"`
+	AllowManagedDomainsOnly *bool    `json:"allowManagedDomainsOnly,omitempty"`
+	AllowUnixSockets        []string `json:"allowUnixSockets,omitempty"`
+	AllowAllUnixSockets     *bool    `json:"allowAllUnixSockets,omitempty"`
+	AllowLocalBinding       *bool    `json:"allowLocalBinding,omitempty"`
+	HTTPProxyPort           *int     `json:"httpProxyPort,omitempty"`
+	SocksProxyPort          *int     `json:"socksProxyPort,omitempty"`
+}
+
+// SandboxFilesystemConfig controls filesystem sandbox rules.
+type SandboxFilesystemConfig struct {
+	AllowWrite []string `json:"allowWrite,omitempty"`
+	DenyWrite  []string `json:"denyWrite,omitempty"`
+	DenyRead   []string `json:"denyRead,omitempty"`
+}
+
+// SandboxRipgrepConfig overrides the ripgrep binary used in sandbox.
+type SandboxRipgrepConfig struct {
+	Command string   `json:"command"`
+	Args    []string `json:"args,omitempty"`
+}
+
+// SandboxSettings controls process sandbox behavior.
+type SandboxSettings struct {
+	Enabled                   *bool                    `json:"enabled,omitempty"`
+	AutoAllowBashIfSandboxed  *bool                    `json:"autoAllowBashIfSandboxed,omitempty"`
+	AllowUnsandboxedCommands  *bool                    `json:"allowUnsandboxedCommands,omitempty"`
+	Network                   *SandboxNetworkConfig    `json:"network,omitempty"`
+	Filesystem                *SandboxFilesystemConfig `json:"filesystem,omitempty"`
+	IgnoreViolations          map[string][]string      `json:"ignoreViolations,omitempty"`
+	EnableWeakerNestedSandbox *bool                    `json:"enableWeakerNestedSandbox,omitempty"`
+	ExcludedCommands          []string                 `json:"excludedCommands,omitempty"`
+	Ripgrep                   *SandboxRipgrepConfig    `json:"ripgrep,omitempty"`
+}
+
+// HookJSONOutput is the typed response from a hook callback.
+type HookJSONOutput struct {
+	Continue           *bool           `json:"continue,omitempty"`
+	SuppressOutput     *bool           `json:"suppressOutput,omitempty"`
+	StopReason         string          `json:"stopReason,omitempty"`
+	Decision           string          `json:"decision,omitempty"`
+	SystemMessage      string          `json:"systemMessage,omitempty"`
+	Reason             string          `json:"reason,omitempty"`
+	HookSpecificOutput json.RawMessage `json:"hookSpecificOutput,omitempty"`
+}
+
+// PreToolUseHookInput is the input payload for PreToolUse hook events.
+type PreToolUseHookInput struct {
+	ToolName string         `json:"tool_name"`
+	Input    map[string]any `json:"input"`
+}
+
+// PreToolUseHookOutput provides PreToolUse-specific hook output fields.
+type PreToolUseHookOutput struct {
+	PermissionDecision       string         `json:"permissionDecision,omitempty"`
+	PermissionDecisionReason string         `json:"permissionDecisionReason,omitempty"`
+	UpdatedInput             map[string]any `json:"updatedInput,omitempty"`
+	AdditionalContext        string         `json:"additionalContext,omitempty"`
+}
+
+// OutputFormat configures structured output from the model.
+type OutputFormat struct {
+	Type   string          `json:"type"`
+	Schema json.RawMessage `json:"schema"`
+}
 
 // Options configures process and session behavior.
 type Options struct {
@@ -280,12 +367,13 @@ type Options struct {
 	Debug     bool
 	DebugFile string
 
-	Sandbox SandboxSettings
+	Sandbox *SandboxSettings
 
 	SystemPrompt       string
 	AppendSystemPrompt string
 	PromptSuggestions  *bool
 	JSONSchema         json.RawMessage
+	OutputFormat       *OutputFormat
 
 	CanUseTool       CanUseTool
 	Hooks            map[HookEvent][]HookCallbackMatcher

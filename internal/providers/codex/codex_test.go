@@ -6,6 +6,30 @@ import (
 	"testing"
 )
 
+func TestThreadIDBeforeRun(t *testing.T) {
+	t.Parallel()
+
+	thread := &Thread{}
+	id, ok := thread.ID()
+	if ok {
+		t.Fatalf("expected ok=false before any run, got ok=true")
+	}
+	if id != "" {
+		t.Fatalf("expected empty id before any run, got %q", id)
+	}
+}
+
+func TestPatchApplyStatusConstants(t *testing.T) {
+	t.Parallel()
+
+	if PatchApplyStatusCompleted != "completed" {
+		t.Fatalf("expected PatchApplyStatusCompleted=%q, got %q", "completed", PatchApplyStatusCompleted)
+	}
+	if PatchApplyStatusFailed != "failed" {
+		t.Fatalf("expected PatchApplyStatusFailed=%q, got %q", "failed", PatchApplyStatusFailed)
+	}
+}
+
 func TestNormalizeInputString(t *testing.T) {
 	t.Parallel()
 

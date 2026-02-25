@@ -60,9 +60,16 @@ func newThread(exec *codexExec, codexOpts CodexOptions, options *ThreadOptions, 
 	}
 }
 
-// ID returns the current thread id.
-// Empty string means the first turn has not emitted thread.started yet.
-func (t *Thread) ID() string {
+// ID returns the thread identifier and whether it has been set.
+// The ID is available only after the first turn starts.
+func (t *Thread) ID() (string, bool) {
+	t.idMu.RLock()
+	defer t.idMu.RUnlock()
+	return t.id, t.id != ""
+}
+
+// threadID returns the raw thread id string for internal use.
+func (t *Thread) threadID() string {
 	t.idMu.RLock()
 	defer t.idMu.RUnlock()
 	return t.id
@@ -165,7 +172,7 @@ func (t *Thread) runInternal(ctx context.Context, input any, turnOptions *TurnOp
 		Input:                 prompt,
 		BaseURL:               t.codexOpts.BaseURL,
 		APIKey:                t.codexOpts.APIKey,
-		ThreadID:              t.ID(),
+		ThreadID:              t.threadID(),
 		Images:                images,
 		Model:                 t.threadOpts.Model,
 		SandboxMode:           t.threadOpts.SandboxMode,

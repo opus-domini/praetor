@@ -8,14 +8,82 @@ type SDKMessage struct {
 	Raw  json.RawMessage
 }
 
+// AssistantMessage is the "assistant" message from the model.
+type AssistantMessage struct {
+	Type            string          `json:"type"`
+	UUID            string          `json:"uuid"`
+	SessionID       string          `json:"session_id"`
+	ParentToolUseID *string         `json:"parent_tool_use_id"`
+	Message         json.RawMessage `json:"message"`
+}
+
+// SystemInitMessage is the first "system" subtype:"init" message.
+type SystemInitMessage struct {
+	Type           string   `json:"type"`
+	Subtype        string   `json:"subtype"`
+	Model          string   `json:"model"`
+	CWD            string   `json:"cwd"`
+	Tools          []string `json:"tools"`
+	PermissionMode string   `json:"permissionMode"`
+	ClaudeVersion  string   `json:"claude_code_version"`
+	UUID           string   `json:"uuid"`
+	SessionID      string   `json:"session_id"`
+}
+
+// StatusMessage is the "system" subtype:"status" message.
+type StatusMessage struct {
+	Type           string `json:"type"`
+	Subtype        string `json:"subtype"`
+	Status         string `json:"status"`
+	PermissionMode string `json:"permissionMode"`
+}
+
+// NonNullableUsage holds token usage data from a result message.
+type NonNullableUsage struct {
+	InputTokens              int `json:"input_tokens"`
+	OutputTokens             int `json:"output_tokens"`
+	CacheReadInputTokens     int `json:"cache_read_input_tokens"`
+	CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
+}
+
+// ModelUsage holds per-model usage breakdown.
+type ModelUsage struct {
+	InputTokens              int     `json:"inputTokens"`
+	OutputTokens             int     `json:"outputTokens"`
+	CacheReadInputTokens     int     `json:"cacheReadInputTokens"`
+	CacheCreationInputTokens int     `json:"cacheCreationInputTokens"`
+	WebSearchRequests        int     `json:"webSearchRequests"`
+	CostUSD                  float64 `json:"costUSD"`
+	ContextWindow            int     `json:"contextWindow"`
+	MaxOutputTokens          int     `json:"maxOutputTokens"`
+}
+
+// PermissionDenial records a denied tool use attempt.
+type PermissionDenial struct {
+	ToolName  string         `json:"tool_name"`
+	ToolUseID string         `json:"tool_use_id"`
+	ToolInput map[string]any `json:"tool_input"`
+}
+
 // ResultMessage decodes the common "result" message shape.
 type ResultMessage struct {
-	Type      string          `json:"type"`
-	Subtype   string          `json:"subtype"`
-	IsError   bool            `json:"is_error"`
-	Result    string          `json:"result"`
-	SessionID string          `json:"session_id"`
-	Raw       json.RawMessage `json:"-"`
+	Type              string                `json:"type"`
+	Subtype           string                `json:"subtype"`
+	IsError           bool                  `json:"is_error"`
+	Result            string                `json:"result"`
+	SessionID         string                `json:"session_id"`
+	UUID              string                `json:"uuid"`
+	DurationMS        int                   `json:"duration_ms"`
+	DurationAPIMS     int                   `json:"duration_api_ms"`
+	NumTurns          int                   `json:"num_turns"`
+	StopReason        *string               `json:"stop_reason"`
+	TotalCostUSD      float64               `json:"total_cost_usd"`
+	Usage             *NonNullableUsage     `json:"usage,omitempty"`
+	ModelUsage        map[string]ModelUsage `json:"modelUsage,omitempty"`
+	PermissionDenials []PermissionDenial    `json:"permission_denials,omitempty"`
+	StructuredOutput  json.RawMessage       `json:"structured_output,omitempty"`
+	Errors            []string              `json:"errors,omitempty"`
+	Raw               json.RawMessage       `json:"-"`
 }
 
 // UserTextMessage is the SDK user message envelope used for text prompts.

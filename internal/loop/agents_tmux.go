@@ -2,6 +2,7 @@ package loop
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -17,8 +18,9 @@ import (
 type TMUXAgentRuntime struct {
 	sessionName string
 
-	mu       sync.Mutex
-	prepared bool
+	mu             sync.Mutex
+	prepared       bool
+	createdSession bool
 }
 
 // NewTMUXAgentRuntime creates a tmux-backed runtime.
@@ -52,24 +54,44 @@ func (r *TMUXAgentRuntime) EnsureSession() error {
 		if output, createErr := createSession.CombinedOutput(); createErr != nil {
 			return fmt.Errorf("create tmux session %s: %w: %s", r.sessionName, createErr, strings.TrimSpace(string(output)))
 		}
+		r.createdSession = true
 	}
 
 	r.prepared = true
 	return nil
 }
 
+// Cleanup kills the tmux session if this runtime created it.
+func (r *TMUXAgentRuntime) Cleanup() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !r.createdSession {
+		return
+	}
+	_ = exec.Command("tmux", "kill-session", "-t", r.sessionName).Run()
+	r.prepared = false
+	r.createdSession = false
+}
+
+// codexJSONOutput is the shape of Codex --json output.
+type codexJSONOutput struct {
+	Result       string  `json:"result"`
+	TotalCostUSD float64 `json:"total_cost_usd"`
+}
+
 // Run executes one agent invocation in a dedicated tmux window.
-func (r *TMUXAgentRuntime) Run(ctx context.Context, req AgentRequest) (string, error) {
+func (r *TMUXAgentRuntime) Run(ctx context.Context, req AgentRequest) (AgentResult, error) {
+	start := time.Now()
 	if err := r.EnsureSession(); err != nil {
-		return "", err
+		return AgentResult{DurationS: time.Since(start).Seconds()}, err
 	}
 
 	runDir := strings.TrimSpace(req.RunDir)
 	if runDir == "" {
-		return "", errors.New("run directory is required for tmux runtime")
+		return AgentResult{DurationS: time.Since(start).Seconds()}, errors.New("run directory is required for tmux runtime")
 	}
 	if err := os.MkdirAll(runDir, 0o755); err != nil {
-		return "", fmt.Errorf("create run directory: %w", err)
+		return AgentResult{DurationS: time.Since(start).Seconds()}, fmt.Errorf("create run directory: %w", err)
 	}
 
 	prefix := strings.TrimSpace(req.OutputPrefix)
@@ -85,10 +107,10 @@ func (r *TMUXAgentRuntime) Run(ctx context.Context, req AgentRequest) (string, e
 	wrapperFile := filepath.Join(runDir, prefix+".run.sh")
 
 	if err := os.WriteFile(promptFile, []byte(strings.TrimSpace(req.Prompt)), 0o644); err != nil {
-		return "", fmt.Errorf("write prompt file: %w", err)
+		return AgentResult{DurationS: time.Since(start).Seconds()}, fmt.Errorf("write prompt file: %w", err)
 	}
 	if err := os.WriteFile(systemFile, []byte(strings.TrimSpace(req.SystemPrompt)), 0o644); err != nil {
-		return "", fmt.Errorf("write system prompt file: %w", err)
+		return AgentResult{DurationS: time.Since(start).Seconds()}, fmt.Errorf("write system prompt file: %w", err)
 	}
 
 	channel := fmt.Sprintf("praetor-%d-%d", os.Getpid(), time.Now().UnixNano())
@@ -96,42 +118,63 @@ func (r *TMUXAgentRuntime) Run(ctx context.Context, req AgentRequest) (string, e
 	script := buildWrapperScript(req, promptFile, systemFile, stdoutFile, stderrFile, exitFile, channel)
 
 	if err := os.WriteFile(wrapperFile, []byte(script), 0o755); err != nil {
-		return "", fmt.Errorf("write wrapper script: %w", err)
+		return AgentResult{DurationS: time.Since(start).Seconds()}, fmt.Errorf("write wrapper script: %w", err)
 	}
 
 	createWindow := exec.Command("tmux", "new-window", "-d", "-t", r.sessionName+":", "-n", windowName, "bash", wrapperFile)
 	if output, err := createWindow.CombinedOutput(); err != nil {
-		return "", fmt.Errorf("create tmux window: %w: %s", err, strings.TrimSpace(string(output)))
+		return AgentResult{DurationS: time.Since(start).Seconds()}, fmt.Errorf("create tmux window: %w: %s", err, strings.TrimSpace(string(output)))
 	}
 
 	waitCmd := exec.CommandContext(ctx, "tmux", "wait-for", channel)
 	if output, err := waitCmd.CombinedOutput(); err != nil {
+		duration := time.Since(start)
 		if ctx.Err() != nil {
-			return "", ctx.Err()
+			return AgentResult{DurationS: duration.Seconds()}, ctx.Err()
 		}
-		return "", fmt.Errorf("wait for tmux channel: %w: %s", err, strings.TrimSpace(string(output)))
+		return AgentResult{DurationS: duration.Seconds()}, fmt.Errorf("wait for tmux channel: %w: %s", err, strings.TrimSpace(string(output)))
 	}
 
 	outputBytes, _ := os.ReadFile(stdoutFile)
 	outputText := strings.TrimSpace(string(outputBytes))
+	duration := time.Since(start)
 
 	exitBytes, readExitErr := os.ReadFile(exitFile)
 	if readExitErr != nil {
 		stderrBytes, _ := os.ReadFile(stderrFile)
-		return outputText, fmt.Errorf("agent exit status file not found: %w: %s", readExitErr, tailText(string(stderrBytes), 20))
+		return AgentResult{Output: outputText, DurationS: duration.Seconds()}, fmt.Errorf("agent exit status file not found: %w: %s", readExitErr, tailText(string(stderrBytes), 20))
 	}
 
 	exitCode, parseErr := strconv.Atoi(strings.TrimSpace(string(exitBytes)))
 	if parseErr != nil {
 		stderrBytes, _ := os.ReadFile(stderrFile)
-		return outputText, fmt.Errorf("invalid agent exit code: %w: %s", parseErr, tailText(string(stderrBytes), 20))
+		return AgentResult{Output: outputText, DurationS: duration.Seconds()}, fmt.Errorf("invalid agent exit code: %w: %s", parseErr, tailText(string(stderrBytes), 20))
 	}
 	if exitCode != 0 {
 		stderrBytes, _ := os.ReadFile(stderrFile)
-		return outputText, fmt.Errorf("agent process failed with exit code %d: %s", exitCode, tailText(string(stderrBytes), 20))
+		return AgentResult{Output: outputText, DurationS: duration.Seconds()}, fmt.Errorf("agent process failed with exit code %d: %s", exitCode, tailText(string(stderrBytes), 20))
 	}
 
-	return outputText, nil
+	// Post-process Codex JSON output: extract .result and .total_cost_usd
+	var costUSD float64
+	if strings.HasPrefix(outputText, "{") {
+		var parsed codexJSONOutput
+		if err := json.Unmarshal([]byte(outputText), &parsed); err == nil {
+			// Save raw JSON
+			rawFile := filepath.Join(runDir, prefix+".raw.json")
+			_ = os.WriteFile(rawFile, []byte(outputText), 0o644)
+			costUSD = parsed.TotalCostUSD
+			if parsed.Result != "" {
+				outputText = parsed.Result
+			}
+		}
+	}
+
+	return AgentResult{
+		Output:    outputText,
+		CostUSD:   costUSD,
+		DurationS: duration.Seconds(),
+	}, nil
 }
 
 func tmuxWindowName(req AgentRequest) string {
@@ -206,7 +249,7 @@ if [[ -s "$SYSTEM_FILE" ]]; then
   FULL_PROMPT="$(cat "$SYSTEM_FILE")"$'\n\n'"$FULL_PROMPT"
 fi
 
-%s exec \
+%s exec --json \
 %s  "$FULL_PROMPT" \
   2> >(tee "$STDERR_FILE" >&2) | tee "$STDOUT_FILE"
 _exit="${PIPESTATUS[0]}"`, shellQuote(codexBin), modelClause)

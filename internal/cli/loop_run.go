@@ -26,6 +26,8 @@ func newLoopRunCmd() *cobra.Command {
 	var claudeBin string
 	var tmuxSession string
 	var noColor bool
+	var gitSafety bool
+	var postTaskHook string
 	var timeout time.Duration
 
 	cmd := &cobra.Command{
@@ -68,6 +70,8 @@ func newLoopRunCmd() *cobra.Command {
 				ClaudeBin:       claudeBin,
 				TMUXSession:     tmuxSession,
 				NoColor:         noColor,
+				GitSafety:       gitSafety,
+				PostTaskHook:    postTaskHook,
 			}
 
 			ctx := cmd.Context()
@@ -100,6 +104,8 @@ func newLoopRunCmd() *cobra.Command {
 	cmd.Flags().StringVar(&claudeBin, "claude-bin", "claude", "Claude command path or name")
 	cmd.Flags().StringVar(&tmuxSession, "tmux-session", "", "tmux session name (default: praetor-<project-hash>)")
 	cmd.Flags().BoolVar(&noColor, "no-color", false, "Disable colored output")
+	cmd.Flags().BoolVar(&gitSafety, "git-safety", true, "Enable git snapshot/rollback on task failure")
+	cmd.Flags().StringVar(&postTaskHook, "post-task-hook", "", "Script to run after executor, before reviewer")
 	cmd.Flags().DurationVar(&timeout, "timeout", 0, "Optional timeout, for example: 30m")
 	return cmd
 }

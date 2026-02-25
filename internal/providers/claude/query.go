@@ -379,10 +379,14 @@ func ParseResultMessage(msg SDKMessage) (*ResultMessage, error) {
 
 func (q *Query) initialize(ctx context.Context, opts Options) error {
 	hooksPayload := q.buildInitializeHooks(opts.Hooks)
+	jsonSchema := opts.JSONSchema
+	if opts.OutputFormat != nil && len(opts.OutputFormat.Schema) > 0 {
+		jsonSchema = opts.OutputFormat.Schema
+	}
 	req := initializeRequest{
 		Subtype:            "initialize",
 		Hooks:              hooksPayload,
-		JSONSchema:         opts.JSONSchema,
+		JSONSchema:         jsonSchema,
 		SystemPrompt:       opts.SystemPrompt,
 		AppendSystemPrompt: opts.AppendSystemPrompt,
 		Agents:             opts.Agents,
@@ -743,4 +747,46 @@ func (q *Query) pushErr(err error) {
 	case q.errCh <- err:
 	default:
 	}
+}
+
+// ParseAssistantMessage decodes an "assistant" SDKMessage.
+func ParseAssistantMessage(msg SDKMessage) (*AssistantMessage, error) {
+	if msg.Type != "assistant" {
+		return nil, fmt.Errorf("expected type \"assistant\", got %q", msg.Type)
+	}
+	var out AssistantMessage
+	if err := json.Unmarshal(msg.Raw, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// ParseSystemInitMessage decodes a "system" subtype:"init" SDKMessage.
+func ParseSystemInitMessage(msg SDKMessage) (*SystemInitMessage, error) {
+	if msg.Type != "system" {
+		return nil, fmt.Errorf("expected type \"system\", got %q", msg.Type)
+	}
+	var out SystemInitMessage
+	if err := json.Unmarshal(msg.Raw, &out); err != nil {
+		return nil, err
+	}
+	if out.Subtype != "init" {
+		return nil, fmt.Errorf("expected subtype \"init\", got %q", out.Subtype)
+	}
+	return &out, nil
+}
+
+// ParseStatusMessage decodes a "system" subtype:"status" SDKMessage.
+func ParseStatusMessage(msg SDKMessage) (*StatusMessage, error) {
+	if msg.Type != "system" {
+		return nil, fmt.Errorf("expected type \"system\", got %q", msg.Type)
+	}
+	var out StatusMessage
+	if err := json.Unmarshal(msg.Raw, &out); err != nil {
+		return nil, err
+	}
+	if out.Subtype != "status" {
+		return nil, fmt.Errorf("expected subtype \"status\", got %q", out.Subtype)
+	}
+	return &out, nil
 }

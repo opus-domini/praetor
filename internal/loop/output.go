@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"time"
 )
 
 // Renderer prints structured, colored terminal output.
@@ -56,8 +57,17 @@ func (r *Renderer) Dim(message string) {
 	_, _ = fmt.Fprintf(r.out, "%s%s%s\n", r.c("2"), message, r.reset())
 }
 
-func (r *Renderer) Summary(done, rejected, iterations int) {
-	_, _ = fmt.Fprintf(r.out, "\n%sRun summary%s done=%d rejected=%d iterations=%d\n", r.c("1"), r.reset(), done, rejected, iterations)
+func (r *Renderer) Summary(done, rejected, iterations int, totalCostUSD float64, totalDuration time.Duration) {
+	costStr := ""
+	if totalCostUSD > 0 {
+		costStr = fmt.Sprintf(" cost=$%.4f", totalCostUSD)
+	}
+	durationStr := ""
+	if totalDuration > 0 {
+		durationStr = fmt.Sprintf(" duration=%s", totalDuration.Truncate(time.Second))
+	}
+	_, _ = fmt.Fprintf(r.out, "\n%sRun summary%s done=%d rejected=%d iterations=%d%s%s\n",
+		r.c("1"), r.reset(), done, rejected, iterations, costStr, durationStr)
 }
 
 func (r *Renderer) c(code string) string {
