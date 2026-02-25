@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/opus-domini/praetor/internal/config"
 	"github.com/opus-domini/praetor/internal/loop"
 	"github.com/spf13/cobra"
 )
@@ -24,9 +25,7 @@ func newRunCmd() *cobra.Command {
 	var claudeBin string
 	var tmuxSession string
 	var noColor bool
-	var gitSafety bool
-	var gitSafetyMode string
-	var allowDirtyWorktree bool
+	var isolation string
 	var postTaskHook string
 	var timeout time.Duration
 
@@ -36,8 +35,8 @@ func newRunCmd() *cobra.Command {
 		Long: `Execute a task plan with executor/reviewer orchestration.
 
 Each task runs an executor agent, then an independent reviewer agent
-that gates promotion. Failed tasks are retried with feedback. Git
-safety snapshots protect the working tree from partial changes.`,
+that gates promotion. Failed tasks are retried with feedback. Worktree
+isolation protects the main branch from partial changes.`,
 		Example: `  praetor run docs/plans/my-plan.json
   praetor run docs/plans/my-plan.json --executor claude --reviewer claude
   praetor run docs/plans/my-plan.json --hook ./scripts/lint.sh --timeout 1h`,
@@ -61,6 +60,48 @@ safety snapshots protect the working tree from partial changes.`,
 				return err
 			}
 
+			// Load user config and apply defaults for unset flags.
+			cfg, cfgErr := config.Load(absWorkdir)
+			if cfgErr != nil {
+				return cfgErr
+			}
+			f := cmd.Flags()
+			if !f.Changed("executor") && cfg.Executor != "" {
+				executor = cfg.Executor
+			}
+			if !f.Changed("reviewer") && cfg.Reviewer != "" {
+				reviewer = cfg.Reviewer
+			}
+			if !f.Changed("max-retries") && cfg.MaxRetries != nil {
+				maxRetries = *cfg.MaxRetries
+			}
+			if !f.Changed("max-iterations") && cfg.MaxIterations != nil {
+				maxIterations = *cfg.MaxIterations
+			}
+			if !f.Changed("no-review") && cfg.NoReview != nil {
+				noReview = *cfg.NoReview
+			}
+			if !f.Changed("no-color") && cfg.NoColor != nil {
+				noColor = *cfg.NoColor
+			}
+			if !f.Changed("isolation") && cfg.Isolation != "" {
+				isolation = cfg.Isolation
+			}
+			if !f.Changed("codex-bin") && cfg.CodexBin != "" {
+				codexBin = cfg.CodexBin
+			}
+			if !f.Changed("claude-bin") && cfg.ClaudeBin != "" {
+				claudeBin = cfg.ClaudeBin
+			}
+			if !f.Changed("hook") && cfg.Hook != "" {
+				postTaskHook = cfg.Hook
+			}
+			if !f.Changed("timeout") && cfg.Timeout != "" {
+				if d, parseErr := time.ParseDuration(cfg.Timeout); parseErr == nil {
+					timeout = d
+				}
+			}
+
 			runner := loop.NewRunner(nil)
 			runnerOptions := loop.RunnerOptions{
 				StateRoot:       resolvedStateRoot,
@@ -75,9 +116,7 @@ safety snapshots protect the working tree from partial changes.`,
 				ClaudeBin:       claudeBin,
 				TMUXSession:     tmuxSession,
 				NoColor:         noColor,
-				GitSafety:       gitSafety,
-				GitSafetyMode:   loop.GitSafetyMode(strings.ToLower(strings.TrimSpace(gitSafetyMode))),
-				AllowDirty:      allowDirtyWorktree,
+				Isolation:       loop.IsolationMode(strings.ToLower(strings.TrimSpace(isolation))),
 				PostTaskHook:    postTaskHook,
 			}
 
@@ -110,9 +149,7 @@ safety snapshots protect the working tree from partial changes.`,
 	cmd.Flags().StringVar(&workdir, "workdir", ".", "Working directory for agents")
 	cmd.Flags().StringVar(&stateRoot, "state-root", "", "State root directory (default: ~/.praetor/projects/<hash>)")
 	cmd.Flags().BoolVar(&noColor, "no-color", false, "Disable colored output")
-	cmd.Flags().BoolVar(&gitSafety, "git-safety", true, "Enable git snapshot/rollback on failure")
-	cmd.Flags().StringVar(&gitSafetyMode, "git-safety-mode", string(loop.GitSafetyModeStrict), "Git safety mode: strict or off")
-	cmd.Flags().BoolVar(&allowDirtyWorktree, "allow-dirty-worktree", false, "Allow execution with dirty worktree (disables rollback safety for this run)")
+	cmd.Flags().StringVar(&isolation, "isolation", string(loop.IsolationWorktree), "Isolation mode: worktree or off")
 	cmd.Flags().StringVar(&postTaskHook, "hook", "", "Script to run after executor, before reviewer")
 	cmd.Flags().DurationVar(&timeout, "timeout", 0, "Run timeout (e.g. 30m, 2h)")
 	return cmd

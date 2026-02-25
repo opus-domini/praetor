@@ -17,7 +17,7 @@ func TestNormalizeRunnerOptionsRejectsInvalidMaxRetries(t *testing.T) {
 		DefaultExecutor: AgentCodex,
 		DefaultReviewer: AgentClaude,
 		MaxRetries:      0,
-		GitSafety:       false,
+		Isolation:       IsolationOff,
 	})
 	if err == nil {
 		t.Fatal("expected max retries validation error")
@@ -130,8 +130,7 @@ func TestRunnerStopsImmediatelyOnCanceledContext(t *testing.T) {
 		CodexBin:        mustExecutablePath(t),
 		ClaudeBin:       "__missing_claude_binary__",
 		TMUXSession:     "test-session",
-		GitSafety:       false,
-		GitSafetyMode:   GitSafetyModeOff,
+		Isolation:       IsolationOff,
 	})
 	if err == nil {
 		t.Fatal("expected canceled context error")

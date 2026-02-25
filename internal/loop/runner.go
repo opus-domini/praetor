@@ -32,7 +32,7 @@ type activeRun struct {
 	render      *Renderer
 	store       *Store
 	transitions *TransitionRecorder
-	gitSafety   *GitSafetyPolicy
+	isolation   *IsolationPolicy
 
 	state     State
 	stats     RunnerStats
@@ -47,6 +47,7 @@ func (r *Runner) Run(ctx context.Context, out io.Writer, planFile string, option
 		return RunnerStats{}, err
 	}
 	defer cleanupRuntime()
+	defer run.isolation.Cleanup()
 	defer func() {
 		if releaseErr := run.store.ReleaseRunLock(lock); releaseErr != nil {
 			_, _ = fmt.Fprintf(out, "warning: failed to release lock: %v\n", releaseErr)
@@ -121,6 +122,9 @@ func (r *Runner) bootstrapRun(_ context.Context, out io.Writer, planFile string,
 		return activeRun{}, lock, cleanupRuntime, fmt.Errorf("tasks are stuck at retry limit:\n- %s", strings.Join(stuck, "\n- "))
 	}
 
+	isolation := NewIsolationPolicy(normalized.Workdir, normalized.Isolation)
+	isolation.PruneOrphans()
+
 	render.Header("Praetor Loop")
 	if planTitle := strings.TrimSpace(plan.Title); planTitle != "" {
 		render.KV("Plan:", planTitle)
@@ -128,23 +132,11 @@ func (r *Runner) bootstrapRun(_ context.Context, out io.Writer, planFile string,
 	render.KV("Plan file:", planFile)
 	render.KV("State:", stats.StateFile)
 	render.KV("Progress:", fmt.Sprintf("%d/%d done", state.DoneCount(), len(state.Tasks)))
+	if normalized.Isolation == IsolationWorktree {
+		render.KV("Isolation:", "worktree")
+	}
 	if tmuxRuntime, ok := runtime.(*TMUXAgentRuntime); ok {
 		render.KV("tmux:", tmuxRuntime.SessionName())
-	}
-
-	gitSafetyEnabled := normalized.GitSafetyMode != GitSafetyModeOff
-	if gitSafetyEnabled && normalized.GitSafetyMode == GitSafetyModeStrict {
-		dirty, dirtyErr := store.GitWorktreeDirty(normalized.Workdir)
-		if dirtyErr != nil {
-			return activeRun{}, lock, cleanupRuntime, dirtyErr
-		}
-		if dirty {
-			if !normalized.AllowDirty {
-				return activeRun{}, lock, cleanupRuntime, errors.New("git safety strict mode requires a clean worktree; commit/stash changes or pass --allow-dirty-worktree")
-			}
-			gitSafetyEnabled = false
-			render.Warn("Dirty worktree detected; git safety rollback disabled for this run")
-		}
 	}
 
 	return activeRun{
@@ -155,7 +147,7 @@ func (r *Runner) bootstrapRun(_ context.Context, out io.Writer, planFile string,
 		render:      render,
 		store:       store,
 		transitions: NewTransitionRecorder(store, planFile),
-		gitSafety:   NewGitSafetyPolicy(store, normalized.Workdir, gitSafetyEnabled),
+		isolation:   isolation,
 		state:       state,
 		stats:       stats,
 		loopStart:   time.Now(),
@@ -268,7 +260,8 @@ func (r *Runner) runIteration(ctx context.Context, run *activeRun) (bool, error)
 	}
 	runID := filepath.Base(runDir)
 
-	if err := run.gitSafety.PrepareTask(runID); err != nil {
+	taskWorkdir, err := run.isolation.PrepareTask(runID, task.ID)
+	if err != nil {
 		return false, err
 	}
 
@@ -281,7 +274,7 @@ func (r *Runner) runIteration(ctx context.Context, run *activeRun) (bool, error)
 	run.render.Phase("executor", string(selected.executor), fmt.Sprintf("attempt %d/%d", selected.retries+1, run.options.MaxRetries))
 
 	executorSystemPrompt := buildExecutorSystemPrompt()
-	executorTaskPrompt := buildExecutorTaskPrompt(run.planFile, selected.index, selected.task, selected.feedback, selected.retries, run.plan.Title, selected.progress, run.options.Workdir)
+	executorTaskPrompt := buildExecutorTaskPrompt(run.planFile, selected.index, selected.task, selected.feedback, selected.retries, run.plan.Title, selected.progress, taskWorkdir)
 	_ = writeText(filepath.Join(runDir, "executor.system.txt"), executorSystemPrompt)
 	_ = writeText(filepath.Join(runDir, "executor.prompt.txt"), executorTaskPrompt)
 
@@ -291,7 +284,7 @@ func (r *Runner) runIteration(ctx context.Context, run *activeRun) (bool, error)
 		Prompt:       executorTaskPrompt,
 		SystemPrompt: executorSystemPrompt,
 		Model:        selected.task.Model,
-		Workdir:      run.options.Workdir,
+		Workdir:      taskWorkdir,
 		RunDir:       runDir,
 		OutputPrefix: "executor",
 		TaskLabel:    taskLabel,
@@ -382,7 +375,7 @@ func (r *Runner) runIteration(ctx context.Context, run *activeRun) (bool, error)
 
 	if run.options.PostTaskHook != "" {
 		run.render.Phase("hook", "post-task", run.options.PostTaskHook)
-		hookPassed, hookFeedback := runPostTaskHook(ctx, run.options.PostTaskHook, run.options.Workdir, runDir)
+		hookPassed, hookFeedback := runPostTaskHook(ctx, run.options.PostTaskHook, taskWorkdir, runDir)
 		if !hookPassed {
 			if ctx.Err() != nil {
 				cancelErr := cancellationCause(ctx, nil)
@@ -408,10 +401,10 @@ func (r *Runner) runIteration(ctx context.Context, run *activeRun) (bool, error)
 	decision := ReviewDecision{Pass: true, Reason: "review skipped"}
 	if selected.reviewer != AgentNone {
 		run.render.Phase("reviewer", string(selected.reviewer), "reviewing task result")
-		gitDiff := CaptureGitDiff(run.options.Workdir, 500)
+		gitDiff := CaptureGitDiff(taskWorkdir, 500)
 
 		reviewerSystemPrompt := buildReviewerSystemPrompt()
-		reviewerTaskPrompt := buildReviewerTaskPrompt(run.planFile, selected.task, executorOutput, run.options.Workdir, run.plan.Title, selected.progress, gitDiff)
+		reviewerTaskPrompt := buildReviewerTaskPrompt(run.planFile, selected.task, executorOutput, taskWorkdir, run.plan.Title, selected.progress, gitDiff)
 		_ = writeText(filepath.Join(runDir, "reviewer.system.txt"), reviewerSystemPrompt)
 		_ = writeText(filepath.Join(runDir, "reviewer.prompt.txt"), reviewerTaskPrompt)
 
@@ -421,7 +414,7 @@ func (r *Runner) runIteration(ctx context.Context, run *activeRun) (bool, error)
 			Prompt:       reviewerTaskPrompt,
 			SystemPrompt: reviewerSystemPrompt,
 			Model:        selected.task.Model,
-			Workdir:      run.options.Workdir,
+			Workdir:      taskWorkdir,
 			RunDir:       runDir,
 			OutputPrefix: "reviewer",
 			TaskLabel:    taskLabel,
@@ -497,11 +490,10 @@ func (r *Runner) runIteration(ctx context.Context, run *activeRun) (bool, error)
 	}
 
 	return r.applyTaskOutcome(run, selected, runID, taskOutcome{
-		kind:            taskOutcomeComplete,
-		message:         fmt.Sprintf("task completed: %s", selected.task.Title),
-		renderFormat:    "Completed: %s",
-		renderArgs:      []any{selected.taskLabel},
-		discardSnapshot: true,
+		kind:         taskOutcomeComplete,
+		message:      fmt.Sprintf("task completed: %s", selected.task.Title),
+		renderFormat: "Completed: %s",
+		renderArgs:   []any{selected.taskLabel},
 	})
 }
 
@@ -527,16 +519,12 @@ func normalizeRunnerOptions(options RunnerOptions) (RunnerOptions, error) {
 	if normalized.MaxIterations < 0 {
 		return RunnerOptions{}, errors.New("max iterations cannot be negative")
 	}
-	if !normalized.GitSafety {
-		normalized.GitSafetyMode = GitSafetyModeOff
-	}
-	if normalized.GitSafetyMode == "" && normalized.GitSafety {
-		normalized.GitSafetyMode = GitSafetyModeStrict
-	}
-	switch normalized.GitSafetyMode {
-	case GitSafetyModeOff, GitSafetyModeStrict:
+	switch normalized.Isolation {
+	case IsolationWorktree, IsolationOff:
+	case "":
+		normalized.Isolation = IsolationWorktree
 	default:
-		return RunnerOptions{}, fmt.Errorf("invalid git safety mode %q", normalized.GitSafetyMode)
+		return RunnerOptions{}, fmt.Errorf("invalid isolation mode %q", normalized.Isolation)
 	}
 
 	normalized.DefaultExecutor = normalizeAgent(normalized.DefaultExecutor)

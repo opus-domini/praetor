@@ -48,7 +48,6 @@ func (s *Store) Init() error {
 		s.LocksDir(),
 		s.LogsDir(),
 		s.RetriesDir(),
-		s.SnapshotsDir(),
 		s.StateDir(),
 	}
 	for _, dir := range dirs {
@@ -77,10 +76,6 @@ func (s *Store) LogsDir() string {
 
 func (s *Store) RetriesDir() string {
 	return filepath.Join(s.Root, "retries")
-}
-
-func (s *Store) SnapshotsDir() string {
-	return filepath.Join(s.Root, "snapshots")
 }
 
 func (s *Store) CostsDir() string {

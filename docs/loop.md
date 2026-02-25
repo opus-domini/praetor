@@ -150,7 +150,6 @@ All mutable state is stored under `~/.praetor/projects/<project-hash>/`:
 │       └── post-hook.stderr         # Post-task hook stderr (if used)
 ├── retries/        # Retry counters per task signature (.count)
 ├── feedback/       # Reviewer feedback per task signature (.txt)
-├── snapshots/      # Git HEAD snapshots for rollback (.sha)
 ├── costs/          # Cost tracking ledger (tracking.tsv)
 └── checkpoints/    # Audit log (history.tsv) and current state (.state)
 ```
@@ -204,15 +203,16 @@ Retry counters and feedback are cleared when a task completes successfully. They
 
 ## Safety mechanisms
 
-### Git safety
+### Worktree isolation
 
-Enabled by default (`--git-safety`). Before each executor run:
+Enabled by default (`--isolation worktree`). Before each executor run:
 
-1. `git rev-parse HEAD` is saved as `snapshots/<runID>.sha`.
-2. On any failure (executor crash, self-reported FAIL, hook failure, reviewer rejection): `git reset --hard <sha>` + `git clean -fd` restores the working tree.
-3. On success: the snapshot file is discarded.
+1. A dedicated `git worktree` is created on a new branch (`praetor/<task>--<runID>`).
+2. The executor and reviewer agents operate inside the worktree, never touching the main working tree.
+3. On success: uncommitted changes are auto-committed, the branch is merged into main, and the worktree is removed.
+4. On any failure (executor crash, self-reported FAIL, hook failure, reviewer rejection): the worktree and branch are deleted without merging — the main tree stays untouched.
 
-Disable with `--git-safety=false` for non-git workspaces.
+Disable with `--isolation off` for non-git workspaces. Orphan worktree metadata from previous crashes is pruned automatically at startup via `git worktree prune`.
 
 ### Post-task hook
 
@@ -220,7 +220,7 @@ A custom script (`--hook <path>`) runs between the executor and reviewer phases:
 
 - The hook runs with the workdir as CWD.
 - Exit code 0: proceed to reviewer.
-- Exit code non-zero: increment retry, store last 50 lines of stdout as feedback, rollback git if enabled.
+- Exit code non-zero: increment retry, store last 50 lines of stdout as feedback, discard the worktree.
 - Stdout/stderr are saved to `<runDir>/post-hook.stdout` and `post-hook.stderr`.
 
 Use this for linters, type checkers, or integration tests that must pass before review.
@@ -278,6 +278,7 @@ Plan:        implement user auth
 Plan file:   docs/plans/plan.json
 State:       ~/.praetor/projects/abc123/state/plan.state.json
 Progress:    0/2 done
+Isolation:   worktree
 tmux:        praetor-abc123
 
 [1/2] TASK-001 Add password hashing

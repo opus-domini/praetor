@@ -26,17 +26,16 @@ const (
 )
 
 type taskOutcome struct {
-	kind            taskOutcomeKind
-	status          string
-	message         string
-	feedback        string
-	metrics         []CostEntry
-	rollback        bool
-	renderLevel     string
-	renderFormat    string
-	renderArgs      []any
-	cancelErr       error
-	discardSnapshot bool
+	kind         taskOutcomeKind
+	status       string
+	message      string
+	feedback     string
+	metrics      []CostEntry
+	rollback     bool
+	renderLevel  string
+	renderFormat string
+	renderArgs   []any
+	cancelErr    error
 }
 
 func (r *Runner) applyTaskOutcome(run *activeRun, selected taskSelection, runID string, outcome taskOutcome) (bool, error) {
@@ -65,7 +64,7 @@ func (r *Runner) applyTaskOutcome(run *activeRun, selected taskSelection, runID 
 			return false, err
 		}
 		if outcome.rollback {
-			run.gitSafety.RollbackTask(runID, run.render)
+			run.isolation.RollbackTask(runID, run.render)
 		}
 		run.transitions.WriteCheckpoint(CheckpointEntry{
 			Timestamp: time.Now().UTC().Format(time.RFC3339),
@@ -92,8 +91,8 @@ func (r *Runner) applyTaskOutcome(run *activeRun, selected taskSelection, runID 
 		if err := run.transitions.CompleteTask(&run.state, selected.index, selected.signature, runID, outcome.message); err != nil {
 			return false, err
 		}
-		if outcome.discardSnapshot {
-			run.gitSafety.CommitTask(runID)
+		if err := run.isolation.CommitTask(runID); err != nil {
+			return false, err
 		}
 		run.stats.TasksDone++
 		run.stats.Iterations++

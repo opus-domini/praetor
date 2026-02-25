@@ -2,9 +2,14 @@ package loop
 
 import (
 	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
 	"time"
 )
 
+// TransitionRecorder centralizes state transition side effects.
 type TransitionRecorder struct {
 	store    *Store
 	planFile string
@@ -55,39 +60,116 @@ func (r *TransitionRecorder) CompleteTask(state *State, index int, signature, ru
 	return nil
 }
 
-type GitSafetyPolicy struct {
-	store   *Store
-	workdir string
-	enabled bool
+// worktreeInfo tracks one active worktree.
+type worktreeInfo struct {
+	path   string
+	branch string
 }
 
-func NewGitSafetyPolicy(store *Store, workdir string, enabled bool) *GitSafetyPolicy {
-	return &GitSafetyPolicy{store: store, workdir: workdir, enabled: enabled}
+// IsolationPolicy controls how tasks are isolated from the main working tree.
+type IsolationPolicy struct {
+	mainDir string
+	mode    IsolationMode
+	active  map[string]worktreeInfo
 }
 
-func (p *GitSafetyPolicy) Enabled() bool {
-	return p.enabled
+// NewIsolationPolicy creates an isolation policy.
+func NewIsolationPolicy(mainDir string, mode IsolationMode) *IsolationPolicy {
+	return &IsolationPolicy{
+		mainDir: mainDir,
+		mode:    mode,
+		active:  make(map[string]worktreeInfo),
+	}
 }
 
-func (p *GitSafetyPolicy) PrepareTask(runID string) error {
-	if !p.enabled {
+// PrepareTask creates an isolated worktree for one task execution.
+// Returns the workdir the agent should use.
+func (p *IsolationPolicy) PrepareTask(runID, taskID string) (string, error) {
+	if p.mode == IsolationOff {
+		return p.mainDir, nil
+	}
+
+	branch := fmt.Sprintf("praetor/%s--%s", sanitizePathToken(taskID), runID[:8])
+	worktreePath := filepath.Join(p.mainDir, ".praetor", "worktrees", fmt.Sprintf("%s--%s", sanitizePathToken(taskID), runID[:8]))
+
+	addCmd := exec.Command("git", "-C", p.mainDir, "worktree", "add", worktreePath, "-b", branch, "HEAD")
+	if out, err := addCmd.CombinedOutput(); err != nil {
+		return "", fmt.Errorf("git worktree add: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+
+	// Initialize submodules if present.
+	if _, err := os.Stat(filepath.Join(p.mainDir, ".gitmodules")); err == nil {
+		subCmd := exec.Command("git", "-C", worktreePath, "submodule", "update", "--init", "--recursive")
+		_ = subCmd.Run()
+	}
+
+	p.active[runID] = worktreeInfo{path: worktreePath, branch: branch}
+	return worktreePath, nil
+}
+
+// CommitTask auto-commits changes in the worktree, merges into main, and cleans up.
+func (p *IsolationPolicy) CommitTask(runID string) error {
+	info, ok := p.active[runID]
+	if !ok {
 		return nil
 	}
-	return p.store.SaveGitSnapshot(runID, p.workdir)
+	defer p.removeWorktree(runID)
+
+	// Auto-commit if executor left uncommitted changes.
+	addCmd := exec.Command("git", "-C", info.path, "add", "-A")
+	if out, err := addCmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("git add -A in worktree: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+
+	diffCmd := exec.Command("git", "-C", info.path, "diff", "--cached", "--quiet")
+	if diffCmd.Run() != nil {
+		// There are staged changes — commit them.
+		commitCmd := exec.Command("git", "-C", info.path, "commit", "-m", fmt.Sprintf("praetor: %s", runID))
+		if out, err := commitCmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("auto-commit in worktree: %w: %s", err, strings.TrimSpace(string(out)))
+		}
+	}
+
+	// Merge worktree branch into main.
+	mergeCmd := exec.Command("git", "-C", p.mainDir, "merge", "--no-edit", info.branch)
+	if out, err := mergeCmd.CombinedOutput(); err != nil {
+		// Abort the failed merge to leave main clean.
+		_ = exec.Command("git", "-C", p.mainDir, "merge", "--abort").Run()
+		return fmt.Errorf("merge conflict: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	return nil
 }
 
-func (p *GitSafetyPolicy) RollbackTask(runID string, render *Renderer) {
-	if !p.enabled {
+// RollbackTask removes the worktree and branch without merging.
+func (p *IsolationPolicy) RollbackTask(runID string, render *Renderer) {
+	if _, ok := p.active[runID]; !ok {
 		return
 	}
-	if err := p.store.RollbackGitSnapshot(runID, p.workdir); err != nil {
-		render.Warn(fmt.Sprintf("git rollback failed: %v", err))
+	p.removeWorktree(runID)
+}
+
+// Cleanup removes all active worktrees. Called from deferred cleanup.
+func (p *IsolationPolicy) Cleanup() {
+	for runID := range p.active {
+		p.removeWorktree(runID)
 	}
 }
 
-func (p *GitSafetyPolicy) CommitTask(runID string) {
-	if !p.enabled {
+// PruneOrphans cleans up worktree metadata from previous crashes.
+func (p *IsolationPolicy) PruneOrphans() {
+	if p.mode == IsolationOff {
 		return
 	}
-	_ = p.store.DiscardGitSnapshot(runID)
+	_ = exec.Command("git", "-C", p.mainDir, "worktree", "prune").Run()
+}
+
+func (p *IsolationPolicy) removeWorktree(runID string) {
+	info, ok := p.active[runID]
+	if !ok {
+		return
+	}
+	delete(p.active, runID)
+
+	_ = exec.Command("git", "-C", p.mainDir, "worktree", "remove", "--force", info.path).Run()
+	_ = exec.Command("git", "-C", p.mainDir, "branch", "-D", info.branch).Run()
 }

@@ -4,7 +4,7 @@
     <p>Lead. Delegate. Dominate.</p>
 </div>
 
-`praetor` is a Go CLI that orchestrates AI agents through a single command surface. It drives Claude Code and Codex as subprocess agents, coordinated by an executor/reviewer pipeline with git safety, cost tracking, and crash recovery.
+`praetor` is a Go CLI that orchestrates AI agents through a single command surface. It drives Claude Code and Codex as subprocess agents, coordinated by an executor/reviewer pipeline with worktree isolation, cost tracking, and crash recovery.
 
 ## Features
 
@@ -12,7 +12,7 @@
 - **Provider abstraction** — Claude and Codex behind a common interface. Add new providers without changing CLI or runner logic.
 - **Tmux-first execution** — every agent invocation runs in a dedicated tmux window for live operational visibility.
 - **Executor/reviewer pipeline** — each task runs an executor agent, then an independent reviewer agent that gates promotion.
-- **Git safety** — automatic `HEAD` snapshot before each task, rollback on failure, discard on success.
+- **Worktree isolation** — each task runs in a dedicated `git worktree`. On success the branch is merged back; on failure the worktree is deleted.
 - **Cost tracking** — per-invocation cost ledger (TSV), Claude `total_cost_usd` and Codex JSON cost extraction, summary reporting.
 - **Crash recovery** — PID-locked runs, SHA-256 plan checksums, mutable state files, retry counters, and feedback persistence.
 - **Checkpoint audit log** — append-only history of every state transition for post-mortem analysis.
@@ -26,6 +26,7 @@
 ├── cmd/praetor/                  # CLI entrypoint
 ├── internal/
 │   ├── cli/                      # Cobra command wiring
+│   ├── config/                   # User configuration (~/.praetor/config.toml)
 │   ├── loop/                     # Plan, state, runner, agents, prompts, output
 │   ├── orchestrator/             # Provider contract, registry, dispatch engine
 │   └── providers/
@@ -102,7 +103,7 @@ praetor run docs/plans/my-plan.json --hook ./scripts/lint.sh --timeout 1h
 | `--max-retries` | `3` | Maximum retries per task |
 | `--max-iterations` | `0` | Maximum iterations (0 = unlimited) |
 | `--no-review` | `false` | Skip the reviewer gate |
-| `--git-safety` | `true` | Enable git snapshot/rollback on failure |
+| `--isolation` | `worktree` | Isolation mode: `worktree` or `off` |
 | `--hook` | none | Script to run after executor, before reviewer |
 | `--codex-bin` | `codex` | Codex binary path |
 | `--claude-bin` | `claude` | Claude binary path |
@@ -133,6 +134,28 @@ Run a single prompt on a provider.
 | `--provider` | `codex` | Provider: `codex` or `claude` |
 | `--timeout` | none | Timeout (e.g. `30s`, `5m`) |
 
+## Configuration
+
+Praetor reads defaults from `~/.praetor/config.toml`. CLI flags always take precedence over config values.
+
+```toml
+# Global defaults
+executor = "claude"
+reviewer = "claude"
+max-retries = 5
+isolation = "worktree"
+no-review = false
+hook = "./scripts/lint.sh"
+timeout = "2h"
+
+# Per-project overrides
+[projects."/home/user/myproject"]
+executor = "codex"
+max-retries = 3
+```
+
+Override the config file path with `$PRAETOR_CONFIG`.
+
 ## State layout
 
 Runtime state is isolated per git project under `~/.praetor/projects/<project-hash>/`:
@@ -144,7 +167,6 @@ Runtime state is isolated per git project under `~/.praetor/projects/<project-ha
 ├── logs/           # Per-run execution logs (prompts, outputs, scripts)
 ├── retries/        # Retry counters per task signature
 ├── feedback/       # Reviewer feedback per task signature
-├── snapshots/      # Git HEAD snapshots for rollback
 ├── costs/          # Cost tracking ledger (tracking.tsv)
 └── checkpoints/    # Audit log (history.tsv) and current checkpoint
 ```

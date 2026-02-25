@@ -2,7 +2,6 @@ package loop
 
 import (
 	"encoding/json"
-	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -63,44 +62,6 @@ func writePlanFile(t *testing.T, path string, plan Plan) {
 	data = append(data, '\n')
 	if err := os.WriteFile(path, data, 0o644); err != nil {
 		t.Fatalf("write plan: %v", err)
-	}
-}
-
-func TestSaveAndDiscardGitSnapshot(t *testing.T) {
-	t.Parallel()
-	tmpDir := t.TempDir()
-	store := &Store{Root: tmpDir}
-	if err := store.Init(); err != nil {
-		t.Fatal(err)
-	}
-
-	runID := "test-run-001"
-	snapshotPath := filepath.Join(store.SnapshotsDir(), runID+".sha")
-
-	// Write a fake snapshot
-	if err := os.WriteFile(snapshotPath, []byte("abc123\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	if err := store.DiscardGitSnapshot(runID); err != nil {
-		t.Fatalf("discard failed: %v", err)
-	}
-
-	if _, err := os.Stat(snapshotPath); !errors.Is(err, os.ErrNotExist) {
-		t.Fatal("snapshot file should be removed after discard")
-	}
-}
-
-func TestDiscardGitSnapshotMissing(t *testing.T) {
-	t.Parallel()
-	tmpDir := t.TempDir()
-	store := &Store{Root: tmpDir}
-	if err := store.Init(); err != nil {
-		t.Fatal(err)
-	}
-
-	if err := store.DiscardGitSnapshot("nonexistent"); err != nil {
-		t.Fatalf("discard of missing snapshot should not error: %v", err)
 	}
 }
 

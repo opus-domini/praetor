@@ -6,7 +6,7 @@
 
 # Praetor Documentation
 
-`praetor` is a Go CLI that orchestrates AI agent providers through a single execution surface. It drives Claude Code and Codex as subprocess agents, coordinated by an executor/reviewer pipeline with git safety, cost tracking, and crash recovery.
+`praetor` is a Go CLI that orchestrates AI agent providers through a single execution surface. It drives Claude Code and Codex as subprocess agents, coordinated by an executor/reviewer pipeline with worktree isolation, cost tracking, and crash recovery.
 
 ## Core documentation
 

@@ -19,11 +19,15 @@ internal/
 │   ├── run.go                    praetor run <plan-file>
 │   ├── plan.go                   praetor plan {create,list,status,reset}
 │   └── exec.go                   praetor exec [prompt]
+├── config/                       User configuration
+│   └── config.go                 ~/.praetor/config.toml loader and parser
 ├── loop/                         Plan-driven orchestration runtime
-│   ├── types.go                  Plan, Task, State, AgentRuntime interface
+│   ├── types.go                  Plan, Task, State, AgentRuntime, IsolationMode
 │   ├── plan.go                   Plan loading, validation, checksum, scaffolding
-│   ├── store.go                  Mutable state, locks, retries, feedback, snapshots, costs, checkpoints
+│   ├── store.go                  Mutable state, locks, retries, feedback, costs, checkpoints
 │   ├── runner.go                 Main loop: dependency resolution, executor/reviewer pipeline
+│   ├── runner_outcome.go         Task outcome application (retry, complete, cancel)
+│   ├── runner_policy.go          TransitionRecorder, IsolationPolicy (git worktree)
 │   ├── agents.go                 SDKAgentRuntime (in-process Claude/Codex SDK calls)
 │   ├── agents_tmux.go            TMUXAgentRuntime (tmux-window subprocess execution)
 │   ├── prompts.go                Executor/reviewer prompt builders, git diff capture
@@ -52,7 +56,8 @@ internal/
 | Package | Responsibility |
 |---------|---------------|
 | `cmd/praetor` | Process entrypoint. Calls `cli.NewRootCmd().Execute()`. |
-| `internal/cli` | Cobra command tree (`run`, `plan`, `exec`), flag parsing, provider construction. No business logic. |
+| `internal/cli` | Cobra command tree (`run`, `plan`, `exec`), flag parsing, config loading, provider construction. No business logic. |
+| `internal/config` | User configuration loader. Reads `~/.praetor/config.toml` with global defaults and per-project overrides. Zero external dependencies. |
 | `internal/loop` | Immutable plan model, mutable state store, dependency graph, runner pipeline, agent runtimes, prompt construction, terminal output. |
 | `internal/orchestrator` | Provider contract (`Provider` interface), request/response types, provider registry, dispatch engine. |
 | `internal/providers/claude` | Full Go port of `@anthropic-ai/claude-agent-sdk`. Communicates with the `claude` CLI process over `stream-json`. |
@@ -76,12 +81,12 @@ internal/
 3. State store initializes or merges mutable state, detecting plan changes via SHA-256 checksum.
 4. Pre-flight validation checks that required binaries (`claude`, `codex`, `tmux`) are in PATH.
 5. Runner selects the next runnable task based on dependency completion.
-6. **Git safety**: `HEAD` commit hash is saved as a snapshot before each task.
-7. **Executor phase**: agent runs the task prompt in a tmux window, producing output and cost data.
+6. **Worktree isolation**: a dedicated `git worktree` is created for the task (when `--isolation worktree`).
+7. **Executor phase**: agent runs the task prompt in the worktree via a tmux window, producing output and cost data.
 8. **Post-task hook** (optional): custom script runs for validation (linters, tests). Failure triggers retry.
 9. **Reviewer phase**: independent agent evaluates executor output + git diff, returns `PASS|reason` or `FAIL|reason`.
-10. On pass: task is marked done, state is persisted, git snapshot is discarded.
-11. On fail: retry counter increments, feedback is stored, git is rolled back to snapshot.
+10. On pass: task is marked done, state is persisted, worktree branch is merged into main and cleaned up.
+11. On fail: retry counter increments, feedback is stored, worktree is deleted without merging.
 12. **Cost tracking**: per-invocation costs are recorded in a TSV ledger.
 13. **Checkpoint audit**: every state transition is logged to `checkpoints/history.tsv`.
 14. Loop exits when all tasks complete, dependencies block progress, or retry/iteration limits are reached.

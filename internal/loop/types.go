@@ -105,18 +105,16 @@ type RunnerOptions struct {
 	TMUXSession     string
 	Verbose         bool
 	NoColor         bool
-	GitSafety       bool
-	GitSafetyMode   GitSafetyMode
-	AllowDirty      bool
+	Isolation       IsolationMode
 	PostTaskHook    string
 }
 
-// GitSafetyMode controls precondition and rollback behavior.
-type GitSafetyMode string
+// IsolationMode controls how tasks are isolated from the main working tree.
+type IsolationMode string
 
 const (
-	GitSafetyModeOff    GitSafetyMode = "off"
-	GitSafetyModeStrict GitSafetyMode = "strict"
+	IsolationWorktree IsolationMode = "worktree"
+	IsolationOff      IsolationMode = "off"
 )
 
 // RunnerStats summarizes one run invocation.
