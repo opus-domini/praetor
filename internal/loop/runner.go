@@ -23,54 +23,89 @@ func NewRunner(runtime AgentRuntime) *Runner {
 	return &Runner{runtime: runtime}
 }
 
+type activeRun struct {
+	planFile string
+	plan     Plan
+	options  RunnerOptions
+
+	runtime     AgentRuntime
+	render      *Renderer
+	store       *Store
+	transitions *TransitionRecorder
+	gitSafety   *GitSafetyPolicy
+
+	state     State
+	stats     RunnerStats
+	totalCost float64
+	loopStart time.Time
+}
+
 // Run executes a plan file until completion, blockage, or retry exhaustion.
 func (r *Runner) Run(ctx context.Context, out io.Writer, planFile string, options RunnerOptions) (RunnerStats, error) {
+	run, lock, cleanupRuntime, err := r.bootstrapRun(ctx, out, planFile, options)
+	if err != nil {
+		return RunnerStats{}, err
+	}
+	defer cleanupRuntime()
+	defer func() {
+		if releaseErr := run.store.ReleaseRunLock(lock); releaseErr != nil {
+			_, _ = fmt.Fprintf(out, "warning: failed to release lock: %v\n", releaseErr)
+		}
+	}()
+
+	if run.state.OpenCount() == 0 {
+		run.render.Success(fmt.Sprintf("All tasks already completed: %s", run.planFile))
+		return run.stats, nil
+	}
+
+	if err := r.runLoop(ctx, &run); err != nil {
+		return run.stats, err
+	}
+	return run.stats, nil
+}
+
+func (r *Runner) bootstrapRun(_ context.Context, out io.Writer, planFile string, options RunnerOptions) (activeRun, RunLock, func(), error) {
 	planFile = strings.TrimSpace(planFile)
 	if planFile == "" {
-		return RunnerStats{}, errors.New("plan file is required")
+		return activeRun{}, RunLock{}, nil, errors.New("plan file is required")
 	}
 
 	plan, err := LoadPlan(planFile)
 	if err != nil {
-		return RunnerStats{}, err
+		return activeRun{}, RunLock{}, nil, err
 	}
 
 	normalized, err := normalizeRunnerOptions(options)
 	if err != nil {
-		return RunnerStats{}, err
+		return activeRun{}, RunLock{}, nil, err
 	}
 	render := NewRenderer(out, normalized.NoColor)
 
 	runtime := r.runtime
+	cleanupRuntime := func() {}
 	if runtime == nil {
 		runtime = NewTMUXAgentRuntime(normalized.TMUXSession)
 	}
 	if tmuxRuntime, ok := runtime.(*TMUXAgentRuntime); ok {
 		if err := tmuxRuntime.EnsureSession(); err != nil {
-			return RunnerStats{}, err
+			return activeRun{}, RunLock{}, nil, err
 		}
-		defer tmuxRuntime.Cleanup()
+		cleanupRuntime = tmuxRuntime.Cleanup
 	}
 
-	// Pre-flight binary validation (Step 15).
 	if err := validateRequiredBinaries(normalized, plan); err != nil {
-		return RunnerStats{}, err
+		return activeRun{}, RunLock{}, cleanupRuntime, err
 	}
 
 	store := NewStore(normalized.StateRoot)
 	lock, err := store.AcquireRunLock(planFile, normalized.Force)
 	if err != nil {
-		return RunnerStats{}, err
+		return activeRun{}, RunLock{}, cleanupRuntime, err
 	}
-	defer func() {
-		if releaseErr := store.ReleaseRunLock(lock); releaseErr != nil {
-			_, _ = fmt.Fprintf(out, "warning: failed to release lock: %v\n", releaseErr)
-		}
-	}()
 
 	state, err := store.LoadOrInitializeState(planFile, plan)
 	if err != nil {
-		return RunnerStats{}, err
+		return activeRun{}, lock, cleanupRuntime, err
 	}
 
 	stats := RunnerStats{
@@ -78,17 +113,12 @@ func (r *Runner) Run(ctx context.Context, out io.Writer, planFile string, option
 		StateFile: store.StateFile(planFile),
 	}
 
-	if state.OpenCount() == 0 {
-		render.Success(fmt.Sprintf("All tasks already completed: %s", planFile))
-		return stats, nil
-	}
-
 	stuck, err := store.DetectStuckTasks(planFile, state, normalized.MaxRetries)
 	if err != nil {
-		return stats, err
+		return activeRun{}, lock, cleanupRuntime, err
 	}
 	if len(stuck) > 0 {
-		return stats, fmt.Errorf("tasks are stuck at retry limit:\n- %s", strings.Join(stuck, "\n- "))
+		return activeRun{}, lock, cleanupRuntime, fmt.Errorf("tasks are stuck at retry limit:\n- %s", strings.Join(stuck, "\n- "))
 	}
 
 	render.Header("Praetor Loop")
@@ -106,23 +136,37 @@ func (r *Runner) Run(ctx context.Context, out io.Writer, planFile string, option
 	if gitSafetyEnabled && normalized.GitSafetyMode == GitSafetyModeStrict {
 		dirty, dirtyErr := store.GitWorktreeDirty(normalized.Workdir)
 		if dirtyErr != nil {
-			return stats, dirtyErr
+			return activeRun{}, lock, cleanupRuntime, dirtyErr
 		}
 		if dirty {
 			if !normalized.AllowDirty {
-				return stats, errors.New("git safety strict mode requires a clean worktree; commit/stash changes or pass --allow-dirty-worktree")
+				return activeRun{}, lock, cleanupRuntime, errors.New("git safety strict mode requires a clean worktree; commit/stash changes or pass --allow-dirty-worktree")
 			}
 			gitSafetyEnabled = false
 			render.Warn("Dirty worktree detected; git safety rollback disabled for this run")
 		}
 	}
 
-	var totalCost float64
-	loopStart := time.Now()
+	return activeRun{
+		planFile:    planFile,
+		plan:        plan,
+		options:     normalized,
+		runtime:     runtime,
+		render:      render,
+		store:       store,
+		transitions: NewTransitionRecorder(store, planFile),
+		gitSafety:   NewGitSafetyPolicy(store, normalized.Workdir, gitSafetyEnabled),
+		state:       state,
+		stats:       stats,
+		loopStart:   time.Now(),
+		totalCost:   0,
+	}, lock, cleanupRuntime, nil
+}
 
+func (r *Runner) runLoop(ctx context.Context, run *activeRun) error {
 	for {
 		if ctxErr := ctx.Err(); ctxErr != nil {
-			_ = store.WriteCheckpoint(planFile, CheckpointEntry{
+			run.transitions.WriteCheckpoint(CheckpointEntry{
 				Timestamp: time.Now().UTC().Format(time.RFC3339),
 				Status:    "canceled",
 				TaskID:    "",
@@ -130,407 +174,335 @@ func (r *Runner) Run(ctx context.Context, out io.Writer, planFile string, option
 				RunID:     "",
 				Message:   ctxErr.Error(),
 			})
-			return stats, ctxErr
+			return ctxErr
 		}
 
-		if normalized.MaxIterations > 0 && stats.Iterations >= normalized.MaxIterations {
-			render.Warn(fmt.Sprintf("Stopped: max iterations reached (%d)", normalized.MaxIterations))
+		if run.options.MaxIterations > 0 && run.stats.Iterations >= run.options.MaxIterations {
+			run.render.Warn(fmt.Sprintf("Stopped: max iterations reached (%d)", run.options.MaxIterations))
 			break
 		}
 
-		index, task, ok := NextRunnableTask(state)
-		if !ok {
-			if state.OpenCount() == 0 {
-				render.Success("All tasks completed")
-				break
-			}
+		stop, err := r.runIteration(ctx, run)
+		if err != nil {
+			return err
+		}
+		if stop {
+			break
+		}
+	}
 
-			report := BlockedTasksReport(state, 5)
-			if len(report) == 0 {
-				_ = store.WriteCheckpoint(planFile, CheckpointEntry{
-					Timestamp: time.Now().UTC().Format(time.RFC3339),
-					Status:    "blocked",
-					TaskID:    "",
-					Signature: "",
-					RunID:     "",
-					Message:   "plan is blocked: open tasks exist but none are runnable",
-				})
-				return stats, errors.New("plan is blocked: open tasks exist but none are runnable")
-			}
-			_ = store.WriteCheckpoint(planFile, CheckpointEntry{
+	run.stats.TotalCostUSD = run.totalCost
+	run.stats.TotalDuration = time.Since(run.loopStart)
+	run.render.Summary(run.stats.TasksDone, run.stats.TasksRejected, run.stats.Iterations, run.stats.TotalCostUSD, run.stats.TotalDuration)
+	return nil
+}
+
+func (r *Runner) runIteration(ctx context.Context, run *activeRun) (bool, error) {
+	index, task, ok := NextRunnableTask(run.state)
+	if !ok {
+		if run.state.OpenCount() == 0 {
+			run.render.Success("All tasks completed")
+			return true, nil
+		}
+
+		report := BlockedTasksReport(run.state, 5)
+		if len(report) == 0 {
+			run.transitions.WriteCheckpoint(CheckpointEntry{
 				Timestamp: time.Now().UTC().Format(time.RFC3339),
 				Status:    "blocked",
 				TaskID:    "",
 				Signature: "",
 				RunID:     "",
-				Message:   fmt.Sprintf("plan is blocked by dependencies: %s", strings.Join(report, ", ")),
+				Message:   "plan is blocked: open tasks exist but none are runnable",
 			})
-			return stats, fmt.Errorf("plan is blocked by dependencies:\n- %s", strings.Join(report, "\n- "))
+			return false, errors.New("plan is blocked: open tasks exist but none are runnable")
 		}
-
-		executor, err := resolveExecutor(task, normalized.DefaultExecutor)
-		if err != nil {
-			return stats, fmt.Errorf("task %s: %w", task.ID, err)
-		}
-		reviewer, err := resolveReviewer(task, normalized.DefaultReviewer, normalized.SkipReview)
-		if err != nil {
-			return stats, fmt.Errorf("task %s: %w", task.ID, err)
-		}
-
-		signature := store.TaskSignatureForPlan(planFile, index, task)
-		retries, err := store.ReadRetryCount(signature)
-		if err != nil {
-			return stats, err
-		}
-		if retries >= normalized.MaxRetries {
-			return stats, fmt.Errorf("retry limit reached for task %s (%s)", task.ID, task.Title)
-		}
-
-		feedback, err := store.ReadFeedback(signature)
-		if err != nil {
-			return stats, err
-		}
-
-		progress := fmt.Sprintf("%d/%d", state.DoneCount()+1, len(state.Tasks))
-		runDir, err := prepareRunDir(store.LogsDir(), task, signature)
-		if err != nil {
-			return stats, err
-		}
-		runID := filepath.Base(runDir)
-
-		// Git safety: save snapshot before executor (Step 9).
-		if gitSafetyEnabled {
-			if err := store.SaveGitSnapshot(runID, normalized.Workdir); err != nil {
-				return stats, err
-			}
-		}
-
-		taskLabel := task.ID
-		if strings.TrimSpace(taskLabel) == "" {
-			taskLabel = fmt.Sprintf("#%d", index)
-		}
-		render.Task(progress, taskLabel, task.Title)
-		render.Phase("executor", string(executor), fmt.Sprintf("attempt %d/%d", retries+1, normalized.MaxRetries))
-
-		executorSystemPrompt := buildExecutorSystemPrompt()
-		executorTaskPrompt := buildExecutorTaskPrompt(planFile, index, task, feedback, retries, plan.Title, progress, normalized.Workdir)
-		_ = writeText(filepath.Join(runDir, "executor.system.txt"), executorSystemPrompt)
-		_ = writeText(filepath.Join(runDir, "executor.prompt.txt"), executorTaskPrompt)
-
-		execResult, execErr := runtime.Run(ctx, AgentRequest{
-			Role:         "execute",
-			Agent:        executor,
-			Prompt:       executorTaskPrompt,
-			SystemPrompt: executorSystemPrompt,
-			Model:        task.Model,
-			Workdir:      normalized.Workdir,
-			RunDir:       runDir,
-			OutputPrefix: "executor",
-			TaskLabel:    taskLabel,
-			CodexBin:     normalized.CodexBin,
-			ClaudeBin:    normalized.ClaudeBin,
-			Verbose:      normalized.Verbose,
-		})
-		executorOutput := execResult.Output
-		totalCost += execResult.CostUSD
-		_ = writeText(filepath.Join(runDir, "executor.output.txt"), executorOutput)
-
-		render.Phase("executor", string(executor), fmt.Sprintf("attempt %d/%d [%.1fs]", retries+1, normalized.MaxRetries, execResult.DurationS))
-
-		if execErr != nil {
-			if isCancellationErr(execErr) || ctx.Err() != nil {
-				cancelErr := cancellationCause(ctx, execErr)
-				_ = store.WriteCheckpoint(planFile, CheckpointEntry{
-					Timestamp: time.Now().UTC().Format(time.RFC3339),
-					Status:    "canceled",
-					TaskID:    task.ID,
-					Signature: signature,
-					RunID:     runID,
-					Message:   cancelErr.Error(),
-				})
-				return stats, cancelErr
-			}
-			stats.TasksRejected++
-			nextRetry, incErr := store.IncrementRetryCount(signature)
-			if incErr != nil {
-				return stats, incErr
-			}
-			_ = store.WriteFeedback(signature, fmt.Sprintf("executor process failed: %v", execErr))
-			if gitSafetyEnabled {
-				if rbErr := store.RollbackGitSnapshot(runID, normalized.Workdir); rbErr != nil {
-					render.Warn(fmt.Sprintf("git rollback failed: %v", rbErr))
-				}
-			}
-			_ = store.WriteTaskMetrics(CostEntry{
-				Timestamp: time.Now().UTC().Format(time.RFC3339),
-				RunID:     runID,
-				TaskID:    task.ID,
-				Agent:     string(executor),
-				Role:      "executor",
-				DurationS: execResult.DurationS,
-				Status:    "fail",
-				CostUSD:   execResult.CostUSD,
-			})
-			_ = store.WriteCheckpoint(planFile, CheckpointEntry{
-				Timestamp: time.Now().UTC().Format(time.RFC3339),
-				Status:    "executor_crashed",
-				TaskID:    task.ID,
-				Signature: signature,
-				RunID:     runID,
-				Message:   fmt.Sprintf("executor process failed: %v", execErr),
-			})
-			render.Error(fmt.Sprintf("Executor failed: %v (retry %d/%d)", execErr, nextRetry, normalized.MaxRetries))
-			stats.Iterations++
-			continue
-		}
-
-		result := ParseExecutorResult(executorOutput)
-		if result != ExecutorResultPass {
-			stats.TasksRejected++
-			nextRetry, incErr := store.IncrementRetryCount(signature)
-			if incErr != nil {
-				return stats, incErr
-			}
-			if result == ExecutorResultUnknown {
-				_ = store.WriteFeedback(signature, "executor output missing or invalid RESULT line")
-			} else {
-				_ = store.WriteFeedback(signature, "executor self-reported RESULT: FAIL")
-			}
-			if gitSafetyEnabled {
-				if rbErr := store.RollbackGitSnapshot(runID, normalized.Workdir); rbErr != nil {
-					render.Warn(fmt.Sprintf("git rollback failed: %v", rbErr))
-				}
-			}
-			_ = store.WriteTaskMetrics(CostEntry{
-				Timestamp: time.Now().UTC().Format(time.RFC3339),
-				RunID:     runID,
-				TaskID:    task.ID,
-				Agent:     string(executor),
-				Role:      "executor",
-				DurationS: execResult.DurationS,
-				Status:    "fail",
-				CostUSD:   execResult.CostUSD,
-			})
-			_ = store.WriteCheckpoint(planFile, CheckpointEntry{
-				Timestamp: time.Now().UTC().Format(time.RFC3339),
-				Status:    "executor_fail",
-				TaskID:    task.ID,
-				Signature: signature,
-				RunID:     runID,
-				Message:   fmt.Sprintf("executor reported RESULT: %s", result),
-			})
-			render.Error(fmt.Sprintf("Executor reported %s (retry %d/%d)", result, nextRetry, normalized.MaxRetries))
-			stats.Iterations++
-			continue
-		}
-
-		// Write executor pass metrics.
-		_ = store.WriteTaskMetrics(CostEntry{
+		run.transitions.WriteCheckpoint(CheckpointEntry{
 			Timestamp: time.Now().UTC().Format(time.RFC3339),
-			RunID:     runID,
-			TaskID:    task.ID,
-			Agent:     string(executor),
-			Role:      "executor",
-			DurationS: execResult.DurationS,
-			Status:    "pass",
-			CostUSD:   execResult.CostUSD,
+			Status:    "blocked",
+			TaskID:    "",
+			Signature: "",
+			RunID:     "",
+			Message:   fmt.Sprintf("plan is blocked by dependencies: %s", strings.Join(report, ", ")),
 		})
-
-		// Post-task hook (Step 12).
-		if normalized.PostTaskHook != "" {
-			render.Phase("hook", "post-task", normalized.PostTaskHook)
-			hookPassed, hookFeedback := runPostTaskHook(ctx, normalized.PostTaskHook, normalized.Workdir, runDir)
-			if !hookPassed {
-				if ctx.Err() != nil {
-					cancelErr := cancellationCause(ctx, nil)
-					_ = store.WriteCheckpoint(planFile, CheckpointEntry{
-						Timestamp: time.Now().UTC().Format(time.RFC3339),
-						Status:    "canceled",
-						TaskID:    task.ID,
-						Signature: signature,
-						RunID:     runID,
-						Message:   cancelErr.Error(),
-					})
-					return stats, cancelErr
-				}
-				stats.TasksRejected++
-				nextRetry, incErr := store.IncrementRetryCount(signature)
-				if incErr != nil {
-					return stats, incErr
-				}
-				_ = store.WriteFeedback(signature, hookFeedback)
-				if gitSafetyEnabled {
-					if rbErr := store.RollbackGitSnapshot(runID, normalized.Workdir); rbErr != nil {
-						render.Warn(fmt.Sprintf("git rollback failed: %v", rbErr))
-					}
-				}
-				_ = store.WriteCheckpoint(planFile, CheckpointEntry{
-					Timestamp: time.Now().UTC().Format(time.RFC3339),
-					Status:    "hook_failed",
-					TaskID:    task.ID,
-					Signature: signature,
-					RunID:     runID,
-					Message:   "post-task hook failed",
-				})
-				render.Error(fmt.Sprintf("Post-task hook failed (retry %d/%d)", nextRetry, normalized.MaxRetries))
-				stats.Iterations++
-				continue
-			}
-		}
-
-		decision := ReviewDecision{Pass: true, Reason: "review skipped"}
-		if reviewer != AgentNone {
-			render.Phase("reviewer", string(reviewer), "reviewing task result")
-
-			// Capture git diff for reviewer prompt (Step 11).
-			gitDiff := CaptureGitDiff(normalized.Workdir, 500)
-
-			reviewerSystemPrompt := buildReviewerSystemPrompt()
-			reviewerTaskPrompt := buildReviewerTaskPrompt(planFile, task, executorOutput, normalized.Workdir, plan.Title, progress, gitDiff)
-			_ = writeText(filepath.Join(runDir, "reviewer.system.txt"), reviewerSystemPrompt)
-			_ = writeText(filepath.Join(runDir, "reviewer.prompt.txt"), reviewerTaskPrompt)
-
-			reviewResult, reviewErr := runtime.Run(ctx, AgentRequest{
-				Role:         "review",
-				Agent:        reviewer,
-				Prompt:       reviewerTaskPrompt,
-				SystemPrompt: reviewerSystemPrompt,
-				Model:        task.Model,
-				Workdir:      normalized.Workdir,
-				RunDir:       runDir,
-				OutputPrefix: "reviewer",
-				TaskLabel:    taskLabel,
-				CodexBin:     normalized.CodexBin,
-				ClaudeBin:    normalized.ClaudeBin,
-				Verbose:      normalized.Verbose,
-			})
-			reviewerOutput := reviewResult.Output
-			totalCost += reviewResult.CostUSD
-			_ = writeText(filepath.Join(runDir, "reviewer.output.txt"), reviewerOutput)
-
-			render.Phase("reviewer", string(reviewer), fmt.Sprintf("review complete [%.1fs]", reviewResult.DurationS))
-
-			if reviewErr != nil {
-				if isCancellationErr(reviewErr) || ctx.Err() != nil {
-					cancelErr := cancellationCause(ctx, reviewErr)
-					_ = store.WriteCheckpoint(planFile, CheckpointEntry{
-						Timestamp: time.Now().UTC().Format(time.RFC3339),
-						Status:    "canceled",
-						TaskID:    task.ID,
-						Signature: signature,
-						RunID:     runID,
-						Message:   cancelErr.Error(),
-					})
-					return stats, cancelErr
-				}
-				stats.TasksRejected++
-				nextRetry, incErr := store.IncrementRetryCount(signature)
-				if incErr != nil {
-					return stats, incErr
-				}
-				_ = store.WriteFeedback(signature, fmt.Sprintf("reviewer process failed: %v", reviewErr))
-				if gitSafetyEnabled {
-					if rbErr := store.RollbackGitSnapshot(runID, normalized.Workdir); rbErr != nil {
-						render.Warn(fmt.Sprintf("git rollback failed: %v", rbErr))
-					}
-				}
-				_ = store.WriteTaskMetrics(CostEntry{
-					Timestamp: time.Now().UTC().Format(time.RFC3339),
-					RunID:     runID,
-					TaskID:    task.ID,
-					Agent:     string(reviewer),
-					Role:      "reviewer",
-					DurationS: reviewResult.DurationS,
-					Status:    "fail",
-					CostUSD:   reviewResult.CostUSD,
-				})
-				_ = store.WriteCheckpoint(planFile, CheckpointEntry{
-					Timestamp: time.Now().UTC().Format(time.RFC3339),
-					Status:    "reviewer_crashed",
-					TaskID:    task.ID,
-					Signature: signature,
-					RunID:     runID,
-					Message:   fmt.Sprintf("reviewer process failed: %v", reviewErr),
-				})
-				render.Error(fmt.Sprintf("Reviewer failed: %v (retry %d/%d)", reviewErr, nextRetry, normalized.MaxRetries))
-				stats.Iterations++
-				continue
-			}
-
-			// Write reviewer metrics.
-			_ = store.WriteTaskMetrics(CostEntry{
-				Timestamp: time.Now().UTC().Format(time.RFC3339),
-				RunID:     runID,
-				TaskID:    task.ID,
-				Agent:     string(reviewer),
-				Role:      "reviewer",
-				DurationS: reviewResult.DurationS,
-				Status:    "pass",
-				CostUSD:   reviewResult.CostUSD,
-			})
-
-			decision = ParseReviewDecision(reviewerOutput)
-		}
-
-		if !decision.Pass {
-			stats.TasksRejected++
-			nextRetry, incErr := store.IncrementRetryCount(signature)
-			if incErr != nil {
-				return stats, incErr
-			}
-			_ = store.WriteFeedback(signature, decision.Reason)
-			if gitSafetyEnabled {
-				if rbErr := store.RollbackGitSnapshot(runID, normalized.Workdir); rbErr != nil {
-					render.Warn(fmt.Sprintf("git rollback failed: %v", rbErr))
-				}
-			}
-			_ = store.WriteCheckpoint(planFile, CheckpointEntry{
-				Timestamp: time.Now().UTC().Format(time.RFC3339),
-				Status:    "review_rejected",
-				TaskID:    task.ID,
-				Signature: signature,
-				RunID:     runID,
-				Message:   decision.Reason,
-			})
-			render.Warn(fmt.Sprintf("Review rejected: %s (retry %d/%d)", decision.Reason, nextRetry, normalized.MaxRetries))
-			stats.Iterations++
-			continue
-		}
-
-		state.Tasks[index].Status = TaskStatusDone
-		if err := store.WriteState(planFile, state); err != nil {
-			return stats, err
-		}
-		if err := store.ClearRetryCount(signature); err != nil {
-			return stats, err
-		}
-		if err := store.ClearFeedback(signature); err != nil {
-			return stats, err
-		}
-
-		// Git safety: discard snapshot on success (Step 9).
-		if gitSafetyEnabled {
-			_ = store.DiscardGitSnapshot(runID)
-		}
-
-		_ = store.WriteCheckpoint(planFile, CheckpointEntry{
-			Timestamp: time.Now().UTC().Format(time.RFC3339),
-			Status:    "completed",
-			TaskID:    task.ID,
-			Signature: signature,
-			RunID:     runID,
-			Message:   fmt.Sprintf("task completed: %s", task.Title),
-		})
-
-		stats.TasksDone++
-		stats.Iterations++
-		render.Success(fmt.Sprintf("Completed: %s", taskLabel))
+		return false, fmt.Errorf("plan is blocked by dependencies:\n- %s", strings.Join(report, "\n- "))
 	}
 
-	stats.TotalCostUSD = totalCost
-	stats.TotalDuration = time.Since(loopStart)
-	render.Summary(stats.TasksDone, stats.TasksRejected, stats.Iterations, stats.TotalCostUSD, stats.TotalDuration)
-	return stats, nil
+	executor, err := resolveExecutor(task, run.options.DefaultExecutor)
+	if err != nil {
+		return false, fmt.Errorf("task %s: %w", task.ID, err)
+	}
+	reviewer, err := resolveReviewer(task, run.options.DefaultReviewer, run.options.SkipReview)
+	if err != nil {
+		return false, fmt.Errorf("task %s: %w", task.ID, err)
+	}
+
+	signature := run.store.TaskSignatureForPlan(run.planFile, index, task)
+	retries, err := run.store.ReadRetryCount(signature)
+	if err != nil {
+		return false, err
+	}
+	if retries >= run.options.MaxRetries {
+		return false, fmt.Errorf("retry limit reached for task %s (%s)", task.ID, task.Title)
+	}
+
+	feedback, err := run.store.ReadFeedback(signature)
+	if err != nil {
+		return false, err
+	}
+
+	progress := fmt.Sprintf("%d/%d", run.state.DoneCount()+1, len(run.state.Tasks))
+	selected := taskSelection{
+		index:     index,
+		task:      task,
+		executor:  executor,
+		reviewer:  reviewer,
+		signature: signature,
+		retries:   retries,
+		feedback:  feedback,
+		progress:  progress,
+	}
+	runDir, err := prepareRunDir(run.store.LogsDir(), task, signature)
+	if err != nil {
+		return false, err
+	}
+	runID := filepath.Base(runDir)
+
+	if err := run.gitSafety.PrepareTask(runID); err != nil {
+		return false, err
+	}
+
+	taskLabel := task.ID
+	if strings.TrimSpace(taskLabel) == "" {
+		taskLabel = fmt.Sprintf("#%d", index)
+	}
+	selected.taskLabel = taskLabel
+	run.render.Task(progress, taskLabel, task.Title)
+	run.render.Phase("executor", string(selected.executor), fmt.Sprintf("attempt %d/%d", selected.retries+1, run.options.MaxRetries))
+
+	executorSystemPrompt := buildExecutorSystemPrompt()
+	executorTaskPrompt := buildExecutorTaskPrompt(run.planFile, selected.index, selected.task, selected.feedback, selected.retries, run.plan.Title, selected.progress, run.options.Workdir)
+	_ = writeText(filepath.Join(runDir, "executor.system.txt"), executorSystemPrompt)
+	_ = writeText(filepath.Join(runDir, "executor.prompt.txt"), executorTaskPrompt)
+
+	execResult, execErr := run.runtime.Run(ctx, AgentRequest{
+		Role:         "execute",
+		Agent:        selected.executor,
+		Prompt:       executorTaskPrompt,
+		SystemPrompt: executorSystemPrompt,
+		Model:        selected.task.Model,
+		Workdir:      run.options.Workdir,
+		RunDir:       runDir,
+		OutputPrefix: "executor",
+		TaskLabel:    taskLabel,
+		CodexBin:     run.options.CodexBin,
+		ClaudeBin:    run.options.ClaudeBin,
+		Verbose:      run.options.Verbose,
+	})
+	executorOutput := execResult.Output
+	run.totalCost += execResult.CostUSD
+	_ = writeText(filepath.Join(runDir, "executor.output.txt"), executorOutput)
+
+	run.render.Phase("executor", string(selected.executor), fmt.Sprintf("attempt %d/%d [%.1fs]", selected.retries+1, run.options.MaxRetries, execResult.DurationS))
+
+	if execErr != nil {
+		if isCancellationErr(execErr) || ctx.Err() != nil {
+			cancelErr := cancellationCause(ctx, execErr)
+			_, applyErr := r.applyTaskOutcome(run, selected, runID, taskOutcome{
+				kind:      taskOutcomeCanceled,
+				message:   cancelErr.Error(),
+				cancelErr: cancelErr,
+			})
+			return false, applyErr
+		}
+		return r.applyTaskOutcome(run, selected, runID, taskOutcome{
+			kind:         taskOutcomeRetry,
+			status:       "executor_crashed",
+			message:      fmt.Sprintf("executor process failed: %v", execErr),
+			feedback:     fmt.Sprintf("executor process failed: %v", execErr),
+			rollback:     true,
+			renderLevel:  "error",
+			renderFormat: "Executor failed: %v (retry %d/%d)",
+			renderArgs:   []any{execErr},
+			metrics: []CostEntry{
+				{
+					Timestamp: time.Now().UTC().Format(time.RFC3339),
+					RunID:     runID,
+					TaskID:    selected.task.ID,
+					Agent:     string(selected.executor),
+					Role:      "executor",
+					DurationS: execResult.DurationS,
+					Status:    "fail",
+					CostUSD:   execResult.CostUSD,
+				},
+			},
+		})
+	}
+
+	result := ParseExecutorResult(executorOutput)
+	if result != ExecutorResultPass {
+		feedback := "executor self-reported RESULT: FAIL"
+		if result == ExecutorResultUnknown {
+			feedback = "executor output missing or invalid RESULT line"
+		}
+		return r.applyTaskOutcome(run, selected, runID, taskOutcome{
+			kind:         taskOutcomeRetry,
+			status:       "executor_fail",
+			message:      fmt.Sprintf("executor reported RESULT: %s", result),
+			feedback:     feedback,
+			rollback:     true,
+			renderLevel:  "error",
+			renderFormat: "Executor reported %s (retry %d/%d)",
+			renderArgs:   []any{result},
+			metrics: []CostEntry{
+				{
+					Timestamp: time.Now().UTC().Format(time.RFC3339),
+					RunID:     runID,
+					TaskID:    selected.task.ID,
+					Agent:     string(selected.executor),
+					Role:      "executor",
+					DurationS: execResult.DurationS,
+					Status:    "fail",
+					CostUSD:   execResult.CostUSD,
+				},
+			},
+		})
+	}
+
+	run.transitions.WriteMetric(CostEntry{
+		Timestamp: time.Now().UTC().Format(time.RFC3339),
+		RunID:     runID,
+		TaskID:    selected.task.ID,
+		Agent:     string(selected.executor),
+		Role:      "executor",
+		DurationS: execResult.DurationS,
+		Status:    "pass",
+		CostUSD:   execResult.CostUSD,
+	})
+
+	if run.options.PostTaskHook != "" {
+		run.render.Phase("hook", "post-task", run.options.PostTaskHook)
+		hookPassed, hookFeedback := runPostTaskHook(ctx, run.options.PostTaskHook, run.options.Workdir, runDir)
+		if !hookPassed {
+			if ctx.Err() != nil {
+				cancelErr := cancellationCause(ctx, nil)
+				_, applyErr := r.applyTaskOutcome(run, selected, runID, taskOutcome{
+					kind:      taskOutcomeCanceled,
+					message:   cancelErr.Error(),
+					cancelErr: cancelErr,
+				})
+				return false, applyErr
+			}
+			return r.applyTaskOutcome(run, selected, runID, taskOutcome{
+				kind:         taskOutcomeRetry,
+				status:       "hook_failed",
+				message:      "post-task hook failed",
+				feedback:     hookFeedback,
+				rollback:     true,
+				renderLevel:  "error",
+				renderFormat: "Post-task hook failed (retry %d/%d)",
+			})
+		}
+	}
+
+	decision := ReviewDecision{Pass: true, Reason: "review skipped"}
+	if selected.reviewer != AgentNone {
+		run.render.Phase("reviewer", string(selected.reviewer), "reviewing task result")
+		gitDiff := CaptureGitDiff(run.options.Workdir, 500)
+
+		reviewerSystemPrompt := buildReviewerSystemPrompt()
+		reviewerTaskPrompt := buildReviewerTaskPrompt(run.planFile, selected.task, executorOutput, run.options.Workdir, run.plan.Title, selected.progress, gitDiff)
+		_ = writeText(filepath.Join(runDir, "reviewer.system.txt"), reviewerSystemPrompt)
+		_ = writeText(filepath.Join(runDir, "reviewer.prompt.txt"), reviewerTaskPrompt)
+
+		reviewResult, reviewErr := run.runtime.Run(ctx, AgentRequest{
+			Role:         "review",
+			Agent:        selected.reviewer,
+			Prompt:       reviewerTaskPrompt,
+			SystemPrompt: reviewerSystemPrompt,
+			Model:        selected.task.Model,
+			Workdir:      run.options.Workdir,
+			RunDir:       runDir,
+			OutputPrefix: "reviewer",
+			TaskLabel:    taskLabel,
+			CodexBin:     run.options.CodexBin,
+			ClaudeBin:    run.options.ClaudeBin,
+			Verbose:      run.options.Verbose,
+		})
+		reviewerOutput := reviewResult.Output
+		run.totalCost += reviewResult.CostUSD
+		_ = writeText(filepath.Join(runDir, "reviewer.output.txt"), reviewerOutput)
+
+		run.render.Phase("reviewer", string(selected.reviewer), fmt.Sprintf("review complete [%.1fs]", reviewResult.DurationS))
+
+		if reviewErr != nil {
+			if isCancellationErr(reviewErr) || ctx.Err() != nil {
+				cancelErr := cancellationCause(ctx, reviewErr)
+				_, applyErr := r.applyTaskOutcome(run, selected, runID, taskOutcome{
+					kind:      taskOutcomeCanceled,
+					message:   cancelErr.Error(),
+					cancelErr: cancelErr,
+				})
+				return false, applyErr
+			}
+			return r.applyTaskOutcome(run, selected, runID, taskOutcome{
+				kind:         taskOutcomeRetry,
+				status:       "reviewer_crashed",
+				message:      fmt.Sprintf("reviewer process failed: %v", reviewErr),
+				feedback:     fmt.Sprintf("reviewer process failed: %v", reviewErr),
+				rollback:     true,
+				renderLevel:  "error",
+				renderFormat: "Reviewer failed: %v (retry %d/%d)",
+				renderArgs:   []any{reviewErr},
+				metrics: []CostEntry{
+					{
+						Timestamp: time.Now().UTC().Format(time.RFC3339),
+						RunID:     runID,
+						TaskID:    selected.task.ID,
+						Agent:     string(selected.reviewer),
+						Role:      "reviewer",
+						DurationS: reviewResult.DurationS,
+						Status:    "fail",
+						CostUSD:   reviewResult.CostUSD,
+					},
+				},
+			})
+		}
+
+		run.transitions.WriteMetric(CostEntry{
+			Timestamp: time.Now().UTC().Format(time.RFC3339),
+			RunID:     runID,
+			TaskID:    selected.task.ID,
+			Agent:     string(selected.reviewer),
+			Role:      "reviewer",
+			DurationS: reviewResult.DurationS,
+			Status:    "pass",
+			CostUSD:   reviewResult.CostUSD,
+		})
+
+		decision = ParseReviewDecision(reviewerOutput)
+	}
+
+	if !decision.Pass {
+		return r.applyTaskOutcome(run, selected, runID, taskOutcome{
+			kind:         taskOutcomeRetry,
+			status:       "review_rejected",
+			message:      decision.Reason,
+			feedback:     decision.Reason,
+			rollback:     true,
+			renderLevel:  "warn",
+			renderFormat: "Review rejected: %s (retry %d/%d)",
+			renderArgs:   []any{decision.Reason},
+		})
+	}
+
+	return r.applyTaskOutcome(run, selected, runID, taskOutcome{
+		kind:            taskOutcomeComplete,
+		message:         fmt.Sprintf("task completed: %s", selected.task.Title),
+		renderFormat:    "Completed: %s",
+		renderArgs:      []any{selected.taskLabel},
+		discardSnapshot: true,
+	})
 }
 
 func normalizeRunnerOptions(options RunnerOptions) (RunnerOptions, error) {
