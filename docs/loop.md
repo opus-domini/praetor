@@ -1,32 +1,31 @@
-# Loop orchestration
+# Task orchestration
 
-`praetor loop` is the plan-driven orchestration runtime. It replaces the bash loop scripts with a compiled Go binary that provides git safety, cost tracking, crash recovery, and structured observability.
+Praetor's core is plan-driven task orchestration. Define a sequence of tasks in a JSON plan, then execute it with `praetor run`. Each task goes through an executor agent, an optional post-task hook, and a reviewer agent before being marked as done.
 
 ## Commands
 
 ### Create a plan
 
 ```bash
-praetor loop plan new my-feature
+praetor plan create my-feature
 ```
 
-Generates a skeleton plan file at `docs/plans/PLAN-PRAETOR-<date>-my-feature.json` with two sample tasks.
+Generates a skeleton plan at `docs/plans/PLAN-PRAETOR-<date>-my-feature.json` with two sample tasks.
 
 ### Run a plan
 
 ```bash
-praetor loop run --plan docs/plans/PLAN-PRAETOR-2026-02-25-my-feature.json
+praetor run docs/plans/my-plan.json
 ```
 
 ### Run with options
 
 ```bash
-praetor loop run \
-  --plan docs/plans/PLAN-PRAETOR-2026-02-25-my-feature.json \
-  --default-executor claude \
-  --default-reviewer claude \
+praetor run docs/plans/my-plan.json \
+  --executor claude \
+  --reviewer claude \
   --max-retries 5 \
-  --post-task-hook ./scripts/validate.sh \
+  --hook ./scripts/validate.sh \
   --tmux-session praetor-team \
   --timeout 2h
 ```
@@ -34,7 +33,7 @@ praetor loop run \
 ### Check progress
 
 ```bash
-praetor loop plan status --plan docs/plans/PLAN-PRAETOR-2026-02-25-my-feature.json
+praetor plan status docs/plans/my-plan.json
 ```
 
 Output:
@@ -56,13 +55,13 @@ Status:   in progress
 ### List all tracked plans
 
 ```bash
-praetor loop plan list
+praetor plan list
 ```
 
 ### Reset plan state
 
 ```bash
-praetor loop plan reset --plan docs/plans/PLAN-PRAETOR-2026-02-25-my-feature.json
+praetor plan reset docs/plans/my-plan.json
 ```
 
 Removes state, lock, retry counters, and feedback files for the plan. Does not delete the plan file itself.
@@ -105,8 +104,8 @@ Plans are JSON files with a `tasks` array. Each task can specify its own executo
 | `id` | no | Unique task identifier. Auto-generated as `auto-<index>` if omitted. |
 | `title` | yes | Short task description. |
 | `depends_on` | no | Array of task IDs that must complete before this task runs. |
-| `executor` | no | Agent for execution: `codex` or `claude`. Falls back to `--default-executor`. |
-| `reviewer` | no | Agent for review: `codex`, `claude`, or `none`. Falls back to `--default-reviewer`. |
+| `executor` | no | Agent for execution: `codex` or `claude`. Falls back to `--executor`. |
+| `reviewer` | no | Agent for review: `codex`, `claude`, or `none`. Falls back to `--reviewer`. |
 | `model` | no | Model hint: `sonnet`, `opus`, or `haiku`. |
 | `description` | no | Detailed task description included in the executor prompt. |
 | `criteria` | no | Acceptance criteria included in both executor and reviewer prompts. |
@@ -217,7 +216,7 @@ Disable with `--git-safety=false` for non-git workspaces.
 
 ### Post-task hook
 
-A custom script (`--post-task-hook <path>`) runs between the executor and reviewer phases:
+A custom script (`--hook <path>`) runs between the executor and reviewer phases:
 
 - The hook runs with the workdir as CWD.
 - Exit code 0: proceed to reviewer.
@@ -228,7 +227,7 @@ Use this for linters, type checkers, or integration tests that must pass before 
 
 ### Pre-flight checks
 
-Before the loop starts, all required binaries are validated with `exec.LookPath`:
+Before the run starts, all required binaries are validated with `exec.LookPath`:
 
 - `tmux` (always required)
 - `codex` (if any task uses the codex executor or reviewer)

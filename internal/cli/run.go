@@ -2,40 +2,79 @@ package cli
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"io"
+	"path/filepath"
 	"strings"
 	"time"
 
-	"github.com/opus-domini/praetor/internal/orchestrator"
+	"github.com/opus-domini/praetor/internal/loop"
 	"github.com/spf13/cobra"
 )
 
 func newRunCmd() *cobra.Command {
-	var provider string
-	var prompt string
+	var stateRoot string
+	var workdir string
+	var executor string
+	var reviewer string
+	var maxRetries int
+	var maxIterations int
+	var noReview bool
+	var force bool
+	var codexBin string
+	var claudeBin string
+	var tmuxSession string
+	var noColor bool
+	var gitSafety bool
+	var postTaskHook string
 	var timeout time.Duration
 
 	cmd := &cobra.Command{
-		Use:   "run",
-		Short: "Run one prompt on a provider",
-		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			resolvedPrompt, err := readPrompt(prompt, cmd.InOrStdin())
+		Use:   "run <plan-file>",
+		Short: "Execute a task plan",
+		Long: `Execute a task plan with executor/reviewer orchestration.
+
+Each task runs an executor agent, then an independent reviewer agent
+that gates promotion. Failed tasks are retried with feedback. Git
+safety snapshots protect the working tree from partial changes.`,
+		Example: `  praetor run docs/plans/my-plan.json
+  praetor run docs/plans/my-plan.json --executor claude --reviewer claude
+  praetor run docs/plans/my-plan.json --hook ./scripts/lint.sh --timeout 1h`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			absPlan, err := filepath.Abs(strings.TrimSpace(args[0]))
+			if err != nil {
+				return fmt.Errorf("resolve plan path: %w", err)
+			}
+
+			absWorkdir := strings.TrimSpace(workdir)
+			if absWorkdir != "" {
+				absWorkdir, err = filepath.Abs(absWorkdir)
+				if err != nil {
+					return fmt.Errorf("resolve workdir path: %w", err)
+				}
+			}
+
+			resolvedStateRoot, err := resolveStateRoot(stateRoot, absWorkdir)
 			if err != nil {
 				return err
 			}
 
-			providerID := orchestrator.ProviderID(strings.TrimSpace(provider))
-			p, err := buildProvider(providerID)
-			if err != nil {
-				return err
-			}
-
-			registry := orchestrator.NewRegistry()
-			if err := registry.Register(p); err != nil {
-				return err
+			runner := loop.NewRunner(nil)
+			runnerOptions := loop.RunnerOptions{
+				StateRoot:       resolvedStateRoot,
+				Workdir:         absWorkdir,
+				DefaultExecutor: loop.Agent(executor),
+				DefaultReviewer: loop.Agent(reviewer),
+				MaxRetries:      maxRetries,
+				MaxIterations:   maxIterations,
+				SkipReview:      noReview,
+				Force:           force,
+				CodexBin:        codexBin,
+				ClaudeBin:       claudeBin,
+				TMUXSession:     tmuxSession,
+				NoColor:         noColor,
+				GitSafety:       gitSafety,
+				PostTaskHook:    postTaskHook,
 			}
 
 			ctx := cmd.Context()
@@ -45,39 +84,30 @@ func newRunCmd() *cobra.Command {
 				defer cancel()
 			}
 
-			engine := orchestrator.New(registry)
-			result, err := engine.Run(ctx, orchestrator.Request{
-				Provider: providerID,
-				Prompt:   resolvedPrompt,
-			})
+			stats, err := runner.Run(ctx, cmd.OutOrStdout(), absPlan, runnerOptions)
 			if err != nil {
 				return err
 			}
 
-			_, err = fmt.Fprintln(cmd.OutOrStdout(), result.Response)
+			_, err = fmt.Fprintf(cmd.OutOrStdout(), "State saved at: %s\n", stats.StateFile)
 			return err
 		},
 	}
 
-	cmd.Flags().StringVar(&provider, "provider", string(orchestrator.ProviderCodex), "Provider to execute: codex or claude")
-	cmd.Flags().StringVar(&prompt, "prompt", "", "Prompt text. If empty, the command reads stdin")
-	cmd.Flags().DurationVar(&timeout, "timeout", 0, "Optional timeout, for example: 30s")
+	cmd.Flags().StringVar(&executor, "executor", string(loop.AgentCodex), "Default executor agent: codex or claude")
+	cmd.Flags().StringVar(&reviewer, "reviewer", string(loop.AgentClaude), "Default reviewer agent: codex, claude, or none")
+	cmd.Flags().IntVar(&maxRetries, "max-retries", 3, "Maximum retries per task")
+	cmd.Flags().IntVar(&maxIterations, "max-iterations", 0, "Maximum loop iterations (0 = unlimited)")
+	cmd.Flags().BoolVar(&noReview, "no-review", false, "Skip the reviewer gate and auto-approve executor outputs")
+	cmd.Flags().BoolVar(&force, "force", false, "Override an existing plan lock")
+	cmd.Flags().StringVar(&codexBin, "codex-bin", "codex", "Codex binary path or name")
+	cmd.Flags().StringVar(&claudeBin, "claude-bin", "claude", "Claude binary path or name")
+	cmd.Flags().StringVar(&tmuxSession, "tmux-session", "", "tmux session name (default: praetor-<project-hash>)")
+	cmd.Flags().StringVar(&workdir, "workdir", ".", "Working directory for agents")
+	cmd.Flags().StringVar(&stateRoot, "state-root", "", "State root directory (default: ~/.praetor/projects/<hash>)")
+	cmd.Flags().BoolVar(&noColor, "no-color", false, "Disable colored output")
+	cmd.Flags().BoolVar(&gitSafety, "git-safety", true, "Enable git snapshot/rollback on failure")
+	cmd.Flags().StringVar(&postTaskHook, "hook", "", "Script to run after executor, before reviewer")
+	cmd.Flags().DurationVar(&timeout, "timeout", 0, "Run timeout (e.g. 30m, 2h)")
 	return cmd
-}
-
-func readPrompt(flagPrompt string, in io.Reader) (string, error) {
-	if prompt := strings.TrimSpace(flagPrompt); prompt != "" {
-		return prompt, nil
-	}
-
-	data, err := io.ReadAll(in)
-	if err != nil {
-		return "", fmt.Errorf("read prompt from stdin: %w", err)
-	}
-
-	prompt := strings.TrimSpace(string(data))
-	if prompt == "" {
-		return "", errors.New("prompt is required: pass --prompt or pipe text via stdin")
-	}
-	return prompt, nil
 }

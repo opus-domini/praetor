@@ -4,8 +4,8 @@
 
 `praetor` is a CLI-first orchestrator with two complementary execution modes:
 
-- **Single-prompt dispatch** (`praetor run`) — send one prompt to one provider, get the response.
-- **Plan-driven loop** (`praetor loop run`) — execute a dependency-ordered sequence of tasks through an executor/reviewer pipeline inside tmux sessions.
+- **Plan-driven execution** (`praetor run <plan>`) — execute a dependency-ordered sequence of tasks through an executor/reviewer pipeline inside tmux sessions.
+- **Single-prompt dispatch** (`praetor exec`) — send one prompt to one provider, get the response.
 
 Current providers: **Claude Code** and **Codex**.
 
@@ -15,11 +15,10 @@ Current providers: **Claude Code** and **Codex**.
 cmd/praetor/                      CLI entrypoint (main.go)
 internal/
 ├── cli/                          Cobra command wiring and flag parsing
-│   ├── root.go                   Root command, provider registry
-│   ├── run.go                    praetor run (single-prompt)
-│   ├── loop.go                   praetor loop (parent command)
-│   ├── loop_run.go               praetor loop run
-│   └── loop_plan.go              praetor loop plan {new,status,list,reset}
+│   ├── root.go                   Root command
+│   ├── run.go                    praetor run <plan-file>
+│   ├── plan.go                   praetor plan {create,list,status,reset}
+│   └── exec.go                   praetor exec [prompt]
 ├── loop/                         Plan-driven orchestration runtime
 │   ├── types.go                  Plan, Task, State, AgentRuntime interface
 │   ├── plan.go                   Plan loading, validation, checksum, scaffolding
@@ -53,7 +52,7 @@ internal/
 | Package | Responsibility |
 |---------|---------------|
 | `cmd/praetor` | Process entrypoint. Calls `cli.NewRootCmd().Execute()`. |
-| `internal/cli` | Cobra command tree, flag parsing, provider construction. No business logic. |
+| `internal/cli` | Cobra command tree (`run`, `plan`, `exec`), flag parsing, provider construction. No business logic. |
 | `internal/loop` | Immutable plan model, mutable state store, dependency graph, runner pipeline, agent runtimes, prompt construction, terminal output. |
 | `internal/orchestrator` | Provider contract (`Provider` interface), request/response types, provider registry, dispatch engine. |
 | `internal/providers/claude` | Full Go port of `@anthropic-ai/claude-agent-sdk`. Communicates with the `claude` CLI process over `stream-json`. |
@@ -61,16 +60,16 @@ internal/
 
 ## Execution flow
 
-### Single-prompt mode (`praetor run`)
+### Single-prompt mode (`praetor exec`)
 
-1. CLI parses `--provider` and `--prompt` (or reads stdin).
+1. CLI parses `--provider` and the prompt argument (or reads stdin).
 2. `buildProvider()` constructs the selected provider implementation.
 3. Provider is registered in the orchestration registry.
 4. Orchestration engine validates the request and dispatches to the provider.
 5. Provider adapter translates between the orchestrator contract and the provider-specific SDK surface.
 6. Response is printed to stdout.
 
-### Plan-driven loop (`praetor loop run`)
+### Plan execution (`praetor run <plan>`)
 
 1. CLI loads and validates the plan JSON file (immutable input).
 2. Runner acquires a PID-based lock to prevent concurrent runs of the same plan.
@@ -102,8 +101,8 @@ Two implementations:
 
 | Runtime | How it works |
 |---------|-------------|
-| `TMUXAgentRuntime` | Creates a wrapper shell script, launches it in a tmux window, uses `tmux wait-for` to block until completion. Captures stdout/stderr/exit code as files. Extracts cost from Codex JSON output. Default runtime for `loop run`. |
-| `SDKAgentRuntime` | Calls the Claude/Codex Go SDK ports directly in-process. Used by `praetor run` (single-prompt mode). |
+| `TMUXAgentRuntime` | Creates a wrapper shell script, launches it in a tmux window, uses `tmux wait-for` to block until completion. Captures stdout/stderr/exit code as files. Extracts cost from Codex JSON output. Default runtime for `praetor run`. |
+| `SDKAgentRuntime` | Calls the Claude/Codex Go SDK ports directly in-process. Used by `praetor exec` (single-prompt mode). |
 
 ## Dependencies
 
