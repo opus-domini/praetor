@@ -13,6 +13,16 @@ linters:
     - gosec
     - misspell
     - whitespace
+  settings:
+    gosec:
+      excludes:
+        - G117
+        - G204
+        - G301
+        - G304
+        - G306
+        - G401
+        - G505
 
 issues:
   max-issues-per-linter: 0

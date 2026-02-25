@@ -214,7 +214,9 @@ func readSessionMetadata(path string) (sessionMetadata, error) {
 	if err != nil {
 		return sessionMetadata{}, fmt.Errorf("open session file: %w", err)
 	}
-	defer f.Close()
+	defer func() {
+		_ = f.Close()
+	}()
 
 	meta := sessionMetadata{}
 	scanner := bufio.NewScanner(f)

@@ -8,7 +8,9 @@ func Prompt(ctx context.Context, prompt string, opts Options) (SDKMessage, error
 	if err != nil {
 		return SDKMessage{}, err
 	}
-	defer q.Close()
+	defer func() {
+		_ = q.Close()
+	}()
 
 	if err := q.SendUserText(prompt); err != nil {
 		return SDKMessage{}, err

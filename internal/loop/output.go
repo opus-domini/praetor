@@ -21,43 +21,43 @@ func NewRenderer(out io.Writer, noColor bool) *Renderer {
 }
 
 func (r *Renderer) Header(title string) {
-	fmt.Fprintf(r.out, "\n%s=== %s ===%s\n", r.c("1;36"), strings.TrimSpace(title), r.reset())
+	_, _ = fmt.Fprintf(r.out, "\n%s=== %s ===%s\n", r.c("1;36"), strings.TrimSpace(title), r.reset())
 }
 
 func (r *Renderer) KV(label, value string) {
-	fmt.Fprintf(r.out, "%s%-12s%s %s\n", r.c("2"), label, r.reset(), value)
+	_, _ = fmt.Fprintf(r.out, "%s%-12s%s %s\n", r.c("2"), label, r.reset(), value)
 }
 
 func (r *Renderer) Task(progress, label, title string) {
-	fmt.Fprintf(r.out, "\n%s[%s] %s%s %s\n", r.c("1;34"), progress, label, r.reset(), title)
+	_, _ = fmt.Fprintf(r.out, "\n%s[%s] %s%s %s\n", r.c("1;34"), progress, label, r.reset(), title)
 }
 
 func (r *Renderer) Phase(phase, agent, detail string) {
-	fmt.Fprintf(r.out, "  %s%-8s%s (%s)%s %s\n", r.c("35"), phase, r.reset(), agent, r.reset(), detail)
+	_, _ = fmt.Fprintf(r.out, "  %s%-8s%s (%s)%s %s\n", r.c("35"), phase, r.reset(), agent, r.reset(), detail)
 }
 
 func (r *Renderer) Info(message string) {
-	fmt.Fprintf(r.out, "  %s[info]%s %s\n", r.c("34"), r.reset(), message)
+	_, _ = fmt.Fprintf(r.out, "  %s[info]%s %s\n", r.c("34"), r.reset(), message)
 }
 
 func (r *Renderer) Success(message string) {
-	fmt.Fprintf(r.out, "  %s[ok]%s %s\n", r.c("32"), r.reset(), message)
+	_, _ = fmt.Fprintf(r.out, "  %s[ok]%s %s\n", r.c("32"), r.reset(), message)
 }
 
 func (r *Renderer) Warn(message string) {
-	fmt.Fprintf(r.out, "  %s[warn]%s %s\n", r.c("33"), r.reset(), message)
+	_, _ = fmt.Fprintf(r.out, "  %s[warn]%s %s\n", r.c("33"), r.reset(), message)
 }
 
 func (r *Renderer) Error(message string) {
-	fmt.Fprintf(r.out, "  %s[err]%s %s\n", r.c("31"), r.reset(), message)
+	_, _ = fmt.Fprintf(r.out, "  %s[err]%s %s\n", r.c("31"), r.reset(), message)
 }
 
 func (r *Renderer) Dim(message string) {
-	fmt.Fprintf(r.out, "%s%s%s\n", r.c("2"), message, r.reset())
+	_, _ = fmt.Fprintf(r.out, "%s%s%s\n", r.c("2"), message, r.reset())
 }
 
 func (r *Renderer) Summary(done, rejected, iterations int) {
-	fmt.Fprintf(r.out, "\n%sRun summary%s done=%d rejected=%d iterations=%d\n", r.c("1"), r.reset(), done, rejected, iterations)
+	_, _ = fmt.Fprintf(r.out, "\n%sRun summary%s done=%d rejected=%d iterations=%d\n", r.c("1"), r.reset(), done, rejected, iterations)
 }
 
 func (r *Renderer) c(code string) string {
