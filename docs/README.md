@@ -1,17 +1,17 @@
 <div align="center">
-    <img src="docs/assets/images/logo.png" alt="Logo Praetor" width="500"/>
+    <img src="assets/images/logo.png" alt="Logo Praetor" width="500"/>
     <hr />
     <p>Lead. Delegate. Dominate.</p>
 </div>
 
 # Praetor Documentation
 
-`praetor` is a Go CLI that orchestrates AI agent providers through a single execution surface. It drives Claude Code and Codex as subprocess agents, coordinated by an executor/reviewer pipeline with worktree isolation, cost tracking, and crash recovery.
+`praetor` is a Go CLI that orchestrates AI agent providers through a single execution surface. It drives Claude, Codex, Gemini, and Ollama as agents, coordinated by an executor/reviewer pipeline with worktree isolation, cost tracking, and crash recovery.
 
 ## Core documentation
 
 - [Architecture](architecture.md) — package boundaries, execution flow, and design rationale
-- [Loop orchestration](loop.md) — plan format, runtime model, safety mechanisms, and CLI reference
+- [Pipeline orchestration](orchestration.md) — plan format, runtime model, safety mechanisms, and CLI reference
 - [Providers overview](providers/README.md) — how providers are abstracted and integrated
 
 ## Provider documentation

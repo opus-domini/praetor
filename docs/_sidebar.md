@@ -1,6 +1,6 @@
 - [Home](/)
 - [Architecture](architecture.md)
-- [Loop Orchestration](loop.md)
+- [Pipeline Orchestration](orchestration.md)
 - Providers
   - [Overview](providers/README.md)
   - [Claude](providers/claude.md)

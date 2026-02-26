@@ -118,21 +118,21 @@ type FileUpdateChange struct {
 }
 ```
 
-## Loop integration
+## Pipeline integration
 
-In the loop runner, Codex runs with `--json` output mode (tmux runtime). The raw JSON output is post-processed to extract:
+In the pipeline runner, Codex runs with `--json` output mode (tmux runtime). The raw JSON output is post-processed to extract:
 
 - `.result` — the agent's text response
 - `.total_cost_usd` — invocation cost for the tracking ledger
 
 Raw JSON is preserved as `<prefix>.raw.json` in the run log directory.
 
-## Orchestrator integration
+## Agent integration
 
-Adapted to the orchestrator contract through:
+Adapted to the agent registry through:
 
 ```go
 provider, err := codex.NewProvider(codex.CodexOptions{})
 provider.ID()                          // "codex"
-provider.Run(ctx, orchestrator.Request{Prompt: "..."})
+provider.Run(ctx, providers.Request{Prompt: "..."})
 ```

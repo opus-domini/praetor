@@ -168,12 +168,12 @@ claude.SandboxSettings{
 - No unstable v2 session API (`unstable_v2_createSession`).
 - Type surface focuses on practical query/session control usage.
 
-## Orchestrator integration
+## Agent integration
 
-Adapted to the orchestrator contract through:
+Adapted to the agent registry through:
 
 ```go
 provider := claude.NewProvider(claude.Options{})
 provider.ID()                          // "claude"
-provider.Run(ctx, orchestrator.Request{Prompt: "..."})
+provider.Run(ctx, providers.Request{Prompt: "..."})
 ```

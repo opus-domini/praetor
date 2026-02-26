@@ -1,6 +1,6 @@
 # Task orchestration
 
-Praetor's core is plan-driven task orchestration. Define a sequence of tasks in a JSON plan, then execute it with `praetor run`. Each task goes through an executor agent, an optional post-task hook, and a reviewer agent before being marked as done.
+Praetor's core is plan-driven task orchestration. Define a sequence of tasks in a JSON plan, then execute it with `praetor plan run`. Each task goes through an executor agent, an optional post-task hook, and a reviewer agent before being marked as done.
 
 ## Commands
 
@@ -15,13 +15,13 @@ Generates a skeleton plan at `docs/plans/PLAN-PRAETOR-<date>-my-feature.json` wi
 ### Run a plan
 
 ```bash
-praetor run docs/plans/my-plan.json
+praetor plan run docs/plans/my-plan.json
 ```
 
 ### Run with options
 
 ```bash
-praetor run docs/plans/my-plan.json \
+praetor plan run docs/plans/my-plan.json \
   --executor claude \
   --reviewer claude \
   --max-retries 5 \
@@ -115,8 +115,8 @@ Plans are JSON files with a `tasks` array. Each task can specify its own executo
 | `id` | no | Unique task identifier. Auto-generated as `auto-<index>` if omitted. |
 | `title` | yes | Short task description. |
 | `depends_on` | no | Array of task IDs that must complete before this task runs. |
-| `executor` | no | Agent for execution: `codex` or `claude`. Falls back to `--executor`. |
-| `reviewer` | no | Agent for review: `codex`, `claude`, or `none`. Falls back to `--reviewer`. |
+| `executor` | no | Agent for execution: `codex`, `claude`, `gemini`, or `ollama`. Falls back to `--executor`. |
+| `reviewer` | no | Agent for review: `codex`, `claude`, `gemini`, `ollama`, or `none`. Falls back to `--reviewer`. |
 | `model` | no | Model hint: `sonnet`, `opus`, or `haiku`. |
 | `description` | no | Detailed task description included in the executor prompt. |
 | `criteria` | no | Acceptance criteria included in both executor and reviewer prompts. |
@@ -131,8 +131,8 @@ The plan is validated at load time:
 - Every task must have a non-empty `title`.
 - Task IDs must be unique.
 - `depends_on` must reference existing task IDs.
-- `executor` must be `codex` or `claude` (if specified).
-- `reviewer` must be `codex`, `claude`, or `none` (if specified).
+- `executor` must be `codex`, `claude`, `gemini`, or `ollama` (if specified).
+- `reviewer` must be `codex`, `claude`, `gemini`, `ollama`, or `none` (if specified).
 - `model` must be `sonnet`, `opus`, or `haiku` (if specified).
 
 ## Runtime model
@@ -332,9 +332,10 @@ Use this for linters, type checkers, or integration tests that must pass before 
 
 Before the run starts, all required binaries are validated with `exec.LookPath`:
 
-- `tmux` (always required)
+- `tmux` (always required in tmux runner mode)
 - `codex` (if any task uses the codex executor or reviewer)
 - `claude` (if any task uses the claude executor or reviewer)
+- `gemini` (if any task uses the gemini executor or reviewer)
 
 Missing binaries produce a clear error listing all that are absent.
 
@@ -376,7 +377,7 @@ The current checkpoint is also written as a key-value file at `checkpoints/<plan
 Colored, structured output shows real-time progress:
 
 ```
-=== Praetor Loop ===
+=== Praetor ===
 Plan:        implement user auth
 Plan file:   docs/plans/plan.json
 State:       ~/.local/state/praetor/projects/abc123/state/plan.state.json
