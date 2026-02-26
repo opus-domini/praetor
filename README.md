@@ -1,51 +1,68 @@
 <div align="center">
-    <img src="docs/assets/images/logo.svg" alt="Logo Praetor" width="400"/>
+    <img src="docs/assets/images/logo.svg" alt="Praetor logo" width="500"/>
     <hr />
-    <p>Lead. Delegate. Dominate.</p>
+    <p><strong>Lead. Delegate. Dominate.</strong></p>
+    <p>
+        <a href="https://goreportcard.com/report/github.com/opus-domini/praetor"><img src="https://goreportcard.com/badge/github.com/opus-domini/praetor" alt="Go Report Badge"></a>
+        <a href="https://pkg.go.dev/github.com/opus-domini/praetor"><img src="https://pkg.go.dev/badge/github.com/opus-domini/praetor.svg" alt="Go Package Docs Badge"></a>
+        <a href="https://github.com/opus-domini/praetor/actions/workflows/ci.yml"><img src="https://github.com/opus-domini/praetor/actions/workflows/ci.yml/badge.svg" alt="CI Badge"></a>
+        <a href="https://github.com/opus-domini/praetor/releases"><img src="https://img.shields.io/github/v/release/opus-domini/praetor" alt="Release Badge"></a>
+    </p>
 </div>
 
-`praetor` is a Go CLI that orchestrates AI agents through a single command surface. It drives Claude Code and Codex as subprocess agents, coordinated by an executor/reviewer pipeline with worktree isolation, cost tracking, and crash recovery.
+Praetor is a Go CLI for agent orchestration with a strict Plan-and-Execute runtime.
+It executes dependency-aware plans with isolated worktrees, independent review gates, snapshot-based recovery, and explicit runtime strategy tracking.
 
-## Features
+<p align="center">
+  <a href="https://opus-domini.github.io/praetor/">Documentation</a> •
+  <a href="https://github.com/opus-domini/praetor/releases">Releases</a> •
+  <a href="#quick-start">Quick Start</a>
+</p>
 
-- **Plan-driven execution** — define tasks with dependencies, executors, and reviewers in a JSON plan. Run it with `praetor run`.
-- **Provider abstraction** — Claude and Codex behind a common interface. Add new providers without changing CLI or runner logic.
-- **Tmux-first execution** — every agent invocation runs in a dedicated tmux window for live operational visibility.
-- **Executor/reviewer pipeline** — each task runs an executor agent, then an independent reviewer agent that gates promotion.
-- **Worktree isolation** — each task runs in a dedicated `git worktree`. On success the branch is merged back; on failure the worktree is deleted.
-- **Cost tracking** — per-invocation cost ledger (TSV), Claude `total_cost_usd` and Codex JSON cost extraction, summary reporting.
-- **Crash recovery** — PID-locked runs, SHA-256 plan checksums, mutable state files, retry counters, and feedback persistence.
-- **Checkpoint audit log** — append-only history of every state transition for post-mortem analysis.
-- **Post-task hooks** — run custom validation (linters, tests) between executor and reviewer phases.
-- **Dependency graph** — tasks declare `depends_on` edges; the runner selects the next task whose dependencies are satisfied.
+## Why Praetor
 
-## Repository layout
+- One CLI surface for planning, execution, review, and recovery.
+- Unified provider abstraction across CLI and REST agents.
+- Explicit finite-state orchestration with transition guard rails.
+- Worktree-first isolation to protect the main branch during task execution.
+- Local transactional snapshots with checksum validation and explicit resume.
+- Observable execution with checkpoints, metrics, and runtime strategy logging.
 
-```text
-.
-├── cmd/praetor/                  # CLI entrypoint
-├── internal/
-│   ├── cli/                      # Cobra command wiring
-│   ├── config/                   # User configuration (~/.praetor/config.toml)
-│   ├── loop/                     # Plan, state, runner, agents, prompts, output
-│   ├── orchestrator/             # Provider contract, registry, dispatch engine
-│   └── providers/
-│       ├── claude/               # Claude Code SDK port (stream-json subprocess)
-│       └── codex/                # Codex SDK port (JSONL subprocess)
-├── docs/                         # Project documentation (docsify)
-│   ├── schemas/                  # JSON Schema for plan files
-│   └── plans/                    # Plan files for execution
-└── .rfcs/                        # Design RFCs
-```
+## Core Capabilities
 
-## Quick start
+- **Plan execution** — run JSON plans with dependencies via `praetor plan run`.
+- **Agents** — built-in `codex`, `claude`, `gemini`, and `ollama` backends.
+- **Plan-and-Execute** — optional planner phase (`--objective`) followed by execute/review gates.
+- **FSM runtime** — loop modeled as explicit states with `max-iterations` and `max-transitions` guard rails.
+- **Runner modes** — `tmux`, `direct`, and `pty` under a unified runtime contract.
+- **PTY fallback** — execution strategy is recorded as `structured`, `process`, or `pty`.
+- **Workspace context** — automatic manifest discovery from `praetor.yaml` / `praetor.md`.
+- **Recovery** — automatic snapshot inspection plus manual `praetor plan resume`.
+- **Retention** — local runtime pruning with `--keep-last-runs`.
+- **Auditability** — checkpoint history, cost ledger, and per-task logs.
 
-Prerequisites: Go 1.26, `tmux`, and at least one agent binary (`claude` or `codex`) in `PATH`.
+## Requirements
 
-Build:
+- Linux or macOS.
+- Go 1.26+.
+- `git` available in `PATH`.
+- For `--runner tmux`: `tmux` installed.
+- Agent binaries as needed: `codex`, `claude`, `gemini`.
+- For Ollama: reachable REST endpoint (default `http://127.0.0.1:11434`).
+
+## Quick Start
+
+### Install
 
 ```bash
-go build -o build/praetor ./cmd/praetor
+go install github.com/opus-domini/praetor/cmd/praetor@latest
+```
+
+### Or build locally
+
+```bash
+make build
+./build/praetor --help
 ```
 
 ### Create and run a plan
@@ -54,145 +71,72 @@ go build -o build/praetor ./cmd/praetor
 # Create a plan skeleton
 praetor plan create my-feature
 
-# Edit the plan, then run it
-praetor run docs/plans/PLAN-PRAETOR-2026-02-25-my-feature.json
+# Run plan (default runner: tmux)
+praetor plan run docs/plans/PLAN-PRAETOR-YYYY-MM-DD-my-feature.json
 ```
 
-### Manage plans
+### Run with direct mode (no tmux)
 
 ```bash
-# Check progress
+praetor plan run docs/plans/my-plan.json \
+  --runner direct \
+  --executor codex \
+  --reviewer claude \
+  --max-retries 3 \
+  --max-transitions 200
+```
+
+### Check status and resume
+
+```bash
 praetor plan status docs/plans/my-plan.json
-
-# List all tracked plans
 praetor plan list
-
-# Reset execution state
-praetor plan reset docs/plans/my-plan.json
+praetor plan resume docs/plans/my-plan.json
 ```
 
-### Single-prompt mode
+### Single prompt mode
 
 ```bash
-# Run a prompt on Codex
 praetor exec "Reply with OK"
-
-# Run a prompt on Claude
-praetor exec --provider claude "Explain this error"
-
-# Pipe from stdin
-echo "Refactor this" | praetor exec --provider claude
+praetor exec --provider claude "Summarize this diff"
+praetor exec --provider ollama --model llama3.1 "Explain this module"
 ```
 
-## CLI reference
+## Command Overview
 
-### `praetor run <plan-file>`
+- `praetor plan run <plan-file>` — execute orchestration pipeline.
+- `praetor plan status <plan-file>` — inspect state/progress.
+- `praetor plan list` — list tracked plans for current project.
+- `praetor plan reset <plan-file>` — clear runtime state for one plan.
+- `praetor plan resume <plan-file>` — restore latest valid local snapshot.
+- `praetor plan migrate-state` — copy legacy `~/.praetor` state to XDG layout.
+- `praetor exec [prompt]` — run a single prompt against one provider.
 
-Execute a task plan with executor/reviewer orchestration.
+## Configuration and State
 
-```bash
-praetor run docs/plans/my-plan.json
-praetor run docs/plans/my-plan.json --executor claude --reviewer claude
-praetor run docs/plans/my-plan.json --hook ./scripts/lint.sh --timeout 1h
-```
+- Config path resolution: `$PRAETOR_CONFIG` > XDG config > legacy path.
+- State is isolated per git project under XDG state/cache directories.
+- Local transactional snapshots are stored in `<repo>/.praetor/runtime/<run-id>/`.
+- Manifest discovery order: `praetor.yaml` > `praetor.yml` > `praetor.md`.
 
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--executor` | `codex` | Default executor: `codex` or `claude` |
-| `--reviewer` | `claude` | Default reviewer: `codex`, `claude`, or `none` |
-| `--max-retries` | `3` | Maximum retries per task |
-| `--max-iterations` | `0` | Maximum iterations (0 = unlimited) |
-| `--no-review` | `false` | Skip the reviewer gate |
-| `--isolation` | `worktree` | Isolation mode: `worktree` or `off` |
-| `--hook` | none | Script to run after executor, before reviewer |
-| `--codex-bin` | `codex` | Codex binary path |
-| `--claude-bin` | `claude` | Claude binary path |
-| `--tmux-session` | auto | tmux session name |
-| `--workdir` | `.` | Working directory for agents |
-| `--state-root` | auto | State root directory |
-| `--force` | `false` | Override an existing plan lock |
-| `--no-color` | `false` | Disable colored output |
-| `--timeout` | none | Run timeout (e.g. `30m`, `2h`) |
+## Documentation
 
-### `praetor plan <command>`
-
-Create and manage task plans.
-
-| Command | Description |
-|---------|-------------|
-| `create <slug>` | Create a plan skeleton in `docs/plans/` |
-| `status <plan-file>` | Show execution status for a plan |
-| `list` | List all tracked plans |
-| `reset <plan-file>` | Clear execution state for a plan |
-
-### `praetor exec [prompt]`
-
-Run a single prompt on a provider.
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--provider` | `codex` | Provider: `codex` or `claude` |
-| `--timeout` | none | Timeout (e.g. `30s`, `5m`) |
-
-## Configuration
-
-Praetor reads defaults from `~/.praetor/config.toml`. CLI flags always take precedence over config values.
-
-```toml
-# Global defaults
-executor = "claude"
-reviewer = "claude"
-max-retries = 5
-isolation = "worktree"
-no-review = false
-hook = "./scripts/lint.sh"
-timeout = "2h"
-
-# Per-project overrides
-[projects."/home/user/myproject"]
-executor = "codex"
-max-retries = 3
-```
-
-Override the config file path with `$PRAETOR_CONFIG`.
-
-## State layout
-
-Runtime state is isolated per git project under `~/.praetor/projects/<project-hash>/`:
-
-```text
-~/.praetor/projects/<hash>/
-├── state/          # Mutable task state per plan (.state.json)
-├── locks/          # PID-based run locks per plan
-├── logs/           # Per-run execution logs (prompts, outputs, scripts)
-├── retries/        # Retry counters per task signature
-├── feedback/       # Reviewer feedback per task signature
-├── costs/          # Cost tracking ledger (tracking.tsv)
-└── checkpoints/    # Audit log (history.tsv) and current checkpoint
-```
+- [Documentation Home](https://opus-domini.github.io/praetor/#/)
+- [Architecture](https://opus-domini.github.io/praetor/#/architecture)
+- [Pipeline Orchestration](https://opus-domini.github.io/praetor/#/orchestration)
+- [Providers Overview](https://opus-domini.github.io/praetor/#/providers/README)
+- [Claude Provider](https://opus-domini.github.io/praetor/#/providers/claude)
+- [Codex Provider](https://opus-domini.github.io/praetor/#/providers/codex)
 
 ## Development
 
 ```bash
-make fmt          # Format code
-make lint         # Run golangci-lint
-make test         # Run tests
-make ci           # Full local CI
+make fmt
+make lint
+make test
+make ci
 ```
 
-## Documentation
+## Stargazers over time ⭐
 
-Full documentation is served with [docsify](https://docsify.js.org/) from `docs/`:
-
-- [Architecture](docs/architecture.md) — package boundaries and execution flow
-- [Task orchestration](docs/loop.md) — plan format, runtime model, and safety mechanisms
-- [Providers](docs/providers/) — Claude and Codex provider details
-
-## Design principles
-
-- Keep packages small and focused.
-- Prefer explicit dependencies over global state.
-- Keep provider-specific logic isolated behind a common interface.
-- Keep plan files immutable and execution state mutable and isolated.
-- Keep agent execution observable in tmux sessions.
-- One external dependency (`cobra`). Everything else is stdlib.
+[![Stargazers over time](https://starchart.cc/opus-domini/praetor.svg?variant=adaptive)](https://starchart.cc/opus-domini/praetor)
