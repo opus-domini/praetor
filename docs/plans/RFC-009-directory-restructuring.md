@@ -99,15 +99,17 @@ internal/
 
 ## Fase 5 — Extrair runtimes do loop
 
-- [ ] **T12. Consolidar `runtime_direct.go` em `internal/runtime/process/`**
-  - `loop/runtime_direct.go`: `directRunner` → consolidar com `runtime/process/runner.go`
+- [x] **T12. Consolidar `runtime_direct.go` em `internal/runtime/process/`**
+  - `process/runner.go` atualizado para usar `domain.CommandSpec` e `domain.ProcessResult`
+  - `loop/runtime_direct.go` reduzido a wrapper delegando para `process.Runner`
 
-- [ ] **T13. Absorver `runtime_pty.go` em `internal/runtime/pty/`**
-  - `loop/runtime_pty.go`: `ptyRunner` é wrapper fino sobre `pty.Session`
+- [x] **T13. Absorver `runtime_pty.go` em `internal/runtime/pty/`**
+  - Criado `pty/runner.go` com `Runner` implementando `domain.ProcessRunner`
+  - `loop/runtime_pty.go` reduzido a wrapper
 
-- [ ] **T14. Criar `internal/runtime/tmux/` e mover `runtime_tmux.go`**
-  - `loop/runtime_tmux.go`: `tmuxRunner` + `SessionManager`
-  - Novo pacote `runtime/tmux/`
+- [x] **T14. Criar `internal/runtime/tmux/` e mover `runtime_tmux.go`**
+  - Criado `runtime/tmux/runner.go` com `Runner` + `NewRunner()` + `SessionManager`
+  - `loop/runtime_tmux.go` reduzido a wrapper com delegates
 
 - [ ] **T15. Mover runtime composition para `internal/orchestration/pipeline/`**
   - `loop/runtime.go`: `composedRuntime`, `defaultAgents()` — montagem de runtime por modo
@@ -117,13 +119,13 @@ internal/
 
 ## Fase 6 — Extrair agent specs para providers
 
-- [ ] **T17. Mover `agent_claude.go` para `internal/providers/claude/`**
-  - `claudeAgent` implementa `AgentSpec` para Claude CLI
-  - Pertence ao provider adapter
+- [x] **T17. Mover `agent_claude.go` para `internal/providers/claude/`**
+  - Criado `providers/claude/spec.go` com `AgentSpec` exportado implementando `domain.AgentSpec`
+  - `loop/agent_claude.go` reduzido a wrapper delegando para `claude.AgentSpec`
 
-- [ ] **T18. Mover `agent_codex.go` para `internal/providers/codex/`**
-  - `codexAgent` implementa `AgentSpec` para Codex CLI
-  - Pertence ao provider adapter
+- [x] **T18. Mover `agent_codex.go` para `internal/providers/codex/`**
+  - Criado `providers/codex/spec.go` com `AgentSpec` exportado implementando `domain.AgentSpec`
+  - `loop/agent_codex.go` reduzido a wrapper delegando para `codex.AgentSpec`
 
 ## Fase 7 — Limpeza final
 

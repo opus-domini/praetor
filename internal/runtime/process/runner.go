@@ -7,31 +7,19 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/opus-domini/praetor/internal/domain"
 )
 
-// CommandSpec describes a process invocation.
-type CommandSpec struct {
-	Args  []string // Full command
-	Env   []string // Additional environment variables (KEY=VALUE)
-	Dir   string   // Working directory
-	Stdin string   // Content to write to stdin ("" = no stdin)
-}
-
-// Result holds the raw output of a completed process.
-type Result struct {
-	Stdout   string
-	Stderr   string
-	ExitCode int
-}
-
 // Runner executes commands as direct subprocesses without any TTY or tmux wrapping.
+// It implements domain.ProcessRunner.
 type Runner struct{}
 
 // Run executes the command described by spec and returns its output.
 // If runDir and prefix are non-empty, stdout and stderr are persisted as files.
-func (r *Runner) Run(ctx context.Context, spec CommandSpec, runDir, prefix string) (Result, error) {
+func (r *Runner) Run(ctx context.Context, spec domain.CommandSpec, runDir, prefix string) (domain.ProcessResult, error) {
 	if len(spec.Args) == 0 {
-		return Result{}, errors.New("empty command")
+		return domain.ProcessResult{}, errors.New("empty command")
 	}
 
 	cmd := exec.CommandContext(ctx, spec.Args[0], spec.Args[1:]...)
@@ -67,7 +55,7 @@ func (r *Runner) Run(ctx context.Context, spec CommandSpec, runDir, prefix strin
 		_ = os.WriteFile(filepath.Join(runDir, prefix+".stderr"), []byte(stderr.String()), 0o644)
 	}
 
-	return Result{
+	return domain.ProcessResult{
 		Stdout:   strings.TrimSpace(stdout.String()),
 		Stderr:   strings.TrimSpace(stderr.String()),
 		ExitCode: exitCode,

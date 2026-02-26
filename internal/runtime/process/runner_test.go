@@ -5,13 +5,15 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/opus-domini/praetor/internal/domain"
 )
 
 func TestRunEchoHello(t *testing.T) {
 	t.Parallel()
 
 	r := &Runner{}
-	res, err := r.Run(context.Background(), CommandSpec{
+	res, err := r.Run(context.Background(), domain.CommandSpec{
 		Args: []string{"echo", "hello"},
 	}, "", "")
 	if err != nil {
@@ -29,7 +31,7 @@ func TestRunNonExistentCommand(t *testing.T) {
 	t.Parallel()
 
 	r := &Runner{}
-	_, err := r.Run(context.Background(), CommandSpec{
+	_, err := r.Run(context.Background(), domain.CommandSpec{
 		Args: []string{"this-command-does-not-exist-anywhere"},
 	}, "", "")
 	if err == nil {
@@ -41,7 +43,7 @@ func TestRunEmptyCommand(t *testing.T) {
 	t.Parallel()
 
 	r := &Runner{}
-	_, err := r.Run(context.Background(), CommandSpec{}, "", "")
+	_, err := r.Run(context.Background(), domain.CommandSpec{}, "", "")
 	if err == nil {
 		t.Fatal("expected error for empty command, got nil")
 	}
@@ -51,7 +53,7 @@ func TestRunNonZeroExit(t *testing.T) {
 	t.Parallel()
 
 	r := &Runner{}
-	res, err := r.Run(context.Background(), CommandSpec{
+	res, err := r.Run(context.Background(), domain.CommandSpec{
 		Args: []string{"sh", "-c", "exit 42"},
 	}, "", "")
 	if err != nil {
@@ -66,7 +68,7 @@ func TestRunStdin(t *testing.T) {
 	t.Parallel()
 
 	r := &Runner{}
-	res, err := r.Run(context.Background(), CommandSpec{
+	res, err := r.Run(context.Background(), domain.CommandSpec{
 		Args:  []string{"cat"},
 		Stdin: "from stdin",
 	}, "", "")
@@ -83,7 +85,7 @@ func TestRunPersistsOutput(t *testing.T) {
 
 	runDir := t.TempDir()
 	r := &Runner{}
-	res, err := r.Run(context.Background(), CommandSpec{
+	res, err := r.Run(context.Background(), domain.CommandSpec{
 		Args: []string{"sh", "-c", "echo out; echo err >&2"},
 	}, runDir, "test")
 	if err != nil {
