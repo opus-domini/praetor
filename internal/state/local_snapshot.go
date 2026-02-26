@@ -3,7 +3,6 @@ package state
 import (
 	"encoding/json"
 	"fmt"
-	"time"
 
 	"github.com/opus-domini/praetor/internal/domain"
 )
@@ -107,9 +106,4 @@ func LoadLatestLocalSnapshot(projectRoot, planFile string) (LocalSnapshot, strin
 		Timestamp:    snapshot.Timestamp,
 		State:        state,
 	}, path, nil
-}
-
-// snapshotTimestamp is kept as an alias so loop can delegate to it.
-func snapshotTimestamp(value string) time.Time {
-	return ParseTimestamp(value)
 }

@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 )
@@ -191,26 +190,6 @@ func ParseTimestamp(value string) time.Time {
 		return time.Time{}
 	}
 	return ts
-}
-
-func listSnapshots(projectRoot string) ([]string, error) {
-	runtimeRoot := filepath.Join(projectRoot, ".praetor", "runtime")
-	entries, err := os.ReadDir(runtimeRoot)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("read local runtime root: %w", err)
-	}
-	paths := make([]string, 0, len(entries))
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-		paths = append(paths, filepath.Join(runtimeRoot, entry.Name(), "snapshot.json"))
-	}
-	sort.Strings(paths)
-	return paths, nil
 }
 
 func writeJSONAtomic(path string, value any) error {

@@ -222,7 +222,6 @@ func (s *scriptSession) waitProcess() {
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) {
 			s.exitCode.Store(int64(exitErr.ExitCode()))
-			err = nil
 		} else {
 			s.waitErr = err
 		}

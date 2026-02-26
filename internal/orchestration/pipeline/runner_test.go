@@ -297,15 +297,15 @@ func (nilRuntime) Run(context.Context, domain.AgentRequest) (domain.AgentResult,
 
 type discardSink struct{}
 
-func (discardSink) Header(string)                                          {}
-func (discardSink) KV(string, string)                                      {}
-func (discardSink) Task(string, string, string)                            {}
-func (discardSink) Phase(string, string, string)                           {}
-func (discardSink) Info(string)                                            {}
-func (discardSink) Success(string)                                         {}
-func (discardSink) Warn(string)                                            {}
-func (discardSink) Error(string)                                           {}
-func (discardSink) Summary(int, int, int, float64, time.Duration)          {}
+func (discardSink) Header(string)                                 {}
+func (discardSink) KV(string, string)                             {}
+func (discardSink) Task(string, string, string)                   {}
+func (discardSink) Phase(string, string, string)                  {}
+func (discardSink) Info(string)                                   {}
+func (discardSink) Success(string)                                {}
+func (discardSink) Warn(string)                                   {}
+func (discardSink) Error(string)                                  {}
+func (discardSink) Summary(int, int, int, float64, time.Duration) {}
 
 func mustExecutablePath(t *testing.T) string {
 	t.Helper()
