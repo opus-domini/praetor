@@ -9,7 +9,9 @@ import (
 	"time"
 )
 
-// CodexCLI is a CLI-backed Agent implementation using `codex exec --json`.
+// CodexCLI is a CLI-backed Agent implementation using the `codex` CLI.
+// Execute (OneShot) uses `codex exec --json <prompt>` (no sandbox/approval flags).
+// Plan and Review use run() with full pipeline flags (sandbox, approval_policy).
 type CodexCLI struct {
 	Binary string
 	Runner CommandRunner
@@ -60,6 +62,9 @@ func (a *CodexCLI) Plan(ctx context.Context, req PlanRequest) (PlanResponse, err
 }
 
 func (a *CodexCLI) Execute(ctx context.Context, req ExecuteRequest) (ExecuteResponse, error) {
+	if req.OneShot {
+		return a.executeOneShot(ctx, req)
+	}
 	resp, err := a.run(ctx, req.Workdir, req.Model, combinePrompt(req.SystemPrompt, req.Prompt), req.RunDir, req.OutputPrefix, req.TaskLabel)
 	if err != nil {
 		return ExecuteResponse{}, err
@@ -70,6 +75,45 @@ func (a *CodexCLI) Execute(ctx context.Context, req ExecuteRequest) (ExecuteResp
 		CostUSD:   resp.CostUSD,
 		DurationS: resp.DurationS,
 		Strategy:  resp.Strategy,
+	}, nil
+}
+
+func (a *CodexCLI) executeOneShot(ctx context.Context, req ExecuteRequest) (ExecuteResponse, error) {
+	start := time.Now()
+	model := strings.TrimSpace(req.Model)
+
+	args := []string{a.Binary, "exec", "--json"}
+	if wd := strings.TrimSpace(req.Workdir); wd != "" {
+		args = append(args, "--cd", wd)
+	}
+	if model != "" {
+		args = append(args, "--model", model)
+	}
+	args = append(args, strings.TrimSpace(combinePrompt(req.SystemPrompt, req.Prompt)))
+
+	result, err := a.Runner.Run(ctx, CommandSpec{
+		Args:         args,
+		Dir:          strings.TrimSpace(req.Workdir),
+		UsePTY:       false,
+		RunDir:       strings.TrimSpace(req.RunDir),
+		OutputPrefix: strings.TrimSpace(req.OutputPrefix),
+		WindowHint:   strings.TrimSpace(req.TaskLabel),
+	})
+	if err != nil {
+		return ExecuteResponse{DurationS: time.Since(start).Seconds()}, err
+	}
+	if result.ExitCode != 0 {
+		return ExecuteResponse{DurationS: time.Since(start).Seconds()}, fmt.Errorf("codex exit code %d: %s", result.ExitCode, tailText(result.Stderr, 20))
+	}
+	parsed := parseCodexOutput(result.Stdout)
+	if parsed.Model != "" {
+		model = parsed.Model
+	}
+	return ExecuteResponse{
+		Output:    parsed.Output,
+		Model:     model,
+		DurationS: time.Since(start).Seconds(),
+		Strategy:  result.Strategy,
 	}, nil
 }
 
