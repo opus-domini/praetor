@@ -18,7 +18,8 @@ import (
 // Runner executes commands inside tmux windows.
 // It implements domain.ProcessRunner and domain.SessionManager.
 type Runner struct {
-	sessionName string
+	sessionName  string
+	formatterBin string // path to "praetor" binary for live formatting; empty disables
 
 	mu             sync.Mutex
 	prepared       bool
@@ -26,8 +27,13 @@ type Runner struct {
 }
 
 // NewRunner creates a tmux runner targeting the given session name.
-func NewRunner(sessionName string) *Runner {
-	return &Runner{sessionName: strings.TrimSpace(sessionName)}
+// formatterBin is the path to the praetor binary used for live formatting
+// of JSONL output in tmux panes. Pass "" to disable formatting.
+func NewRunner(sessionName, formatterBin string) *Runner {
+	return &Runner{
+		sessionName:  strings.TrimSpace(sessionName),
+		formatterBin: strings.TrimSpace(formatterBin),
+	}
 }
 
 // SessionName returns the tmux session target used by this runner.
@@ -108,7 +114,7 @@ func (r *Runner) Run(ctx context.Context, spec domain.CommandSpec, runDir, prefi
 	}
 
 	channel := fmt.Sprintf("praetor-%d-%d", os.Getpid(), time.Now().UnixNano())
-	script := BuildWrapperScript(spec, stdinFile, stdoutFile, stderrFile, exitFile, channel)
+	script := BuildWrapperScript(spec, stdinFile, stdoutFile, stderrFile, exitFile, channel, r.formatterBin)
 	if err := os.WriteFile(wrapperFile, []byte(script), 0o755); err != nil {
 		return domain.ProcessResult{}, fmt.Errorf("write wrapper script: %w", err)
 	}
@@ -195,7 +201,9 @@ func WindowName(taskLabel, role string) string {
 }
 
 // BuildWrapperScript generates a bash wrapper script for tmux execution.
-func BuildWrapperScript(spec domain.CommandSpec, stdinFile, stdoutFile, stderrFile, exitFile, channel string) string {
+// formatterBin is the path to the praetor binary; when non-empty the pane
+// shows formatted output while raw JSONL is still captured to stdoutFile.
+func BuildWrapperScript(spec domain.CommandSpec, stdinFile, stdoutFile, stderrFile, exitFile, channel, formatterBin string) string {
 	// Build the command line from spec.Args with proper quoting.
 	var cmdParts []string
 	for _, arg := range spec.Args {
@@ -233,6 +241,14 @@ func BuildWrapperScript(spec domain.CommandSpec, stdinFile, stdoutFile, stderrFi
 		banner = banner[:120] + "..."
 	}
 
+	// When a formatter binary is available, pipe pane output through it
+	// so the user sees human-readable text instead of raw JSONL.
+	// Raw output is still captured to stdoutFile via tee.
+	fmtPipe := ""
+	if strings.TrimSpace(formatterBin) != "" {
+		fmtPipe = " | " + ShellQuote(formatterBin) + " fmt 2>/dev/null"
+	}
+
 	return fmt.Sprintf(`#!/usr/bin/env bash
 _exit=1
 trap 'printf "%%s" "$_exit" > %s; tmux wait-for -S %s' EXIT
@@ -247,14 +263,14 @@ printf '\033[2m  dir: %%s\033[0m\n\n' %s
 %scd %s
 
 %s%s \
-  2> >(tee %s >&2) | tee %s
+  2> >(tee %s >&2) | tee %s%s
 _exit="${PIPESTATUS[0]}"
 `, ShellQuote(exitFile), ShellQuote(channel),
 		ShellQuote(banner), ShellQuote(dir),
 		envLines,
 		ShellQuote(dir),
 		cmdLine, stdinClause,
-		ShellQuote(stderrFile), ShellQuote(stdoutFile))
+		ShellQuote(stderrFile), ShellQuote(stdoutFile), fmtPipe)
 }
 
 // ShellQuote wraps a value in single quotes suitable for bash.

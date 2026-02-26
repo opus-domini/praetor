@@ -3,6 +3,7 @@ package agents
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/opus-domini/praetor/internal/domain"
@@ -25,7 +26,8 @@ func NewRegistryRuntime(opts domain.RunnerOptions) *RegistryRuntime {
 
 	switch opts.RunnerMode {
 	case domain.RunnerTMUX:
-		tmuxRunner := tmuxruntime.NewRunner(opts.TMUXSession)
+		formatterBin, _ := os.Executable()
+		tmuxRunner := tmuxruntime.NewRunner(opts.TMUXSession, formatterBin)
 		runner = NewProcessAdapterCommandRunner(tmuxRunner, "process")
 		sm = tmuxRunner
 	case domain.RunnerDirect:
