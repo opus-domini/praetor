@@ -1,5 +1,5 @@
 <div align="center">
-    <img src="docs/assets/images/logo.png" alt="Logo Praetor" width="500"/>
+    <img src="docs/assets/images/logo.svg" alt="Logo Praetor" width="400"/>
     <hr />
     <p>Lead. Delegate. Dominate.</p>
 </div>
