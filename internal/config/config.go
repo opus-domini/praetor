@@ -36,7 +36,7 @@ type Config struct {
 }
 
 // Path returns the config file path, respecting $PRAETOR_CONFIG.
-// Resolution: $PRAETOR_CONFIG > XDG config path > legacy ~/.praetor/config.toml
+// Resolution: $PRAETOR_CONFIG > XDG config path.
 func Path() string {
 	if env := strings.TrimSpace(os.Getenv("PRAETOR_CONFIG")); env != "" {
 		return env
@@ -44,12 +44,6 @@ func Path() string {
 	xdgPath, err := state.DefaultConfigFile()
 	if err != nil {
 		return ""
-	}
-	// Read-fallback: if XDG config doesn't exist, check legacy location.
-	if _, statErr := os.Stat(xdgPath); statErr != nil {
-		if legacy := state.LegacyConfigFile(); legacy != "" {
-			return legacy
-		}
 	}
 	return xdgPath
 }

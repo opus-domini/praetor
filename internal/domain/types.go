@@ -68,10 +68,6 @@ const (
 	TaskDone      TaskStatus = "done"
 	TaskFailed    TaskStatus = "failed"
 
-	// TaskStatusOpen is a legacy alias kept for migration compatibility.
-	TaskStatusOpen TaskStatus = "open"
-	// TaskStatusDone is a legacy alias for backward-compatible references.
-	TaskStatusDone = TaskDone
 )
 
 // StateTask is one mutable state entry for a task.
@@ -123,12 +119,6 @@ func (s State) FailedCount() int {
 // ActiveCount returns how many tasks are not in a terminal state.
 func (s State) ActiveCount() int {
 	return len(s.Tasks) - s.DoneCount() - s.FailedCount()
-}
-
-// OpenCount returns how many tasks are still open (not done and not failed).
-// Kept for backward compatibility; equivalent to ActiveCount.
-func (s State) OpenCount() int {
-	return s.ActiveCount()
 }
 
 // RunnerOptions controls loop execution behavior.

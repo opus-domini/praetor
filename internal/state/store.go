@@ -128,43 +128,14 @@ func (s *Store) RuntimeKey(planFile string) string {
 	return fmt.Sprintf("%s--%s", baseName, hex.EncodeToString(hash[:])[:12])
 }
 
-func (s *Store) legacyPlanBaseName(planFile string) string {
-	return strings.TrimSuffix(filepath.Base(planFile), filepath.Ext(planFile))
-}
-
-func (s *Store) stateFileV2(planFile string) string {
-	return filepath.Join(s.StateDir(), s.RuntimeKey(planFile)+".state.json")
-}
-
-func (s *Store) stateFileLegacy(planFile string) string {
-	return filepath.Join(s.StateDir(), s.legacyPlanBaseName(planFile)+".state.json")
-}
-
 // StateFile returns the mutable state file path for a plan.
 func (s *Store) StateFile(planFile string) string {
-	return s.stateFileV2(planFile)
-}
-
-func (s *Store) lockFileV2(planFile string) string {
-	return filepath.Join(s.LocksDir(), s.RuntimeKey(planFile)+".lock")
-}
-
-func (s *Store) lockFileLegacy(planFile string) string {
-	return filepath.Join(s.LocksDir(), s.legacyPlanBaseName(planFile)+".lock")
+	return filepath.Join(s.StateDir(), s.RuntimeKey(planFile)+".state.json")
 }
 
 // LockFile returns the lock file path for a plan.
 func (s *Store) LockFile(planFile string) string {
-	return s.lockFileV2(planFile)
-}
-
-func (s *Store) lockCandidates(planFile string) []string {
-	v2 := s.lockFileV2(planFile)
-	legacy := s.lockFileLegacy(planFile)
-	if v2 == legacy {
-		return []string{v2}
-	}
-	return []string{v2, legacy}
+	return filepath.Join(s.LocksDir(), s.RuntimeKey(planFile)+".lock")
 }
 
 func (s *Store) currentCheckpointFile(planFile string) string {

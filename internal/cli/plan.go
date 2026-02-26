@@ -28,7 +28,6 @@ executors, and reviewers. Use "praetor plan run <plan>" to execute a plan.`,
 	cmd.AddCommand(newPlanStatusCmd())
 	cmd.AddCommand(newPlanResetCmd())
 	cmd.AddCommand(newPlanResumeCmd())
-	cmd.AddCommand(newPlanMigrateStateCmd())
 	return cmd
 }
 
@@ -199,27 +198,6 @@ func newPlanResetCmd() *cobra.Command {
 
 	cmd.Flags().StringVar(&stateRoot, "state-root", "", "State root directory (default: $XDG_STATE_HOME/praetor/projects/<hash>)")
 	cmd.Flags().BoolVar(&force, "force", false, "Force reset even if a running lock exists")
-	return cmd
-}
-
-func newPlanMigrateStateCmd() *cobra.Command {
-	var dryRun bool
-
-	cmd := &cobra.Command{
-		Use:   "migrate-state",
-		Short: "Copy legacy ~/.praetor data to XDG locations",
-		Long: `Copy (not move) legacy ~/.praetor data to XDG-compliant locations.
-Original files are preserved as a safety net.`,
-		Example: `  praetor plan migrate-state
-  praetor plan migrate-state --dry-run`,
-		Args: cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			cmd.SilenceUsage = true
-			return localstate.MigrateLegacyState(cmd.OutOrStdout(), dryRun)
-		},
-	}
-
-	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Show what would be migrated without acting")
 	return cmd
 }
 

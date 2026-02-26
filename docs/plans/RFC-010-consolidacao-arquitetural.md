@@ -28,14 +28,14 @@
   - Listar todos os caminhos `domain.AgentSpec` e `internal/agents.Agent`
   - Confirmar onde existe duplicidade ativa
 
-- [x] **T003. Criar matriz de compatibilidade por runner**
+- [x] **T003. Criar matriz de suporte por runner**
   - Tabela runner x agente x fase (plan/execute/review)
   - Registrar comportamento esperado para `codex`, `claude`, `gemini`, `ollama`
 
 ## Fase 1 - Convergencia de contratos (agents)
 
 - [x] **T004. Criar adapter `domain.AgentSpec -> agents.Agent`**
-  - Novo adapter de compatibilidade para transicao
+  - Novo adapter para transicao
   - Cobrir parse de output/custo e metadados de capacidade
 
 - [x] **T005. Encapsular selecao de backend em `agents`**
@@ -47,8 +47,7 @@
   - Direcionar `tmux`, `pty` e `direct` para o mesmo contrato interno
 
 - [x] **T007. Remover dependencia direta de `internal/providers/catalog.go` no fluxo principal**
-  - Preservar backward compatibility durante migracao
-  - Marcar pacote legado como deprecated
+  - Migrar dependencias para novo contrato
 
 - [x] **T008. Atualizar testes de contrato de agentes**
   - Contract tests unificados por fase (Plan/Execute/Review)
@@ -110,7 +109,7 @@
 
 - [x] **T020. Definir schema leve para `praetor.yaml`**
   - Campos minimos: `version`, `instructions`, `constraints`, `test_commands`
-  - Compatibilidade com manifesto Markdown
+  - Suporte ao manifesto Markdown
 
 - [x] **T021. Implementar normalizacao de contexto**
   - Separar contexto bruto de contexto normalizado para prompts
@@ -166,9 +165,9 @@
   - Incluir `resume` e politicas de retencao
   - Documentar estrategia de execucao/fallback
 
-- [x] **T032. Definir plano de remocao de legados**
-  - Lista de APIs/pacotes deprecated
-  - Janela de remocao por versao
+- [x] **T032. Remover codigo obsoleto**
+  - Lista de APIs/pacotes removidos
+  - Limpeza por versao
 
 - [x] **T033. Rodada final de regressao**
   - `go test ./...`
@@ -189,7 +188,7 @@
 - **Saida obrigatoria:**
   - baseline de testes registrada
   - mapa de duplicidades runtime/contrato aprovado
-  - matriz de compatibilidade publicada
+  - matriz de suporte publicada
 
 ## CP1 - Contrato unico definido
 

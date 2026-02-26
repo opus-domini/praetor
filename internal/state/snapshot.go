@@ -271,7 +271,7 @@ func PruneLocalSnapshots(projectRoot string, keepLast int) error {
 func snapshotChecksumMatches(metaPath string, snapshotData []byte) bool {
 	metaBytes, err := os.ReadFile(metaPath)
 	if err != nil {
-		// Metadata missing is tolerated for backward compatibility.
+		// Metadata missing is tolerated (checksum validation is best-effort).
 		return true
 	}
 	meta := map[string]any{}

@@ -26,17 +26,6 @@ Each response exposes `strategy` (`structured`, `process`, `pty`) so runtime beh
 | Gemini | CLI | `gemini` |
 | Ollama | REST | `http://127.0.0.1:11434` |
 
-## Legacy packages and deprecation
-
-`internal/providers/*` and `internal/providers/catalog.go` are legacy compatibility surfaces.
-They are deprecated and no longer represent the primary runtime integration path.
-
-Removal plan:
-
-1. Keep as compatibility-only in current major line.
-2. Remove references from all docs/examples in the next minor.
-3. Remove package in the next major after migration window closes.
-
 ## Adding a new provider
 
 1. Implement a new `internal/agents.Agent` adapter (CLI or REST).

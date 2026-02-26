@@ -34,15 +34,14 @@ internal/
 │   ├── process/                  Non-interactive subprocess execution
 │   ├── pty/                      Interactive pseudo-terminal sessions (start/read/write/close)
 │   └── tmux/                     Tmux-based runner with session management
-├── state/                        Snapshots, checkpoints, locks, XDG paths, migration
+├── state/                        Snapshots, checkpoints, locks, XDG paths
 └── workspace/                    Git root resolution and `praetor.{yaml,yml,md}` loading
 ```
 
 ## Domain layer
 
 `internal/domain` is the single source of truth for all domain types. It has zero
-internal dependencies (only Go stdlib). Other packages import from domain and may
-re-export via type aliases for backward compatibility.
+internal dependencies (only Go stdlib). Other packages import from domain directly.
 
 Key contents:
 
@@ -69,7 +68,7 @@ Key contents:
 1. CLI resolves plan path, workdir, and merged config.
 2. Runner resolves git project root and reads workspace manifest (`praetor.yaml`, `praetor.yml`, fallback `praetor.md`).
 3. Runner initializes state store (XDG roots) and acquires run lock.
-4. Runner restores from latest local project snapshot when newer and compatible.
+4. Runner restores from latest local project snapshot when newer.
 5. Optional planner phase (`--objective`) generates a plan before execution.
 6. Main loop runs as FSM (`stateFn`) with explicit transitions:
    - guard/cancellation checks

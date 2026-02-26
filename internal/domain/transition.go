@@ -41,12 +41,10 @@ func IsTerminal(status TaskStatus) bool {
 	return status == TaskDone || status == TaskFailed
 }
 
-// NormalizeStatus maps legacy status values to current ones and
-// resets transient states for crash recovery.
+// NormalizeStatus resets transient states for crash recovery
+// and maps unknown values to pending.
 func NormalizeStatus(status TaskStatus) TaskStatus {
 	switch status {
-	case TaskStatusOpen:
-		return TaskPending
 	case TaskExecuting, TaskReviewing:
 		// Transient states on load mean the process crashed mid-flight.
 		return TaskPending

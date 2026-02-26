@@ -56,7 +56,7 @@ func (r *TransitionRecorder) CompleteTask(state *domain.State, index int, signat
 	if err := r.store.WriteState(r.planFile, *state); err != nil {
 		return err
 	}
-	// Clean up legacy external files if they exist.
+	// Clean up external retry/feedback files if they exist.
 	_ = r.store.ClearRetryCount(signature)
 	_ = r.store.ClearFeedback(signature)
 	return r.WriteCheckpoint(domain.CheckpointEntry{

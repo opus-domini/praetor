@@ -34,7 +34,7 @@ internal/
 | Pacote atual            | Destino                          | Motivo                                    |
 |-------------------------|----------------------------------|-------------------------------------------|
 | `internal/loop/`        | Dissolvido em 7+ pacotes         | Monólito que concentra domínio + runtime   |
-| `internal/orchestrator/`| Deletado                         | Legacy, zero importadores                  |
+| `internal/orchestrator/`| Deletado                         | Zero importadores                          |
 | `internal/paths/`       | Absorvido em `state/`            | RFC não lista como pacote separado         |
 
 ---
@@ -69,7 +69,7 @@ internal/
   - `loop/snapshot.go` reduzido a aliases
 
 - [x] **T06. Mover migração para `internal/state/`**
-  - Criado `state/migrate.go` com `MigrateLegacyState`
+  - Criado `state/migrate.go` com migração de estado
   - `loop/migrate.go` reduzido a delegação
 
 ## Fase 3 — Extrair domain e prompts do loop
@@ -159,7 +159,7 @@ internal/
 ## Notas
 
 - **Ordem importa:** cada fase só move código cujos pacotes destino já existem.
-- **Backward compatibility:** durante a migração, usar type aliases e delegações temporárias.
+- **Transição:** durante a migração, usar type aliases e delegações temporárias.
 - **Teste contínuo:** `go build ./... && go test ./...` após cada tarefa.
 - **Providers futuros:** `gemini/` e `ollama/` são marcados como "futuro" na RFC — não fazem parte deste plano.
 - **Total:** 23 tarefas (T23 opcional), organizadas em 7 fases.

@@ -55,7 +55,7 @@ func iterationStateSelectTask(ctx context.Context, machine *iterationMachine) (i
 	run := machine.run
 	index, task, ok := domain.NextRunnableTask(run.state)
 	if !ok {
-		if run.state.OpenCount() == 0 {
+		if run.state.ActiveCount() == 0 {
 			_ = run.appendSnapshotEvent("completed", "", "all tasks completed")
 			_ = run.persistSnapshot("completed", "all tasks completed")
 			run.render.Success("All tasks completed")

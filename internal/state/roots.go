@@ -1,7 +1,6 @@
 package state
 
 import (
-	"os"
 	"strings"
 
 	"github.com/opus-domini/praetor/internal/workspace"
@@ -16,23 +15,13 @@ func ResolveStateRoot(explicitRoot, projectDir string) (string, error) {
 	return ProjectStateRootForDir(projectDir)
 }
 
-// ProjectStateRootForDir resolves the per-project state root using XDG paths
-// with read-fallback to legacy ~/.praetor/projects.
+// ProjectStateRootForDir resolves the per-project state root using XDG paths.
 func ProjectStateRootForDir(projectDir string) (string, error) {
 	projectRoot, err := workspace.ResolveProjectRoot(projectDir)
 	if err != nil {
 		return "", err
 	}
-	xdgRoot, err := DefaultProjectStateRoot(projectRoot)
-	if err != nil {
-		return "", err
-	}
-	if _, statErr := os.Stat(xdgRoot); statErr != nil {
-		if legacy := LegacyProjectStateRoot(projectRoot); legacy != "" {
-			return legacy, nil
-		}
-	}
-	return xdgRoot, nil
+	return DefaultProjectStateRoot(projectRoot)
 }
 
 // ProjectCacheRootForDir resolves the per-project cache root using XDG paths.

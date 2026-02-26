@@ -70,7 +70,7 @@ func (r *Runner) Run(ctx context.Context, render domain.RenderSink, planFile str
 		}
 	}()
 
-	if run.state.OpenCount() == 0 {
+	if run.state.ActiveCount() == 0 {
 		run.render.Success(fmt.Sprintf("All tasks already completed: %s", run.planFile))
 		return run.stats, nil
 	}

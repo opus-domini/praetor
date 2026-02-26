@@ -163,18 +163,6 @@ func TestDefaultProjectCacheRoot(t *testing.T) {
 	}
 }
 
-func TestLegacyRootReturnsEmptyWhenAbsent(t *testing.T) {
-	t.Parallel()
-	result := LegacyRoot()
-	_ = result // no panic is the assertion
-}
-
-func TestLegacyConfigFileReturnsEmptyWhenAbsent(t *testing.T) {
-	t.Parallel()
-	result := LegacyConfigFile()
-	_ = result
-}
-
 func TestProjectRuntimeKeyDeterministic(t *testing.T) {
 	t.Parallel()
 	key1 := ProjectRuntimeKey("/home/user/project")

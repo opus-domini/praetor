@@ -85,46 +85,6 @@ func DefaultProjectCacheRoot(projectRoot string) (string, error) {
 	return filepath.Join(cacheHome, "projects", key), nil
 }
 
-// LegacyRoot returns ~/.praetor if it exists, empty string otherwise.
-func LegacyRoot() string {
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		return ""
-	}
-	dir := filepath.Join(homeDir, ".praetor")
-	if info, err := os.Stat(dir); err == nil && info.IsDir() {
-		return dir
-	}
-	return ""
-}
-
-// LegacyConfigFile returns ~/.praetor/config.toml if it exists.
-func LegacyConfigFile() string {
-	root := LegacyRoot()
-	if root == "" {
-		return ""
-	}
-	path := filepath.Join(root, "config.toml")
-	if _, err := os.Stat(path); err == nil {
-		return path
-	}
-	return ""
-}
-
-// LegacyProjectStateRoot returns ~/.praetor/projects/<key> if it exists.
-func LegacyProjectStateRoot(projectRoot string) string {
-	root := LegacyRoot()
-	if root == "" {
-		return ""
-	}
-	key := ProjectRuntimeKey(projectRoot)
-	dir := filepath.Join(root, "projects", key)
-	if info, err := os.Stat(dir); err == nil && info.IsDir() {
-		return dir
-	}
-	return ""
-}
-
 // ProjectRuntimeKey returns the collision-resistant key for a project root path.
 // Format: <basename>-<sha256[:12]>
 func ProjectRuntimeKey(projectRoot string) string {

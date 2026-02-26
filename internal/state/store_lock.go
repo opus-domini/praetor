@@ -36,23 +36,6 @@ func (s *Store) AcquireRunLock(planFile string, force bool) (RunLock, error) {
 	lockPath := s.LockFile(planFile)
 	hostname, _ := os.Hostname()
 
-	for _, legacyPath := range s.lockCandidates(planFile)[1:] {
-		data, err := os.ReadFile(legacyPath)
-		if errors.Is(err, os.ErrNotExist) {
-			continue
-		}
-		if err != nil {
-			return RunLock{}, fmt.Errorf("read lock file: %w", err)
-		}
-		meta := parseLockFile(data)
-		if lockIsActive(meta, hostname, runtimeKey) && !force {
-			return RunLock{}, fmt.Errorf("plan is already running (pid=%d, started=%s); use --force to override", meta.PID, meta.StartedAt)
-		}
-		if force || !lockIsActive(meta, hostname, runtimeKey) {
-			_ = os.Remove(legacyPath)
-		}
-	}
-
 	for range 4 {
 		token, err := randomHex(12)
 		if err != nil {

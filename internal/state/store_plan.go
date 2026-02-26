@@ -33,10 +33,7 @@ func (s *Store) Status(planFile string) (domain.PlanStatus, error) {
 		return domain.PlanStatus{}, fmt.Errorf("decode plan file: %w", err)
 	}
 
-	stateFile, _, err := s.findStateFile(planFile)
-	if err != nil {
-		return domain.PlanStatus{}, err
-	}
+	stateFile := s.StateFile(planFile)
 	if _, err := os.Stat(stateFile); errors.Is(err, os.ErrNotExist) {
 		return domain.PlanStatus{
 			PlanFile: planFile,
@@ -126,18 +123,16 @@ func inferPlanFromState(stateFile string) string {
 func (s *Store) IsPlanRunning(planFile string) (bool, int) {
 	hostname, _ := os.Hostname()
 	runtimeKey := s.RuntimeKey(planFile)
-	for _, lockPath := range s.lockCandidates(planFile) {
-		data, err := os.ReadFile(lockPath)
-		if err != nil {
-			continue
-		}
-		meta := parseLockFile(data)
-		if meta.PID <= 0 {
-			continue
-		}
-		if lockIsActive(meta, hostname, runtimeKey) {
-			return true, meta.PID
-		}
+	data, err := os.ReadFile(s.LockFile(planFile))
+	if err != nil {
+		return false, 0
+	}
+	meta := parseLockFile(data)
+	if meta.PID <= 0 {
+		return false, 0
+	}
+	if lockIsActive(meta, hostname, runtimeKey) {
+		return true, meta.PID
 	}
 	return false, 0
 }

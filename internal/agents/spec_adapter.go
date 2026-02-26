@@ -9,8 +9,7 @@ import (
 	"github.com/opus-domini/praetor/internal/domain"
 )
 
-// SpecAdapter bridges legacy domain.AgentSpec + domain.ProcessRunner into agents.Agent.
-// It exists as a migration aid while old and new runtimes converge.
+// SpecAdapter bridges domain.AgentSpec + domain.ProcessRunner into agents.Agent.
 type SpecAdapter struct {
 	id     ID
 	spec   domain.AgentSpec

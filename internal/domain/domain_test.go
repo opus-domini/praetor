@@ -55,7 +55,7 @@ func TestNormalizeAgentOnlySpaces(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// State.DoneCount / FailedCount / ActiveCount / OpenCount
+// State.DoneCount / FailedCount / ActiveCount
 // ---------------------------------------------------------------------------
 
 func TestStateDoneCount(t *testing.T) {
@@ -125,19 +125,6 @@ func TestStateActiveCountAllTerminal(t *testing.T) {
 	}}
 	if got := s.ActiveCount(); got != 0 {
 		t.Fatalf("ActiveCount() = %d, want 0", got)
-	}
-}
-
-func TestStateOpenCountEqualsActiveCount(t *testing.T) {
-	t.Parallel()
-	s := State{Tasks: []StateTask{
-		{ID: "a", Status: TaskDone},
-		{ID: "b", Status: TaskPending},
-		{ID: "c", Status: TaskFailed},
-		{ID: "d", Status: TaskExecuting},
-	}}
-	if s.OpenCount() != s.ActiveCount() {
-		t.Fatalf("OpenCount() = %d, ActiveCount() = %d, expected equal", s.OpenCount(), s.ActiveCount())
 	}
 }
 
@@ -304,13 +291,6 @@ func TestNormalizeStatusFailed(t *testing.T) {
 	t.Parallel()
 	if got := NormalizeStatus(TaskFailed); got != TaskFailed {
 		t.Fatalf("NormalizeStatus(failed) = %q, want %q", got, TaskFailed)
-	}
-}
-
-func TestNormalizeStatusLegacyOpen(t *testing.T) {
-	t.Parallel()
-	if got := NormalizeStatus(TaskStatusOpen); got != TaskPending {
-		t.Fatalf("NormalizeStatus(open) = %q, want %q", got, TaskPending)
 	}
 }
 

@@ -68,16 +68,7 @@ praetor plan list
 praetor plan reset docs/plans/my-plan.json
 ```
 
-Removes state, lock, and legacy retry/feedback files for the plan. Does not delete the plan file itself.
-
-### Migrate legacy state
-
-```bash
-praetor plan migrate-state          # copy ~/.praetor data to XDG locations
-praetor plan migrate-state --dry-run  # preview without copying
-```
-
-Copies legacy `~/.praetor/` data to XDG-compliant locations (`$XDG_CONFIG_HOME/praetor/`, `$XDG_STATE_HOME/praetor/`, `$XDG_CACHE_HOME/praetor/`). Original files are preserved. Safe to run multiple times (idempotent).
+Removes state, lock, retry, and feedback files for the plan. Does not delete the plan file itself.
 
 ### Resume from local snapshot
 
@@ -163,8 +154,8 @@ Per-project state is stored under `<state-home>/projects/<project-hash>/`:
 $XDG_STATE_HOME/praetor/projects/<hash>/
 ├── state/          # Task state per plan (.state.json)
 ├── locks/          # PID-based run locks
-├── retries/        # Legacy retry counters (migrated into state file on load)
-├── feedback/       # Legacy feedback files (migrated into state file on load)
+├── retries/        # Retry counters (absorbed into state file on load)
+├── feedback/       # Feedback files (absorbed into state file on load)
 ├── costs/          # Cost tracking ledger (tracking.tsv)
 └── checkpoints/    # Audit log (history.tsv) and current state (.state)
 
@@ -268,9 +259,9 @@ On state file load, transient states are reset for crash safety:
 
 This is safe because no partial work is committed to the main branch until a task reaches `done`.
 
-#### Legacy migration
+#### Status normalization
 
-State files using the old `"open"` status are transparently migrated to `"pending"` on load. Retry counts from external files (`retries/*.count`) are absorbed into `StateTask.Attempt`. After migration, the state file is the single source of truth.
+On load, any unrecognized status value defaults to `"pending"`. Retry counts from external files (`retries/*.count`) are absorbed into `StateTask.Attempt`. The state file is the single source of truth.
 
 #### StateTask fields
 

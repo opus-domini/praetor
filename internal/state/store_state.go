@@ -12,35 +12,6 @@ import (
 	"github.com/opus-domini/praetor/internal/domain"
 )
 
-func (s *Store) findStateFile(planFile string) (string, bool, error) {
-	v2 := s.stateFileV2(planFile)
-	if _, err := os.Stat(v2); err == nil {
-		return v2, false, nil
-	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return "", false, fmt.Errorf("stat state file: %w", err)
-	}
-
-	legacy := s.stateFileLegacy(planFile)
-	if _, err := os.Stat(legacy); err == nil {
-		return legacy, true, nil
-	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return "", false, fmt.Errorf("stat legacy state file: %w", err)
-	}
-	return v2, false, nil
-}
-
-func (s *Store) migrateStateFileIfNeeded(planFile, source string, state domain.State) error {
-	target := s.stateFileV2(planFile)
-	if source == target {
-		return nil
-	}
-	if err := domain.WriteJSONFile(target, state); err != nil {
-		return fmt.Errorf("migrate legacy state file: %w", err)
-	}
-	_ = os.Remove(source)
-	return nil
-}
-
 // LoadOrInitializeState creates state from plan or merges existing state after plan changes.
 func (s *Store) LoadOrInitializeState(planFile string, plan domain.Plan) (domain.State, error) {
 	if err := s.Init(); err != nil {
@@ -52,10 +23,7 @@ func (s *Store) LoadOrInitializeState(planFile string, plan domain.Plan) (domain
 		return domain.State{}, err
 	}
 
-	stateFile, legacy, err := s.findStateFile(planFile)
-	if err != nil {
-		return domain.State{}, err
-	}
+	stateFile := s.StateFile(planFile)
 	now := time.Now().UTC().Format(time.RFC3339)
 
 	if _, err := os.Stat(stateFile); errors.Is(err, os.ErrNotExist) {
@@ -66,7 +34,7 @@ func (s *Store) LoadOrInitializeState(planFile string, plan domain.Plan) (domain
 			UpdatedAt:    now,
 			Tasks:        domain.StateTasksFromPlan(plan),
 		}
-		if err := domain.WriteJSONFile(s.StateFile(planFile), state); err != nil {
+		if err := domain.WriteJSONFile(stateFile, state); err != nil {
 			return domain.State{}, err
 		}
 		return state, nil
@@ -81,47 +49,30 @@ func (s *Store) LoadOrInitializeState(planFile string, plan domain.Plan) (domain
 
 	migrated := s.normalizeTaskStatuses(planFile, &state)
 	if state.PlanChecksum == checksum {
-		if legacy || migrated {
-			if migrateErr := s.migrateStateFileIfNeeded(planFile, stateFile, state); migrateErr != nil {
-				return domain.State{}, migrateErr
-			}
-			if !legacy && migrated {
-				if err := domain.WriteJSONFile(s.StateFile(planFile), state); err != nil {
-					return domain.State{}, err
-				}
+		if migrated {
+			if err := domain.WriteJSONFile(stateFile, state); err != nil {
+				return domain.State{}, err
 			}
 		}
 		return state, nil
 	}
 
 	merged := mergeState(planFile, checksum, state, plan)
-	if err := domain.WriteJSONFile(s.StateFile(planFile), merged); err != nil {
+	if err := domain.WriteJSONFile(stateFile, merged); err != nil {
 		return domain.State{}, err
-	}
-	if legacy {
-		_ = os.Remove(stateFile)
 	}
 	return merged, nil
 }
 
 // ReadState reads state from disk.
 func (s *Store) ReadState(planFile string) (domain.State, error) {
-	path, legacy, err := s.findStateFile(planFile)
-	if err != nil {
-		return domain.State{}, err
-	}
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(s.StateFile(planFile))
 	if err != nil {
 		return domain.State{}, fmt.Errorf("read state file: %w", err)
 	}
 	var state domain.State
 	if err := json.Unmarshal(data, &state); err != nil {
 		return domain.State{}, fmt.Errorf("decode state file: %w", err)
-	}
-	if legacy {
-		if migrateErr := s.migrateStateFileIfNeeded(planFile, path, state); migrateErr != nil {
-			return domain.State{}, migrateErr
-		}
 	}
 	return state, nil
 }
@@ -195,7 +146,7 @@ func (s *Store) DetectStuckTasks(_ string, state domain.State, _ int) ([]string,
 	return report, nil
 }
 
-// normalizeTaskStatuses migrates legacy statuses and absorbs external retry/feedback
+// normalizeTaskStatuses normalizes statuses and absorbs external retry/feedback
 // files into StateTask fields. Returns true if any task was modified.
 func (s *Store) normalizeTaskStatuses(planFile string, state *domain.State) bool {
 	changed := false
@@ -228,20 +179,16 @@ func (s *Store) normalizeTaskStatuses(planFile string, state *domain.State) bool
 // ResetPlanRuntime removes state, lock, retries and feedback for plan tasks.
 func (s *Store) ResetPlanRuntime(planFile string, plan domain.Plan) (int, error) {
 	removed := 0
-	for _, statePath := range []string{s.stateFileV2(planFile), s.stateFileLegacy(planFile)} {
-		if err := os.Remove(statePath); err == nil {
-			removed++
-		} else if err != nil && !errors.Is(err, os.ErrNotExist) {
-			return removed, fmt.Errorf("remove state file: %w", err)
-		}
+	if err := os.Remove(s.StateFile(planFile)); err == nil {
+		removed++
+	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return removed, fmt.Errorf("remove state file: %w", err)
 	}
 
-	for _, lockPath := range s.lockCandidates(planFile) {
-		if err := os.Remove(lockPath); err == nil {
-			removed++
-		} else if err != nil && !errors.Is(err, os.ErrNotExist) {
-			return removed, fmt.Errorf("remove lock file: %w", err)
-		}
+	if err := os.Remove(s.LockFile(planFile)); err == nil {
+		removed++
+	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return removed, fmt.Errorf("remove lock file: %w", err)
 	}
 
 	stateTasks := domain.StateTasksFromPlan(plan)
