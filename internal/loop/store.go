@@ -10,8 +10,11 @@ import (
 )
 
 // Store manages mutable runner state files and runtime artifacts.
+// StateRoot holds persistent data (state, locks, costs, checkpoints).
+// CacheRoot holds purgeable artifacts (logs).
 type Store struct {
-	Root string
+	StateRoot string
+	CacheRoot string
 }
 
 // RunLock represents one acquired runtime lock owned by this process.
@@ -20,23 +23,34 @@ type RunLock struct {
 	Token string
 }
 
-// NewStore builds a store with a validated root path.
-func NewStore(root string) *Store {
-	root = strings.TrimSpace(root)
-	if root == "" {
-		projectRoot, err := ProjectStateRootForDir(".")
+// NewStore builds a store with validated root paths.
+// stateRoot holds persistent data; cacheRoot holds purgeable artifacts.
+// If cacheRoot is empty, it falls back to stateRoot.
+func NewStore(stateRoot, cacheRoot string) *Store {
+	stateRoot = strings.TrimSpace(stateRoot)
+	if stateRoot == "" {
+		resolved, err := ProjectStateRootForDir(".")
 		if err == nil {
-			root = projectRoot
+			stateRoot = resolved
 		} else {
 			homeDir, homeErr := os.UserHomeDir()
 			if homeErr == nil {
-				root = filepath.Join(homeDir, PraetorHomeDirName)
+				stateRoot = filepath.Join(homeDir, ".local", "state", "praetor")
 			} else {
-				root = filepath.Join(".", PraetorHomeDirName)
+				stateRoot = filepath.Join(".", ".praetor")
 			}
 		}
 	}
-	return &Store{Root: root}
+	cacheRoot = strings.TrimSpace(cacheRoot)
+	if cacheRoot == "" {
+		resolved, err := ProjectCacheRootForDir(".")
+		if err == nil {
+			cacheRoot = resolved
+		} else {
+			cacheRoot = stateRoot
+		}
+	}
+	return &Store{StateRoot: stateRoot, CacheRoot: cacheRoot}
 }
 
 // Init ensures all required state directories exist.
@@ -59,31 +73,31 @@ func (s *Store) Init() error {
 }
 
 func (s *Store) CheckpointsDir() string {
-	return filepath.Join(s.Root, "checkpoints")
+	return filepath.Join(s.StateRoot, "checkpoints")
 }
 
 func (s *Store) FeedbackDir() string {
-	return filepath.Join(s.Root, "feedback")
+	return filepath.Join(s.StateRoot, "feedback")
 }
 
 func (s *Store) LocksDir() string {
-	return filepath.Join(s.Root, "locks")
+	return filepath.Join(s.StateRoot, "locks")
 }
 
 func (s *Store) LogsDir() string {
-	return filepath.Join(s.Root, "logs")
+	return filepath.Join(s.CacheRoot, "logs")
 }
 
 func (s *Store) RetriesDir() string {
-	return filepath.Join(s.Root, "retries")
+	return filepath.Join(s.StateRoot, "retries")
 }
 
 func (s *Store) CostsDir() string {
-	return filepath.Join(s.Root, "costs")
+	return filepath.Join(s.StateRoot, "costs")
 }
 
 func (s *Store) StateDir() string {
-	return filepath.Join(s.Root, "state")
+	return filepath.Join(s.StateRoot, "state")
 }
 
 // PlanBaseName returns a state-safe basename for one plan file.

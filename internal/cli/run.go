@@ -158,7 +158,7 @@ isolation protects the main branch from partial changes.`,
 	cmd.Flags().StringVar(&claudeBin, "claude-bin", "claude", "Claude binary path or name")
 	cmd.Flags().StringVar(&tmuxSession, "tmux-session", "", "tmux session name (default: praetor-<project-hash>)")
 	cmd.Flags().StringVar(&workdir, "workdir", ".", "Working directory for agents")
-	cmd.Flags().StringVar(&stateRoot, "state-root", "", "State root directory (default: ~/.praetor/projects/<hash>)")
+	cmd.Flags().StringVar(&stateRoot, "state-root", "", "State root directory (default: $XDG_STATE_HOME/praetor/projects/<hash>)")
 	cmd.Flags().BoolVar(&noColor, "no-color", false, "Disable colored output")
 	cmd.Flags().StringVar(&isolation, "isolation", string(loop.IsolationWorktree), "Isolation mode: worktree or off")
 	cmd.Flags().StringVar(&postTaskHook, "hook", "", "Script to run after executor, before reviewer")

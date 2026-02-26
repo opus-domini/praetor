@@ -124,6 +124,7 @@ func TestRunnerStopsImmediatelyOnCanceledContext(t *testing.T) {
 	runner := NewRunner(nilRuntime{})
 	_, err := runner.Run(ctx, ioDiscard{}, planPath, RunnerOptions{
 		StateRoot:       filepath.Join(tmpDir, "state"),
+		CacheRoot:       filepath.Join(tmpDir, "cache"),
 		Workdir:         tmpDir,
 		DefaultExecutor: AgentCodex,
 		DefaultReviewer: AgentNone,
@@ -154,7 +155,7 @@ func TestRunnerReleasesLockWhenBootstrapFailsAfterLock(t *testing.T) {
 	})
 
 	stateRoot := filepath.Join(tmpDir, "state")
-	store := NewStore(stateRoot)
+	store := NewStore(stateRoot, stateRoot)
 	lockPath := store.LockFile(planPath)
 
 	runner := NewRunner(nilRuntime{})
@@ -221,7 +222,7 @@ func TestRunnerKeepsTaskOpenWhenMergeFails(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	store := NewStore(stateRoot)
+	store := NewStore(stateRoot, stateRoot)
 	state, readErr := store.ReadState(planPath)
 	if readErr != nil {
 		t.Fatalf("read state: %v", readErr)

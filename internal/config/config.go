@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/opus-domini/praetor/internal/paths"
 )
 
 // Config holds resolved configuration values.
@@ -27,15 +29,22 @@ type Config struct {
 }
 
 // Path returns the config file path, respecting $PRAETOR_CONFIG.
+// Resolution: $PRAETOR_CONFIG > XDG config path > legacy ~/.praetor/config.toml
 func Path() string {
 	if env := strings.TrimSpace(os.Getenv("PRAETOR_CONFIG")); env != "" {
 		return env
 	}
-	homeDir, err := os.UserHomeDir()
+	xdgPath, err := paths.DefaultConfigFile()
 	if err != nil {
 		return ""
 	}
-	return filepath.Join(homeDir, ".praetor", "config.toml")
+	// Read-fallback: if XDG config doesn't exist, check legacy location.
+	if _, statErr := os.Stat(xdgPath); statErr != nil {
+		if legacy := paths.LegacyConfigFile(); legacy != "" {
+			return legacy
+		}
+	}
+	return xdgPath
 }
 
 // Load reads the config file and returns resolved values for a project.

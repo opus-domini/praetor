@@ -1,21 +1,14 @@
 package loop
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
-)
 
-const (
-	// PraetorHomeDirName is the global home directory for Praetor runtime data.
-	PraetorHomeDirName = ".praetor"
-	// PraetorProjectsDirName holds per-project runtime directories.
-	PraetorProjectsDirName = "projects"
+	"github.com/opus-domini/praetor/internal/paths"
 )
 
 // ResolveStateRoot returns the state root from explicit input or derived project scope.
@@ -27,20 +20,42 @@ func ResolveStateRoot(explicitRoot, projectDir string) (string, error) {
 	return ProjectStateRootForDir(projectDir)
 }
 
-// ProjectStateRootForDir resolves the per-project state root under ~/.praetor/projects.
+// ProjectStateRootForDir resolves the per-project state root using XDG paths
+// with read-fallback to legacy ~/.praetor/projects.
 func ProjectStateRootForDir(projectDir string) (string, error) {
 	projectRoot, err := ResolveProjectRoot(projectDir)
 	if err != nil {
 		return "", err
 	}
-
-	homeDir, err := os.UserHomeDir()
+	xdgRoot, err := paths.DefaultProjectStateRoot(projectRoot)
 	if err != nil {
-		return "", fmt.Errorf("resolve user home directory: %w", err)
+		return "", err
 	}
+	// Read-fallback: if XDG state doesn't exist, check legacy location.
+	if _, statErr := os.Stat(xdgRoot); statErr != nil {
+		if legacy := paths.LegacyProjectStateRoot(projectRoot); legacy != "" {
+			return legacy, nil
+		}
+	}
+	return xdgRoot, nil
+}
 
-	key := projectRuntimeKey(projectRoot)
-	return filepath.Join(homeDir, PraetorHomeDirName, PraetorProjectsDirName, key), nil
+// ProjectCacheRootForDir resolves the per-project cache root using XDG paths.
+func ProjectCacheRootForDir(projectDir string) (string, error) {
+	projectRoot, err := ResolveProjectRoot(projectDir)
+	if err != nil {
+		return "", err
+	}
+	return paths.DefaultProjectCacheRoot(projectRoot)
+}
+
+// ResolveCacheRoot returns the cache root from explicit input or derived project scope.
+func ResolveCacheRoot(explicitRoot, projectDir string) (string, error) {
+	explicitRoot = strings.TrimSpace(explicitRoot)
+	if explicitRoot != "" {
+		return expandPath(explicitRoot)
+	}
+	return ProjectCacheRootForDir(projectDir)
 }
 
 // ProjectRuntimeKeyForDir resolves the stable project key used for runtime artifacts.
@@ -49,7 +64,7 @@ func ProjectRuntimeKeyForDir(projectDir string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return projectRuntimeKey(projectRoot), nil
+	return paths.ProjectRuntimeKey(projectRoot), nil
 }
 
 // ResolveProjectRoot resolves the git repository root for a directory.
@@ -95,18 +110,28 @@ func ResolveProjectRoot(dir string) (string, error) {
 }
 
 func projectRuntimeKey(projectRoot string) string {
-	baseName := strings.TrimSpace(filepath.Base(projectRoot))
-	baseName = strings.Trim(baseName, ".")
-	if baseName == "" {
-		baseName = "project"
+	return paths.ProjectRuntimeKey(projectRoot)
+}
+
+const maxProjectContextSize = 16 * 1024 // 16 KiB
+
+// ReadProjectContext reads a praetor.md file from the project root.
+// Returns empty string and nil error if the file does not exist.
+// Content is truncated at 16 KiB; the second return indicates truncation.
+func ReadProjectContext(projectRoot string) (string, bool, error) {
+	path := filepath.Join(projectRoot, "praetor.md")
+	data, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return "", false, nil
 	}
-
-	replacer := strings.NewReplacer("/", "-", "\\", "-", " ", "-", ":", "-", "\t", "-", "\n", "-", "\r", "-")
-	baseName = replacer.Replace(baseName)
-
-	hash := sha256.Sum256([]byte(projectRoot))
-	hashPart := hex.EncodeToString(hash[:])[:12]
-	return baseName + "-" + hashPart
+	if err != nil {
+		return "", false, fmt.Errorf("read project context: %w", err)
+	}
+	content := strings.TrimSpace(string(data))
+	if len(content) > maxProjectContextSize {
+		return content[:maxProjectContextSize], true, nil
+	}
+	return content, false, nil
 }
 
 func expandPath(path string) (string, error) {

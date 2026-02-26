@@ -34,10 +34,11 @@ type activeRun struct {
 	transitions *TransitionRecorder
 	isolation   *IsolationPolicy
 
-	state     State
-	stats     RunnerStats
-	totalCost float64
-	loopStart time.Time
+	projectContext string
+	state          State
+	stats          RunnerStats
+	totalCost      float64
+	loopStart      time.Time
 }
 
 // Run executes a plan file until completion, blockage, or retry exhaustion.
@@ -129,7 +130,7 @@ func (r *Runner) bootstrapRun(ctx context.Context, out io.Writer, planFile strin
 		return run, RunLock{}, cleanupRuntime, err
 	}
 
-	store := NewStore(normalized.StateRoot)
+	store := NewStore(normalized.StateRoot, normalized.CacheRoot)
 	run.store = store
 
 	lock, err := store.AcquireRunLock(planFile, normalized.Force)
@@ -167,6 +168,15 @@ func (r *Runner) bootstrapRun(ctx context.Context, out io.Writer, planFile strin
 		return run, lock, cleanupRuntime, err
 	}
 
+	projectContext, truncated, projectContextErr := ReadProjectContext(normalized.Workdir)
+	if projectContextErr != nil {
+		render.Warn(fmt.Sprintf("Failed to read praetor.md: %v", projectContextErr))
+	}
+	if truncated {
+		render.Warn("praetor.md exceeds 16 KiB; content truncated")
+	}
+	run.projectContext = projectContext
+
 	render.Header("Praetor Loop")
 	if planTitle := strings.TrimSpace(plan.Title); planTitle != "" {
 		render.KV("Plan:", planTitle)
@@ -176,6 +186,9 @@ func (r *Runner) bootstrapRun(ctx context.Context, out io.Writer, planFile strin
 	render.KV("Progress:", fmt.Sprintf("%d/%d done", state.DoneCount(), len(state.Tasks)))
 	if normalized.Isolation == IsolationWorktree {
 		render.KV("Isolation:", "worktree")
+	}
+	if projectContext != "" {
+		render.KV("Context:", "praetor.md")
 	}
 	if sm, ok := runtime.(SessionManager); ok {
 		render.KV("tmux:", sm.SessionName())
@@ -309,7 +322,7 @@ func (r *Runner) runIteration(ctx context.Context, run *activeRun) (bool, error)
 
 	run.render.Phase("executor", string(selected.executor), fmt.Sprintf("attempt %d/%d", selected.retries+1, run.options.MaxRetries))
 
-	executorSystemPrompt := buildExecutorSystemPrompt()
+	executorSystemPrompt := buildExecutorSystemPrompt(run.projectContext)
 	executorTaskPrompt := buildExecutorTaskPrompt(run.planFile, selected.index, selected.task, selected.feedback, selected.retries, run.plan.Title, selected.progress, taskWorkdir)
 	_ = writeText(filepath.Join(runDir, "executor.system.txt"), executorSystemPrompt)
 	_ = writeText(filepath.Join(runDir, "executor.prompt.txt"), executorTaskPrompt)
@@ -445,7 +458,7 @@ func (r *Runner) runIteration(ctx context.Context, run *activeRun) (bool, error)
 		run.render.Phase("reviewer", string(selected.reviewer), "reviewing task result")
 		gitDiff := CaptureGitDiff(taskWorkdir, 500)
 
-		reviewerSystemPrompt := buildReviewerSystemPrompt()
+		reviewerSystemPrompt := buildReviewerSystemPrompt(run.projectContext)
 		reviewerTaskPrompt := buildReviewerTaskPrompt(run.planFile, selected.task, executorOutput, taskWorkdir, run.plan.Title, selected.progress, gitDiff)
 		_ = writeText(filepath.Join(runDir, "reviewer.system.txt"), reviewerSystemPrompt)
 		_ = writeText(filepath.Join(runDir, "reviewer.prompt.txt"), reviewerTaskPrompt)
@@ -556,6 +569,13 @@ func normalizeRunnerOptions(options RunnerOptions) (RunnerOptions, error) {
 			return RunnerOptions{}, err
 		}
 		normalized.StateRoot = stateRoot
+	}
+	if strings.TrimSpace(normalized.CacheRoot) == "" {
+		cacheRoot, err := ResolveCacheRoot("", normalized.Workdir)
+		if err != nil {
+			return RunnerOptions{}, err
+		}
+		normalized.CacheRoot = cacheRoot
 	}
 	if normalized.MaxRetries <= 0 {
 		return RunnerOptions{}, errors.New("max retries must be greater than zero")

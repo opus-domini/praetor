@@ -122,6 +122,7 @@ func (s State) OpenCount() int {
 // RunnerOptions controls loop execution behavior.
 type RunnerOptions struct {
 	StateRoot       string
+	CacheRoot       string
 	Workdir         string
 	DefaultExecutor Agent
 	DefaultReviewer Agent

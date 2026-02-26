@@ -40,7 +40,7 @@ Output:
 
 ```
 Plan:     /abs/path/to/plan.json
-State:    /home/user/.praetor/projects/abc123/state/plan.state.json
+State:    /home/user/.local/state/praetor/projects/abc123/state/plan.state.json
 Updated:  2026-02-25T14:30:00Z
 Progress: 3/5 tasks done
 Status:   in progress
@@ -67,6 +67,15 @@ praetor plan reset docs/plans/my-plan.json
 ```
 
 Removes state, lock, and legacy retry/feedback files for the plan. Does not delete the plan file itself.
+
+### Migrate legacy state
+
+```bash
+praetor plan migrate-state          # copy ~/.praetor data to XDG locations
+praetor plan migrate-state --dry-run  # preview without copying
+```
+
+Copies legacy `~/.praetor/` data to XDG-compliant locations (`$XDG_CONFIG_HOME/praetor/`, `$XDG_STATE_HOME/praetor/`, `$XDG_CACHE_HOME/praetor/`). Original files are preserved. Safe to run multiple times (idempotent).
 
 ## Plan format
 
@@ -128,32 +137,42 @@ The plan is validated at load time:
 
 ## Runtime model
 
-### State isolation
+### Data layout (XDG)
 
-All mutable state is stored under `~/.praetor/projects/<project-hash>/`:
+Praetor follows the [XDG Base Directory Specification](https://specifications.freedesktop.org/basedir-spec/latest/). All paths can be overridden with `$PRAETOR_HOME`:
+
+| Category | Default path | Override |
+|----------|-------------|----------|
+| Config | `$XDG_CONFIG_HOME/praetor/` | `$PRAETOR_HOME/config/` |
+| State | `$XDG_STATE_HOME/praetor/` | `$PRAETOR_HOME/state/` |
+| Cache | `$XDG_CACHE_HOME/praetor/` | `$PRAETOR_HOME/cache/` |
+
+Per-project state is stored under `<state-home>/projects/<project-hash>/`:
 
 ```text
-~/.praetor/projects/<hash>/
+$XDG_STATE_HOME/praetor/projects/<hash>/
 ├── state/          # Task state per plan (.state.json)
 ├── locks/          # PID-based run locks
-├── logs/           # Per-run execution logs
-│   └── <timestamp>-<task>-<sig>/
-│       ├── executor.system.txt      # Executor system prompt
-│       ├── executor.prompt.txt      # Executor task prompt
-│       ├── executor.output.txt      # Executor output
-│       ├── executor.prompt          # Raw prompt file (tmux mode)
-│       ├── executor.system-prompt   # Raw system prompt file (tmux mode)
-│       ├── executor.stdout          # Raw stdout capture (tmux mode)
-│       ├── executor.stderr          # Raw stderr capture (tmux mode)
-│       ├── executor.exit            # Exit code (tmux mode)
-│       ├── executor.run.sh          # Wrapper script (tmux mode)
-│       ├── reviewer.*               # Same structure for reviewer
-│       ├── post-hook.stdout         # Post-task hook stdout (if used)
-│       └── post-hook.stderr         # Post-task hook stderr (if used)
 ├── retries/        # Legacy retry counters (migrated into state file on load)
 ├── feedback/       # Legacy feedback files (migrated into state file on load)
 ├── costs/          # Cost tracking ledger (tracking.tsv)
 └── checkpoints/    # Audit log (history.tsv) and current state (.state)
+
+$XDG_CACHE_HOME/praetor/projects/<hash>/
+└── logs/           # Per-run execution logs (purgeable)
+    └── <timestamp>-<task>-<sig>/
+        ├── executor.system.txt      # Executor system prompt
+        ├── executor.prompt.txt      # Executor task prompt
+        ├── executor.output.txt      # Executor output
+        ├── executor.prompt          # Raw prompt file (tmux mode)
+        ├── executor.system-prompt   # Raw system prompt file (tmux mode)
+        ├── executor.stdout          # Raw stdout capture (tmux mode)
+        ├── executor.stderr          # Raw stderr capture (tmux mode)
+        ├── executor.exit            # Exit code (tmux mode)
+        ├── executor.run.sh          # Wrapper script (tmux mode)
+        ├── reviewer.*               # Same structure for reviewer
+        ├── post-hook.stdout         # Post-task hook stdout (if used)
+        └── post-hook.stderr         # Post-task hook stderr (if used)
 ```
 
 The project hash is derived from the git repository root path (SHA-256), ensuring state isolation between projects.
@@ -272,6 +291,19 @@ Each task carries its retry state in `StateTask.Attempt` and `StateTask.Feedback
 
 `Attempt` and `Feedback` are cleared when a task completes successfully. They persist across process restarts as part of the state file.
 
+## Project context (`praetor.md`)
+
+Place a `praetor.md` file at your git repository root to inject project-specific context into executor and reviewer system prompts. This file is automatically detected and loaded at run start.
+
+Content is prepended to the system prompt under a `## Project Context` header. Use it for:
+
+- Coding conventions and style guidelines
+- Architecture constraints agents must respect
+- Testing requirements and CI expectations
+- Technology-specific instructions
+
+The file is limited to 16 KiB. If it exceeds this limit, content is truncated with a warning.
+
 ## Safety mechanisms
 
 ### Worktree isolation
@@ -347,7 +379,7 @@ Colored, structured output shows real-time progress:
 === Praetor Loop ===
 Plan:        implement user auth
 Plan file:   docs/plans/plan.json
-State:       ~/.praetor/projects/abc123/state/plan.state.json
+State:       ~/.local/state/praetor/projects/abc123/state/plan.state.json
 Progress:    0/2 done
 Isolation:   worktree
 tmux:        praetor-abc123

@@ -5,8 +5,13 @@ import (
 	"strings"
 )
 
-func buildExecutorSystemPrompt() string {
-	return strings.TrimSpace(`You are an autonomous executor agent in an automated task pipeline.
+func buildExecutorSystemPrompt(projectContext string) string {
+	var b strings.Builder
+	if projectContext != "" {
+		fmt.Fprintf(&b, "## Project Context\n%s\n\n", projectContext)
+	}
+	b.WriteString(`## Your Role
+You are an autonomous executor agent in an automated task pipeline.
 Your job is to complete exactly one task.
 
 Rules:
@@ -21,6 +26,7 @@ SUMMARY: <brief summary>
 TESTS: <commands and outcomes>
 
 If not completed, use RESULT: FAIL and explain why.`)
+	return strings.TrimSpace(b.String())
 }
 
 func buildExecutorTaskPrompt(planFile string, taskIndex int, task StateTask, previousFeedback string, retryCount int, planTitle, progress, workdir string) string {
@@ -64,8 +70,13 @@ func buildExecutorTaskPrompt(planFile string, taskIndex int, task StateTask, pre
 	return strings.TrimSpace(b.String())
 }
 
-func buildReviewerSystemPrompt() string {
-	return strings.TrimSpace(`You are an automated review gate.
+func buildReviewerSystemPrompt(projectContext string) string {
+	var b strings.Builder
+	if projectContext != "" {
+		fmt.Fprintf(&b, "## Project Context\n%s\n\n", projectContext)
+	}
+	b.WriteString(`## Your Role
+You are an automated review gate.
 Return a single verdict line:
 PASS|<short reason>
 or
@@ -75,6 +86,7 @@ Review principles:
 - PASS if task requirements are met.
 - FAIL if requirements were not met or output is invalid.
 - Prefer concise, actionable feedback.`)
+	return strings.TrimSpace(b.String())
 }
 
 func buildReviewerTaskPrompt(planFile string, task StateTask, executorOutput, workdir, planTitle, progress, gitDiff string) string {

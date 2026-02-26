@@ -24,7 +24,7 @@ func TestLoadOrInitializeStateMergesPlanChanges(t *testing.T) {
 	}
 	writePlanFile(t, planPath, plan)
 
-	store := NewStore(filepath.Join(tmpDir, "state"))
+	store := NewStore(filepath.Join(tmpDir, "state"), filepath.Join(tmpDir, "state"))
 	state, err := store.LoadOrInitializeState(planPath, plan)
 	if err != nil {
 		t.Fatalf("initialize state: %v", err)
@@ -68,7 +68,7 @@ func TestLoadOrInitializeStatePreservesImplicitTaskStatusAfterReorder(t *testing
 	}
 	writePlanFile(t, planPath, initialPlan)
 
-	store := NewStore(filepath.Join(tmpDir, "state"))
+	store := NewStore(filepath.Join(tmpDir, "state"), filepath.Join(tmpDir, "state"))
 	state, err := store.LoadOrInitializeState(planPath, initialPlan)
 	if err != nil {
 		t.Fatalf("initialize state: %v", err)
@@ -115,7 +115,7 @@ func writePlanFile(t *testing.T, path string, plan Plan) {
 func TestWriteTaskMetrics(t *testing.T) {
 	t.Parallel()
 	tmpDir := t.TempDir()
-	store := &Store{Root: tmpDir}
+	store := &Store{StateRoot: tmpDir, CacheRoot: tmpDir}
 	if err := store.Init(); err != nil {
 		t.Fatal(err)
 	}
@@ -151,7 +151,7 @@ func TestWriteTaskMetrics(t *testing.T) {
 func TestWriteCheckpoint(t *testing.T) {
 	t.Parallel()
 	tmpDir := t.TempDir()
-	store := &Store{Root: tmpDir}
+	store := &Store{StateRoot: tmpDir, CacheRoot: tmpDir}
 	if err := store.Init(); err != nil {
 		t.Fatal(err)
 	}
@@ -199,7 +199,7 @@ func TestStateFilesDoNotCollideForSameBasename(t *testing.T) {
 	t.Parallel()
 
 	tmpDir := t.TempDir()
-	store := &Store{Root: filepath.Join(tmpDir, "state")}
+	store := &Store{StateRoot: filepath.Join(tmpDir, "state"), CacheRoot: filepath.Join(tmpDir, "state")}
 	if err := store.Init(); err != nil {
 		t.Fatal(err)
 	}
@@ -223,7 +223,7 @@ func TestTaskSignatureForPlanIsPlanScoped(t *testing.T) {
 	t.Parallel()
 
 	tmpDir := t.TempDir()
-	store := &Store{Root: tmpDir}
+	store := &Store{StateRoot: tmpDir, CacheRoot: tmpDir}
 	task := StateTask{ID: "TASK-001", Title: "Task"}
 
 	sigA := store.TaskSignatureForPlan(filepath.Join(tmpDir, "a", "plan.json"), 0, task)
@@ -237,7 +237,7 @@ func TestReleaseRunLockRequiresOwnershipToken(t *testing.T) {
 	t.Parallel()
 
 	tmpDir := t.TempDir()
-	store := &Store{Root: filepath.Join(tmpDir, "state")}
+	store := &Store{StateRoot: filepath.Join(tmpDir, "state"), CacheRoot: filepath.Join(tmpDir, "state")}
 	if err := store.Init(); err != nil {
 		t.Fatal(err)
 	}
@@ -264,7 +264,7 @@ func TestIsPlanRunningIgnoresForeignHostLock(t *testing.T) {
 	t.Parallel()
 
 	tmpDir := t.TempDir()
-	store := &Store{Root: filepath.Join(tmpDir, "state")}
+	store := &Store{StateRoot: filepath.Join(tmpDir, "state"), CacheRoot: filepath.Join(tmpDir, "state")}
 	if err := store.Init(); err != nil {
 		t.Fatal(err)
 	}
@@ -301,7 +301,7 @@ func TestAcquireRunLockIgnoresForeignRuntimeLock(t *testing.T) {
 	t.Parallel()
 
 	tmpDir := t.TempDir()
-	store := &Store{Root: filepath.Join(tmpDir, "state")}
+	store := &Store{StateRoot: filepath.Join(tmpDir, "state"), CacheRoot: filepath.Join(tmpDir, "state")}
 	if err := store.Init(); err != nil {
 		t.Fatal(err)
 	}

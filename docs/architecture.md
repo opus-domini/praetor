@@ -17,10 +17,12 @@ internal/
 ├── cli/                          Cobra command wiring and flag parsing
 │   ├── root.go                   Root command
 │   ├── run.go                    praetor run <plan-file>
-│   ├── plan.go                   praetor plan {create,list,status,reset}
+│   ├── plan.go                   praetor plan {create,list,status,reset,migrate-state}
 │   └── exec.go                   praetor exec [prompt]
 ├── config/                       User configuration
-│   └── config.go                 ~/.praetor/config.toml loader and parser
+│   └── config.go                 XDG config.toml loader and parser
+├── paths/                        XDG path resolution
+│   └── paths.go                  DefaultConfigDir, DefaultStateHome, DefaultCacheHome, etc.
 ├── loop/                         Plan-driven orchestration runtime
 │   ├── types.go                  Plan, Task, State, TaskStatus, AgentRuntime, IsolationMode
 │   ├── plan.go                   Plan loading, validation, checksum, scaffolding
@@ -32,6 +34,8 @@ internal/
 │   ├── agents.go                 SDKAgentRuntime (in-process Claude/Codex SDK calls)
 │   ├── agents_tmux.go            TMUXAgentRuntime (tmux-window subprocess execution)
 │   ├── prompts.go                Executor/reviewer prompt builders, git diff capture
+│   ├── project.go                Project root resolution, project context (praetor.md)
+│   ├── migrate.go                Legacy ~/.praetor → XDG migration
 │   ├── output.go                 Colored terminal renderer
 │   └── state.go                  Dependency graph evaluation, blocked task detection
 ├── orchestrator/                 Provider contract and dispatch engine
@@ -58,8 +62,9 @@ internal/
 |---------|---------------|
 | `cmd/praetor` | Process entrypoint. Calls `cli.NewRootCmd().Execute()`. |
 | `internal/cli` | Cobra command tree (`run`, `plan`, `exec`), flag parsing, config loading, provider construction. No business logic. |
-| `internal/config` | User configuration loader. Reads `~/.praetor/config.toml` with global defaults and per-project overrides. Zero external dependencies. |
-| `internal/loop` | Immutable plan model, mutable state store, task state machine (5-state FSM with validated transitions), dependency graph, runner pipeline, agent runtimes, prompt construction, terminal output. |
+| `internal/config` | User configuration loader. Reads `$XDG_CONFIG_HOME/praetor/config.toml` (or `$PRAETOR_HOME/config/config.toml`) with global defaults and per-project overrides. Falls back to legacy `~/.praetor/config.toml`. |
+| `internal/paths` | XDG Base Directory path resolution. Single source of truth for config, state, and cache directories. Supports `$PRAETOR_HOME` override, XDG env vars, and OS defaults. |
+| `internal/loop` | Immutable plan model, mutable state store, task state machine (5-state FSM with validated transitions), dependency graph, runner pipeline, agent runtimes, prompt construction, project context loading, terminal output. |
 | `internal/orchestrator` | Provider contract (`Provider` interface), request/response types, provider registry, dispatch engine. |
 | `internal/providers/claude` | Full Go port of `@anthropic-ai/claude-agent-sdk`. Communicates with the `claude` CLI process over `stream-json`. |
 | `internal/providers/codex` | Full Go port of `@openai/codex-sdk`. Communicates with the `codex` CLI process over JSONL. |
@@ -122,5 +127,7 @@ One external dependency: [`cobra`](https://github.com/spf13/cobra) for CLI parsi
 - **Packages are small and focused.** Each package owns one concept and exposes a minimal surface.
 - **Explicit dependencies over global state.** No `init()` functions, no package-level mutable state.
 - **Provider isolation.** Provider-specific logic never leaks outside `internal/providers/`. The orchestrator and loop packages interact only through the `Provider` and `AgentRuntime` interfaces.
-- **Immutable plans, mutable state.** Plan files are never modified at runtime. All mutable data lives under `~/.praetor/projects/<project-hash>/` and can be safely deleted or reset.
+- **XDG-compliant layout.** Mutable state lives under `$XDG_STATE_HOME/praetor/`, purgeable cache (logs) under `$XDG_CACHE_HOME/praetor/`, and config under `$XDG_CONFIG_HOME/praetor/`. `$PRAETOR_HOME` overrides all three. Legacy `~/.praetor/` is supported via read-fallback. Migrate with `praetor plan migrate-state`.
+- **Immutable plans, mutable state.** Plan files are never modified at runtime. All mutable data lives under XDG-compliant directories and can be safely deleted or reset.
+- **Project context.** An optional `praetor.md` file at the git root is injected into executor and reviewer system prompts, providing project-specific conventions and constraints.
 - **Observable execution.** Every agent step runs in a visible tmux window. Prompts, outputs, and scripts are persisted as files for debugging.
