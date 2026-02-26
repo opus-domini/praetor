@@ -22,15 +22,37 @@ internal/
 ├── agents/                       Central polymorphic Agent interface + adapters (CLI/REST)
 ├── cli/                          Cobra command wiring (`plan`, `exec`)
 ├── config/                       Config loader (`config.toml`, global + per-project)
-├── loop/                         Plan runtime (FSM, transitions, retries, review gates)
+├── domain/                       Pure domain types (Plan, Task, State, Agent, transitions, graph)
+├── loop/                         Plan runtime (FSM runner, retries, review gates, cognitive agents)
+├── orchestration/
+│   ├── fsm/                      Generic functional state machine (stateFn pattern)
+│   └── pipeline/                 Plan/Execute/Review phase sequencing rules
 ├── orchestrator/                 Legacy single-prompt provider engine
 ├── paths/                        XDG and legacy path resolution
+├── providers/                    Provider catalog and SDK ports
+│   ├── claude/                   Claude CLI adapter
+│   └── codex/                    Codex CLI adapter
 ├── runtime/
+│   ├── process/                  Non-interactive subprocess execution
 │   └── pty/                      Interactive pseudo-terminal sessions (start/read/write/close)
 ├── state/                        Project-local transactional snapshots and root resolvers
-├── workspace/                    Git root resolution and `praetor.{yaml,yml,md}` loading
-└── providers/                    Provider SDK ports (Claude/Codex)
+└── workspace/                    Git root resolution and `praetor.{yaml,yml,md}` loading
 ```
+
+## Domain layer
+
+`internal/domain` is the single source of truth for all domain types. It has zero
+internal dependencies (only Go stdlib). Other packages import from domain and may
+re-export via type aliases for backward compatibility.
+
+Key contents:
+
+- **Types:** `Agent`, `Plan`, `Task`, `TaskStatus`, `StateTask`, `State`, `RunnerOptions`,
+  `AgentRequest`, `AgentResult`, `CommandSpec`, `ProcessResult`, `CostEntry`, `CheckpointEntry`,
+  `PlanStatus`, `ExecutorResult`, `ReviewDecision`.
+- **Transitions:** `ValidTransitions`, `Transition()`, `IsTerminal()`, `NormalizeStatus()`.
+- **Graph:** `NextRunnableTask()`, `RunnableTasks()`, `BlockedTasksReport()`.
+- **Parsing:** `ParseExecutorResult()`, `ParseReviewDecision()`.
 
 ## Execution flow
 
@@ -60,6 +82,19 @@ internal/
    - transactional local snapshot (`.praetor/runtime/<run-id>/snapshot.json` + journal)
 8. Runner exits on completion, cancellation, blockage, or iteration cap.
 
+## Orchestration
+
+### FSM (`internal/orchestration/fsm`)
+
+Generic functional state machine using `StateFn[S any]` — a function that takes
+context and state, returning the next state function or nil to halt. Inspired by
+Rob Pike's lexer pattern, generalized with Go generics.
+
+### Pipeline (`internal/orchestration/pipeline`)
+
+Defines the Plan/Execute/Review/Gate phase sequence and valid transitions between
+phases. Used by the cognitive loop to enforce correct phase ordering.
+
 ## Runtime model
 
 `loop.Runner` chooses runtime by mode:
@@ -86,6 +121,12 @@ The cognitive strategy is **Plan-and-Execute** with explicit **Review gate**:
 
 This enables bidirectional interaction with CLI tools that require a real TTY.
 
+## Process runner
+
+`internal/runtime/process` provides non-interactive subprocess execution with
+stdout/stderr capture and optional file persistence. Used by direct-mode runners
+and agent specs that invoke CLI tools without a TTY.
+
 ## State and recovery
 
 State is split into two layers:
@@ -107,6 +148,7 @@ Writes are atomic (`tmp + rename`) and synced (`fsync`) on critical paths.
 - Small packages with clear ownership.
 - Explicit interfaces over implicit coupling.
 - Provider transport isolation (CLI and REST behind one `Agent` contract).
+- Domain types in a single, dependency-free package.
 - Workspace context anchored at repository root.
 - FSM-driven orchestration to avoid nested, brittle control flow.
 - Transactional recovery by default.

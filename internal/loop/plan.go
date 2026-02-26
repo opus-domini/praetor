@@ -208,7 +208,3 @@ func NewPlanFile(slug string, now time.Time, baseDir string) (string, error) {
 	}
 	return path, nil
 }
-
-func normalizeAgent(agent Agent) Agent {
-	return Agent(strings.ToLower(strings.TrimSpace(string(agent))))
-}

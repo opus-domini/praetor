@@ -1,58 +1,24 @@
 package loop
 
-import "fmt"
+import "github.com/opus-domini/praetor/internal/domain"
 
-// validTransitions defines the allowed state changes for a task.
-// Terminal states (done, failed) have no outgoing transitions.
-var validTransitions = map[TaskStatus][]TaskStatus{
-	TaskPending:   {TaskExecuting, TaskFailed},
-	TaskExecuting: {TaskReviewing, TaskDone, TaskPending, TaskFailed},
-	TaskReviewing: {TaskDone, TaskPending, TaskFailed},
-	TaskDone:      {},
-	TaskFailed:    {},
-}
+// validTransitions — re-exported for internal loop use.
+var validTransitions = domain.ValidTransitions
 
-// allStatuses enumerates every valid TaskStatus for completeness checks.
-var allStatuses = []TaskStatus{
-	TaskPending,
-	TaskExecuting,
-	TaskReviewing,
-	TaskDone,
-	TaskFailed,
-}
+// allStatuses — re-exported for internal loop use.
+var allStatuses = domain.AllStatuses
 
-// Transition validates a state change from → to.
-// Returns nil if valid, or an error describing the invalid transition.
+// Transition delegates to domain.Transition.
 func Transition(from, to TaskStatus) error {
-	allowed, ok := validTransitions[from]
-	if !ok {
-		return fmt.Errorf("unknown source state %q", from)
-	}
-	for _, a := range allowed {
-		if a == to {
-			return nil
-		}
-	}
-	return fmt.Errorf("invalid transition %s → %s", from, to)
+	return domain.Transition(from, to)
 }
 
-// IsTerminal reports whether a status is a terminal (final) state.
+// IsTerminal delegates to domain.IsTerminal.
 func IsTerminal(status TaskStatus) bool {
-	return status == TaskDone || status == TaskFailed
+	return domain.IsTerminal(status)
 }
 
-// NormalizeStatus maps legacy status values to current ones and
-// resets transient states for crash recovery.
+// NormalizeStatus delegates to domain.NormalizeStatus.
 func NormalizeStatus(status TaskStatus) TaskStatus {
-	switch status {
-	case TaskStatusOpen:
-		return TaskPending
-	case TaskExecuting, TaskReviewing:
-		// Transient states on load mean the process crashed mid-flight.
-		return TaskPending
-	case TaskPending, TaskDone, TaskFailed:
-		return status
-	default:
-		return TaskPending
-	}
+	return domain.NormalizeStatus(status)
 }

@@ -10,19 +10,6 @@ import (
 	"strings"
 )
 
-// PlanStatus describes execution status of a plan.
-type PlanStatus struct {
-	PlanFile  string
-	StateFile string
-	UpdatedAt string
-	Done      int
-	Failed    int
-	Active    int
-	Total     int
-	Running   bool
-	Tasks     []StateTask
-}
-
 // Status returns current execution status for a plan.
 func (s *Store) Status(planFile string) (PlanStatus, error) {
 	planFile = strings.TrimSpace(planFile)

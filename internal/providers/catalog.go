@@ -8,6 +8,8 @@ type ID string
 const (
 	Codex  ID = "codex"
 	Claude ID = "claude"
+	Gemini ID = "gemini"
+	Ollama ID = "ollama"
 )
 
 // Normalize canonicalizes provider identifiers for validation and routing.
@@ -18,7 +20,7 @@ func Normalize(raw string) ID {
 // IsSupported reports whether id maps to a built-in provider.
 func IsSupported(id ID) bool {
 	switch id {
-	case Codex, Claude:
+	case Codex, Claude, Gemini, Ollama:
 		return true
 	default:
 		return false

@@ -7,18 +7,6 @@ import (
 	"syscall"
 )
 
-// CostEntry records one agent invocation's metrics.
-type CostEntry struct {
-	Timestamp string
-	RunID     string
-	TaskID    string
-	Agent     string
-	Role      string
-	DurationS float64
-	Status    string
-	CostUSD   float64
-}
-
 // WriteTaskMetrics appends one cost entry to the tracking ledger.
 func (s *Store) WriteTaskMetrics(entry CostEntry) error {
 	path := filepath.Join(s.CostsDir(), "tracking.tsv")
@@ -49,16 +37,6 @@ func (s *Store) WriteTaskMetrics(entry CostEntry) error {
 		return fmt.Errorf("write cost entry: %w", err)
 	}
 	return nil
-}
-
-// CheckpointEntry records one state transition in the audit log.
-type CheckpointEntry struct {
-	Timestamp string
-	Status    string
-	TaskID    string
-	Signature string
-	RunID     string
-	Message   string
 }
 
 // WriteCheckpoint appends to the history log and overwrites the current checkpoint.
