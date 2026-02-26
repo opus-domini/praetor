@@ -72,13 +72,13 @@ make build
 praetor plan create my-feature
 
 # Run plan (default runner: tmux)
-praetor plan run docs/plans/PLAN-PRAETOR-YYYY-MM-DD-my-feature.json
+praetor plan run my-feature
 ```
 
 ### Run with direct mode (no tmux)
 
 ```bash
-praetor plan run docs/plans/my-plan.json \
+praetor plan run my-plan \
   --runner direct \
   --executor codex \
   --reviewer claude \
@@ -89,9 +89,9 @@ praetor plan run docs/plans/my-plan.json \
 ### Check status and resume
 
 ```bash
-praetor plan status docs/plans/my-plan.json
+praetor plan status my-plan
 praetor plan list
-praetor plan resume docs/plans/my-plan.json
+praetor plan resume my-plan
 ```
 
 ### Single prompt mode
@@ -104,19 +104,22 @@ praetor exec --provider ollama --model llama3.1 "Explain this module"
 
 ## Command Overview
 
-- `praetor plan run <plan-file>` — execute orchestration pipeline.
-- `praetor plan status <plan-file>` — inspect state/progress.
+- `praetor plan run <slug>` — execute orchestration pipeline.
+- `praetor plan status <slug>` — inspect state/progress.
 - `praetor plan list` — list tracked plans for current project.
-- `praetor plan reset <plan-file>` — clear runtime state for one plan.
-- `praetor plan resume <plan-file>` — restore latest valid local snapshot.
-- `praetor plan migrate-state` — copy legacy `~/.praetor` state to XDG layout.
+- `praetor plan create <slug>` — create a new plan from a template.
+- `praetor plan edit <slug>` — open a plan in `$EDITOR`.
+- `praetor plan show <slug>` — print plan JSON to stdout.
+- `praetor plan path <slug>` — print the absolute plan file path.
+- `praetor plan reset <slug>` — clear runtime state for one plan.
+- `praetor plan resume <slug>` — restore latest valid local snapshot.
 - `praetor exec [prompt]` — run a single prompt against one provider.
 
 ## Configuration and State
 
-- Config path resolution: `$PRAETOR_CONFIG` > XDG config > legacy path.
-- State is isolated per git project under XDG state/cache directories.
-- Local transactional snapshots are stored in `<repo>/.praetor/runtime/<run-id>/`.
+- Home directory: `$PRAETOR_HOME` > `$XDG_CONFIG_HOME/praetor` > `~/.config/praetor`.
+- All state is isolated per git project under `<home>/projects/<project-key>/`.
+- Plans are identified by slug and stored in `<project>/plans/<slug>.json`.
 - Manifest discovery order: `praetor.yaml` > `praetor.yml` > `praetor.md`.
 
 ## Documentation

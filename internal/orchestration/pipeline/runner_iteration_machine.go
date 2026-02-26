@@ -103,7 +103,7 @@ func iterationStateSelectTask(ctx context.Context, machine *iterationMachine) (i
 		return nil, fmt.Errorf("task %s: %w", task.ID, err)
 	}
 
-	signature := run.store.TaskSignatureForPlan(run.planFile, index, task)
+	signature := run.store.TaskSignatureForPlan(run.slug, index, task)
 	if task.Attempt >= run.options.MaxRetries {
 		return nil, fmt.Errorf("retry limit reached for task %s (%s)", task.ID, task.Title)
 	}
@@ -144,7 +144,7 @@ func iterationStateSelectTask(ctx context.Context, machine *iterationMachine) (i
 	_ = run.persistSnapshot("task_selected", fmt.Sprintf("task selected: %s", task.ID))
 	run.render.Task(progress, taskLabel, task.Title)
 
-	if err := run.transitions.TransitionTask(&run.state, index, domain.TaskExecuting, run.planFile); err != nil {
+	if err := run.transitions.TransitionTask(&run.state, index, domain.TaskExecuting); err != nil {
 		return nil, err
 	}
 	run.render.Phase("executor", string(selected.executor), fmt.Sprintf("attempt %d/%d", selected.retries+1, run.options.MaxRetries))
@@ -162,7 +162,7 @@ func iterationStateExecuteTask(ctx context.Context, machine *iterationMachine) (
 	runDir := filepath.Join(run.store.LogsDir(), machine.runID)
 
 	executorSystemPrompt := BuildExecutorSystemPrompt(run.projectContext)
-	executorTaskPrompt := BuildExecutorTaskPrompt(run.planFile, selected.index, selected.task, selected.feedback, selected.retries, run.plan.Title, selected.progress, machine.taskWorkdir)
+	executorTaskPrompt := BuildExecutorTaskPrompt(run.slug, selected.index, selected.task, selected.feedback, selected.retries, run.plan.Title, selected.progress, machine.taskWorkdir)
 	_ = writeText(filepath.Join(runDir, "executor.system.txt"), executorSystemPrompt)
 	_ = writeText(filepath.Join(runDir, "executor.prompt.txt"), executorTaskPrompt)
 
@@ -191,7 +191,7 @@ func iterationStateExecuteTask(ctx context.Context, machine *iterationMachine) (
 		if isCancellationErr(execErr) || ctx.Err() != nil {
 			cancelErr := cancellationCause(ctx, execErr)
 			machine.setOutcome(taskOutcome{kind: taskOutcomeCanceled, message: cancelErr.Error(), cancelErr: cancelErr})
-			return iterationStateApplyOutcome, nil
+			return iterationStateApplyOutcome, nil //nolint:nilerr // error captured in outcome
 		}
 		machine.setOutcome(taskOutcome{
 			kind:         taskOutcomeRetry,
@@ -265,7 +265,7 @@ func iterationStateExecuteTask(ctx context.Context, machine *iterationMachine) (
 			if ctx.Err() != nil {
 				cancelErr := cancellationCause(ctx, nil)
 				machine.setOutcome(taskOutcome{kind: taskOutcomeCanceled, message: cancelErr.Error(), cancelErr: cancelErr})
-				return iterationStateApplyOutcome, nil
+				return iterationStateApplyOutcome, nil //nolint:nilerr // error captured in outcome
 			}
 			machine.setOutcome(taskOutcome{
 				kind:         taskOutcomeRetry,
@@ -290,7 +290,7 @@ func iterationStateExecuteTask(ctx context.Context, machine *iterationMachine) (
 		return iterationStateApplyOutcome, nil
 	}
 
-	if err := run.transitions.TransitionTask(&run.state, selected.index, domain.TaskReviewing, run.planFile); err != nil {
+	if err := run.transitions.TransitionTask(&run.state, selected.index, domain.TaskReviewing); err != nil {
 		return nil, err
 	}
 	run.render.Phase("reviewer", string(selected.reviewer), "reviewing task result")
@@ -308,7 +308,7 @@ func iterationStateReviewTask(ctx context.Context, machine *iterationMachine) (i
 	gitDiff := CaptureGitDiff(machine.taskWorkdir, 500)
 
 	reviewerSystemPrompt := BuildReviewerSystemPrompt(run.projectContext)
-	reviewerTaskPrompt := BuildReviewerTaskPrompt(run.planFile, selected.task, machine.executorOutput, machine.taskWorkdir, run.plan.Title, selected.progress, gitDiff)
+	reviewerTaskPrompt := BuildReviewerTaskPrompt(run.slug, selected.task, machine.executorOutput, machine.taskWorkdir, run.plan.Title, selected.progress, gitDiff)
 	_ = writeText(filepath.Join(runDir, "reviewer.system.txt"), reviewerSystemPrompt)
 	_ = writeText(filepath.Join(runDir, "reviewer.prompt.txt"), reviewerTaskPrompt)
 
@@ -337,7 +337,7 @@ func iterationStateReviewTask(ctx context.Context, machine *iterationMachine) (i
 		if isCancellationErr(reviewErr) || ctx.Err() != nil {
 			cancelErr := cancellationCause(ctx, reviewErr)
 			machine.setOutcome(taskOutcome{kind: taskOutcomeCanceled, message: cancelErr.Error(), cancelErr: cancelErr})
-			return iterationStateApplyOutcome, nil
+			return iterationStateApplyOutcome, nil //nolint:nilerr // error captured in outcome
 		}
 		machine.setOutcome(taskOutcome{
 			kind:         taskOutcomeRetry,

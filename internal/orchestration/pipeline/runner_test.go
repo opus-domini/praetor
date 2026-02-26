@@ -19,7 +19,7 @@ func TestNormalizeRunnerOptionsRejectsInvalidMaxRetries(t *testing.T) {
 	t.Parallel()
 
 	_, err := normalizeRunnerOptions(domain.RunnerOptions{
-		StateRoot:       t.TempDir(),
+		ProjectHome:     t.TempDir(),
 		Workdir:         t.TempDir(),
 		DefaultExecutor: domain.AgentCodex,
 		DefaultReviewer: domain.AgentClaude,
@@ -36,8 +36,7 @@ func TestNormalizeRunnerOptionsSetsDefaultGeminiAndOllamaSettings(t *testing.T) 
 
 	workdir := t.TempDir()
 	normalized, err := normalizeRunnerOptions(domain.RunnerOptions{
-		StateRoot:       t.TempDir(),
-		CacheRoot:       t.TempDir(),
+		ProjectHome:     t.TempDir(),
 		Workdir:         workdir,
 		DefaultExecutor: domain.AgentCodex,
 		DefaultReviewer: domain.AgentClaude,
@@ -165,8 +164,13 @@ func TestRunnerStopsImmediatelyOnCanceledContext(t *testing.T) {
 	t.Parallel()
 
 	tmpDir := t.TempDir()
-	planPath := filepath.Join(tmpDir, "plan.json")
-	writePlanFile(t, planPath, domain.Plan{
+	projectHome := filepath.Join(tmpDir, "home")
+	slug := "test-plan"
+	store := localstate.NewStore(projectHome)
+	if err := store.Init(); err != nil {
+		t.Fatalf("init store: %v", err)
+	}
+	writePlanFile(t, store.PlanFile(slug), domain.Plan{
 		Tasks: []domain.Task{
 			{ID: "TASK-001", Title: "Task", Executor: domain.AgentCodex, Reviewer: domain.AgentNone},
 		},
@@ -176,9 +180,8 @@ func TestRunnerStopsImmediatelyOnCanceledContext(t *testing.T) {
 	cancel()
 
 	runner := NewRunner(nilRuntime{})
-	_, err := runner.Run(ctx, discardSink{}, planPath, domain.RunnerOptions{
-		StateRoot:       filepath.Join(tmpDir, "state"),
-		CacheRoot:       filepath.Join(tmpDir, "cache"),
+	_, err := runner.Run(ctx, discardSink{}, slug, domain.RunnerOptions{
+		ProjectHome:     projectHome,
 		Workdir:         tmpDir,
 		DefaultExecutor: domain.AgentCodex,
 		DefaultReviewer: domain.AgentNone,
@@ -201,20 +204,22 @@ func TestRunnerReleasesLockWhenBootstrapFailsAfterLock(t *testing.T) {
 	t.Parallel()
 
 	tmpDir := t.TempDir()
-	planPath := filepath.Join(tmpDir, "plan.json")
-	writePlanFile(t, planPath, domain.Plan{
+	projectHome := filepath.Join(tmpDir, "home")
+	slug := "test-plan"
+	store := localstate.NewStore(projectHome)
+	if err := store.Init(); err != nil {
+		t.Fatalf("init store: %v", err)
+	}
+	writePlanFile(t, store.PlanFile(slug), domain.Plan{
 		Tasks: []domain.Task{
 			{ID: "TASK-001", Title: "Task", Executor: domain.AgentCodex, Reviewer: domain.AgentNone},
 		},
 	})
 
-	stateRoot := filepath.Join(tmpDir, "state")
-	store := localstate.NewStore(stateRoot, stateRoot)
-	lockPath := store.LockFile(planPath)
-
+	lockPath := store.LockFile(slug)
 	runner := NewRunner(nilRuntime{})
-	_, err := runner.Run(context.Background(), discardSink{}, planPath, domain.RunnerOptions{
-		StateRoot:       stateRoot,
+	_, err := runner.Run(context.Background(), discardSink{}, slug, domain.RunnerOptions{
+		ProjectHome:     projectHome,
 		Workdir:         tmpDir, // not a git repo -> prune orphans fails after lock acquisition
 		DefaultExecutor: domain.AgentCodex,
 		DefaultReviewer: domain.AgentNone,
@@ -238,8 +243,13 @@ func TestRunnerFailsWhenMaxTransitionsExceeded(t *testing.T) {
 	tmpDir := t.TempDir()
 	git(t, tmpDir, "init")
 
-	planPath := filepath.Join(tmpDir, "plan.json")
-	writePlanFile(t, planPath, domain.Plan{
+	projectHome := filepath.Join(tmpDir, "home")
+	slug := "test-plan"
+	store := localstate.NewStore(projectHome)
+	if err := store.Init(); err != nil {
+		t.Fatalf("init store: %v", err)
+	}
+	writePlanFile(t, store.PlanFile(slug), domain.Plan{
 		Tasks: []domain.Task{
 			{ID: "TASK-001", Title: "Task", Executor: domain.AgentCodex, Reviewer: domain.AgentNone},
 		},
@@ -249,9 +259,8 @@ func TestRunnerFailsWhenMaxTransitionsExceeded(t *testing.T) {
 		executeOutput: "RESULT: PASS\nSUMMARY: ok",
 		reviewOutput:  "PASS|ok",
 	})
-	_, err := runner.Run(context.Background(), discardSink{}, planPath, domain.RunnerOptions{
-		StateRoot:       filepath.Join(tmpDir, "state"),
-		CacheRoot:       filepath.Join(tmpDir, "cache"),
+	_, err := runner.Run(context.Background(), discardSink{}, slug, domain.RunnerOptions{
+		ProjectHome:     projectHome,
 		Workdir:         tmpDir,
 		DefaultExecutor: domain.AgentCodex,
 		DefaultReviewer: domain.AgentNone,
@@ -277,8 +286,13 @@ func TestRunnerReviewRejectionExhaustsRetries(t *testing.T) {
 	tmpDir := t.TempDir()
 	git(t, tmpDir, "init")
 
-	planPath := filepath.Join(tmpDir, "plan.json")
-	writePlanFile(t, planPath, domain.Plan{
+	projectHome := filepath.Join(tmpDir, "home")
+	slug := "test-plan"
+	store := localstate.NewStore(projectHome)
+	if err := store.Init(); err != nil {
+		t.Fatalf("init store: %v", err)
+	}
+	writePlanFile(t, store.PlanFile(slug), domain.Plan{
 		Tasks: []domain.Task{
 			{ID: "TASK-001", Title: "Task", Executor: domain.AgentCodex, Reviewer: domain.AgentClaude},
 		},
@@ -288,10 +302,8 @@ func TestRunnerReviewRejectionExhaustsRetries(t *testing.T) {
 		executeOutput: "RESULT: PASS\nSUMMARY: ok",
 		reviewOutput:  "FAIL|missing tests",
 	})
-	stateRoot := filepath.Join(tmpDir, "state")
-	_, err := runner.Run(context.Background(), discardSink{}, planPath, domain.RunnerOptions{
-		StateRoot:       stateRoot,
-		CacheRoot:       filepath.Join(tmpDir, "cache"),
+	_, err := runner.Run(context.Background(), discardSink{}, slug, domain.RunnerOptions{
+		ProjectHome:     projectHome,
 		Workdir:         tmpDir,
 		DefaultExecutor: domain.AgentCodex,
 		DefaultReviewer: domain.AgentClaude,
@@ -306,8 +318,7 @@ func TestRunnerReviewRejectionExhaustsRetries(t *testing.T) {
 		t.Fatalf("run pipeline: %v", err)
 	}
 
-	store := localstate.NewStore(stateRoot, stateRoot)
-	state, readErr := store.ReadState(planPath)
+	state, readErr := store.ReadState(slug)
 	if readErr != nil {
 		t.Fatalf("read state: %v", readErr)
 	}
@@ -322,20 +333,23 @@ func TestRunnerWritesRuntimeStrategyCheckpoint(t *testing.T) {
 	tmpDir := t.TempDir()
 	git(t, tmpDir, "init")
 
-	planPath := filepath.Join(tmpDir, "plan.json")
-	writePlanFile(t, planPath, domain.Plan{
+	projectHome := filepath.Join(tmpDir, "home")
+	slug := "test-plan"
+	store := localstate.NewStore(projectHome)
+	if err := store.Init(); err != nil {
+		t.Fatalf("init store: %v", err)
+	}
+	writePlanFile(t, store.PlanFile(slug), domain.Plan{
 		Tasks: []domain.Task{
 			{ID: "TASK-001", Title: "Task", Executor: domain.AgentCodex, Reviewer: domain.AgentNone},
 		},
 	})
 
-	stateRoot := filepath.Join(tmpDir, "state")
 	runner := NewRunner(scriptedRuntime{
 		executeOutput: "RESULT: PASS\nSUMMARY: ok",
 	})
-	_, err := runner.Run(context.Background(), discardSink{}, planPath, domain.RunnerOptions{
-		StateRoot:       stateRoot,
-		CacheRoot:       filepath.Join(tmpDir, "cache"),
+	_, err := runner.Run(context.Background(), discardSink{}, slug, domain.RunnerOptions{
+		ProjectHome:     projectHome,
 		Workdir:         tmpDir,
 		DefaultExecutor: domain.AgentCodex,
 		DefaultReviewer: domain.AgentNone,
@@ -350,7 +364,7 @@ func TestRunnerWritesRuntimeStrategyCheckpoint(t *testing.T) {
 		t.Fatalf("run pipeline: %v", err)
 	}
 
-	historyPath := filepath.Join(stateRoot, "checkpoints", "history.tsv")
+	historyPath := filepath.Join(projectHome, "checkpoints", "history.tsv")
 	history, readErr := os.ReadFile(historyPath)
 	if readErr != nil {
 		t.Fatalf("read checkpoint history: %v", readErr)
@@ -375,19 +389,23 @@ func TestRunnerKeepsTaskOpenWhenMergeFails(t *testing.T) {
 	git(t, tmpDir, "add", "-A")
 	git(t, tmpDir, "commit", "-m", "base commit")
 
-	planPath := filepath.Join(tmpDir, "plan.json")
-	writePlanFile(t, planPath, domain.Plan{
+	projectHome := filepath.Join(tmpDir, "home")
+	slug := "test-plan"
+	store := localstate.NewStore(projectHome)
+	if err := store.Init(); err != nil {
+		t.Fatalf("init store: %v", err)
+	}
+	writePlanFile(t, store.PlanFile(slug), domain.Plan{
 		Tasks: []domain.Task{
 			{ID: "TASK-001", Title: "Task", Executor: domain.AgentCodex, Reviewer: domain.AgentNone},
 		},
 	})
 
 	runtime := &mergeConflictRuntime{mainDir: tmpDir}
-	stateRoot := filepath.Join(tmpDir, "state")
 	runner := NewRunner(runtime)
 
-	_, err := runner.Run(context.Background(), discardSink{}, planPath, domain.RunnerOptions{
-		StateRoot:       stateRoot,
+	_, err := runner.Run(context.Background(), discardSink{}, slug, domain.RunnerOptions{
+		ProjectHome:     projectHome,
 		Workdir:         tmpDir,
 		DefaultExecutor: domain.AgentCodex,
 		DefaultReviewer: domain.AgentNone,
@@ -404,8 +422,7 @@ func TestRunnerKeepsTaskOpenWhenMergeFails(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	store := localstate.NewStore(stateRoot, stateRoot)
-	state, readErr := store.ReadState(planPath)
+	state, readErr := store.ReadState(slug)
 	if readErr != nil {
 		t.Fatalf("read state: %v", readErr)
 	}
@@ -508,6 +525,10 @@ func (r *mergeConflictRuntime) Run(_ context.Context, req domain.AgentRequest) (
 
 func writePlanFile(t *testing.T, path string, plan domain.Plan) {
 	t.Helper()
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("create plan dir: %v", err)
+	}
 	data, err := json.MarshalIndent(plan, "", "  ")
 	if err != nil {
 		t.Fatalf("encode plan: %v", err)

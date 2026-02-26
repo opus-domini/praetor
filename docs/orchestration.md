@@ -10,18 +10,18 @@ Praetor's core is plan-driven task orchestration. Define a sequence of tasks in 
 praetor plan create my-feature
 ```
 
-Generates a skeleton plan at `docs/plans/PLAN-PRAETOR-<date>-my-feature.json` with two sample tasks.
+Creates a skeleton plan at `<project-home>/plans/my-feature.json` and opens `$EDITOR`.
 
 ### Run a plan
 
 ```bash
-praetor plan run docs/plans/my-plan.json
+praetor plan run my-plan
 ```
 
 ### Run with options
 
 ```bash
-praetor plan run docs/plans/my-plan.json \
+praetor plan run my-plan \
   --runner direct \
   --executor codex \
   --reviewer claude \
@@ -35,14 +35,14 @@ praetor plan run docs/plans/my-plan.json \
 ### Check progress
 
 ```bash
-praetor plan status docs/plans/my-plan.json
+praetor plan status my-plan
 ```
 
 Output:
 
 ```
-Plan:     /abs/path/to/plan.json
-State:    /home/user/.local/state/praetor/projects/abc123/state/plan.state.json
+Plan:     my-plan
+State:    ~/.config/praetor/projects/my-project-abc123/state/my-plan.state.json
 Updated:  2026-02-25T14:30:00Z
 Progress: 3/5 tasks done
 Status:   in progress
@@ -65,7 +65,7 @@ praetor plan list
 ### Reset plan state
 
 ```bash
-praetor plan reset docs/plans/my-plan.json
+praetor plan reset my-plan
 ```
 
 Removes state, lock, retry, and feedback files for the plan. Does not delete the plan file itself.
@@ -73,10 +73,10 @@ Removes state, lock, retry, and feedback files for the plan. Does not delete the
 ### Resume from local snapshot
 
 ```bash
-praetor plan resume docs/plans/my-plan.json
+praetor plan resume my-plan
 ```
 
-Restores the latest valid local snapshot from `.praetor/runtime/<run-id>/snapshot.json` into project state storage.
+Restores the latest valid local snapshot from `<project-home>/runtime/<run-id>/snapshot.json` into project state storage.
 
 ## Plan format
 
@@ -84,7 +84,6 @@ Plans are JSON files with a `tasks` array. Each task can specify its own executo
 
 ```json
 {
-  "$schema": "../schemas/loop-plan.schema.json",
   "title": "implement user auth",
   "tasks": [
     {
@@ -122,8 +121,6 @@ Plans are JSON files with a `tasks` array. Each task can specify its own executo
 | `description` | no | Detailed task description included in the executor prompt. |
 | `criteria` | no | Acceptance criteria included in both executor and reviewer prompts. |
 
-A JSON Schema is available at `docs/schemas/loop-plan.schema.json` for editor validation.
-
 ### Validation rules
 
 The plan is validated at load time:
@@ -138,55 +135,48 @@ The plan is validated at load time:
 
 ## Runtime model
 
-### Data layout (XDG)
+### Data layout
 
-Praetor follows the [XDG Base Directory Specification](https://specifications.freedesktop.org/basedir-spec/latest/). All paths can be overridden with `$PRAETOR_HOME`:
-
-| Category | Default path | Override |
-|----------|-------------|----------|
-| Config | `$XDG_CONFIG_HOME/praetor/` | `$PRAETOR_HOME/config/` |
-| State | `$XDG_STATE_HOME/praetor/` | `$PRAETOR_HOME/state/` |
-| Cache | `$XDG_CACHE_HOME/praetor/` | `$PRAETOR_HOME/cache/` |
-
-Per-project state is stored under `<state-home>/projects/<project-hash>/`:
+All Praetor data lives under a single home directory. Resolution order: `$PRAETOR_HOME` > `$XDG_CONFIG_HOME/praetor` > `~/.config/praetor`.
 
 ```text
-$XDG_STATE_HOME/praetor/projects/<hash>/
-├── state/          # Task state per plan (.state.json)
-├── locks/          # PID-based run locks
-├── retries/        # Retry counters (absorbed into state file on load)
-├── feedback/       # Feedback files (absorbed into state file on load)
-├── costs/          # Cost tracking ledger (tracking.tsv)
-└── checkpoints/    # Audit log (history.tsv) and current state (.state)
-
-$XDG_CACHE_HOME/praetor/projects/<hash>/
-└── logs/           # Per-run execution logs (purgeable)
-    └── <timestamp>-<task>-<sig>/
-        ├── executor.system.txt      # Executor system prompt
-        ├── executor.prompt.txt      # Executor task prompt
-        ├── executor.output.txt      # Executor output
-        ├── executor.prompt          # Raw prompt file (tmux mode)
-        ├── executor.system-prompt   # Raw system prompt file (tmux mode)
-        ├── executor.stdout          # Raw stdout capture (tmux mode)
-        ├── executor.stderr          # Raw stderr capture (tmux mode)
-        ├── executor.exit            # Exit code (tmux mode)
-        ├── executor.run.sh          # Wrapper script (tmux mode)
-        ├── reviewer.*               # Same structure for reviewer
-        ├── post-hook.stdout         # Post-task hook stdout (if used)
-        └── post-hook.stderr         # Post-task hook stderr (if used)
+~/.config/praetor/                       # $PRAETOR_HOME
+├── config.toml
+└── projects/
+    └── <project-key>/                   # e.g. "my-project-a3f9c12b4d8e"
+        ├── plans/                       # Plan JSON files
+        │   └── my-feature.json
+        ├── state/                       # Task state per plan (.state.json)
+        ├── locks/                       # PID-based run locks
+        ├── retries/                     # Retry counters (absorbed into state file on load)
+        ├── feedback/                    # Feedback files (absorbed into state file on load)
+        ├── costs/                       # Cost tracking ledger (tracking.tsv)
+        ├── checkpoints/                 # Audit log (history.tsv) and current state (.state)
+        ├── logs/                        # Per-run execution logs (purgeable)
+        │   └── <timestamp>-<task>-<sig>/
+        │       ├── executor.system.txt
+        │       ├── executor.prompt.txt
+        │       ├── executor.output.txt
+        │       ├── executor.prompt          # Raw prompt file (tmux mode)
+        │       ├── executor.system-prompt   # Raw system prompt file (tmux mode)
+        │       ├── executor.stdout          # Raw stdout capture (tmux mode)
+        │       ├── executor.stderr          # Raw stderr capture (tmux mode)
+        │       ├── executor.exit            # Exit code (tmux mode)
+        │       ├── executor.run.sh          # Wrapper script (tmux mode)
+        │       ├── reviewer.*               # Same structure for reviewer
+        │       ├── post-hook.stdout         # Post-task hook stdout (if used)
+        │       └── post-hook.stderr         # Post-task hook stderr (if used)
+        ├── runtime/                     # Transactional snapshots
+        │   └── <run-id>/
+        │       ├── snapshot.json
+        │       ├── events.log
+        │       ├── lock.json
+        │       └── meta.json
+        └── worktrees/                   # Git worktrees for isolation
+            └── <task-id>--<token>/
 ```
 
-The project hash is derived from the git repository root path (SHA-256), ensuring state isolation between projects.
-
-Local transactional snapshots are stored in the repository under:
-
-```text
-<repo>/.praetor/runtime/<run-id>/
-├── snapshot.json
-├── events.log
-├── lock.json
-└── meta.json
-```
+The project key is derived from the git repository name and a truncated path hash, ensuring state isolation between projects. No files are generated inside the user's repository.
 
 `meta.json` stores `snapshot_sha256`, which is validated during recovery to skip corrupted snapshots.
 
@@ -406,8 +396,8 @@ Colored, structured output shows real-time progress:
 ```
 === Praetor ===
 Plan:        implement user auth
-Plan file:   docs/plans/plan.json
-State:       ~/.local/state/praetor/projects/abc123/state/plan.state.json
+Plan:        user-auth
+State:       ~/.config/praetor/projects/my-project-abc123/state/user-auth.state.json
 Progress:    0/2 done
 Isolation:   worktree
 tmux:        praetor-abc123

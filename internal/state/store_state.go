@@ -13,22 +13,23 @@ import (
 )
 
 // LoadOrInitializeState creates state from plan or merges existing state after plan changes.
-func (s *Store) LoadOrInitializeState(planFile string, plan domain.Plan) (domain.State, error) {
+func (s *Store) LoadOrInitializeState(slug string, plan domain.Plan) (domain.State, error) {
 	if err := s.Init(); err != nil {
 		return domain.State{}, err
 	}
 
+	planFile := s.PlanFile(slug)
 	checksum, err := domain.PlanChecksum(planFile)
 	if err != nil {
 		return domain.State{}, err
 	}
 
-	stateFile := s.StateFile(planFile)
+	stateFile := s.StateFile(slug)
 	now := time.Now().UTC().Format(time.RFC3339)
 
 	if _, err := os.Stat(stateFile); errors.Is(err, os.ErrNotExist) {
 		state := domain.State{
-			PlanFile:     planFile,
+			PlanSlug:     slug,
 			PlanChecksum: checksum,
 			CreatedAt:    now,
 			UpdatedAt:    now,
@@ -42,12 +43,12 @@ func (s *Store) LoadOrInitializeState(planFile string, plan domain.Plan) (domain
 		return domain.State{}, fmt.Errorf("stat state file: %w", err)
 	}
 
-	state, err := s.ReadState(planFile)
+	state, err := s.ReadState(slug)
 	if err != nil {
 		return domain.State{}, err
 	}
 
-	migrated := s.normalizeTaskStatuses(planFile, &state)
+	migrated := s.normalizeTaskStatuses(slug, &state)
 	if state.PlanChecksum == checksum {
 		if migrated {
 			if err := domain.WriteJSONFile(stateFile, state); err != nil {
@@ -57,7 +58,7 @@ func (s *Store) LoadOrInitializeState(planFile string, plan domain.Plan) (domain
 		return state, nil
 	}
 
-	merged := mergeState(planFile, checksum, state, plan)
+	merged := mergeState(slug, checksum, state, plan)
 	if err := domain.WriteJSONFile(stateFile, merged); err != nil {
 		return domain.State{}, err
 	}
@@ -65,8 +66,8 @@ func (s *Store) LoadOrInitializeState(planFile string, plan domain.Plan) (domain
 }
 
 // ReadState reads state from disk.
-func (s *Store) ReadState(planFile string) (domain.State, error) {
-	data, err := os.ReadFile(s.StateFile(planFile))
+func (s *Store) ReadState(slug string) (domain.State, error) {
+	data, err := os.ReadFile(s.StateFile(slug))
 	if err != nil {
 		return domain.State{}, fmt.Errorf("read state file: %w", err)
 	}
@@ -78,12 +79,12 @@ func (s *Store) ReadState(planFile string) (domain.State, error) {
 }
 
 // WriteState persists state atomically.
-func (s *Store) WriteState(planFile string, state domain.State) error {
+func (s *Store) WriteState(slug string, state domain.State) error {
 	state.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
-	return domain.WriteJSONFile(s.StateFile(planFile), state)
+	return domain.WriteJSONFile(s.StateFile(slug), state)
 }
 
-func mergeState(planFile, checksum string, previous domain.State, plan domain.Plan) domain.State {
+func mergeState(slug, checksum string, previous domain.State, plan domain.Plan) domain.State {
 	statusByID := make(map[string]domain.TaskStatus, len(previous.Tasks))
 	statusByAutoFingerprint := make(map[string]domain.TaskStatus)
 	for _, task := range previous.Tasks {
@@ -103,7 +104,7 @@ func mergeState(planFile, checksum string, previous domain.State, plan domain.Pl
 
 	now := time.Now().UTC().Format(time.RFC3339)
 	merged := domain.State{
-		PlanFile:     planFile,
+		PlanSlug:     slug,
 		PlanChecksum: checksum,
 		CreatedAt:    previous.CreatedAt,
 		UpdatedAt:    now,
@@ -148,7 +149,7 @@ func (s *Store) DetectStuckTasks(_ string, state domain.State, _ int) ([]string,
 
 // normalizeTaskStatuses normalizes statuses and absorbs external retry/feedback
 // files into StateTask fields. Returns true if any task was modified.
-func (s *Store) normalizeTaskStatuses(planFile string, state *domain.State) bool {
+func (s *Store) normalizeTaskStatuses(slug string, state *domain.State) bool {
 	changed := false
 	for i := range state.Tasks {
 		task := &state.Tasks[i]
@@ -160,7 +161,7 @@ func (s *Store) normalizeTaskStatuses(planFile string, state *domain.State) bool
 
 		// Absorb external retry count if task has no inline attempt count.
 		if task.Attempt == 0 && task.Status == domain.TaskPending {
-			sig := s.TaskSignatureForPlan(planFile, i, *task)
+			sig := s.TaskSignatureForPlan(slug, i, *task)
 			if count, err := s.ReadRetryCount(sig); err == nil && count > 0 {
 				task.Attempt = count
 				changed = true
@@ -177,15 +178,15 @@ func (s *Store) normalizeTaskStatuses(planFile string, state *domain.State) bool
 }
 
 // ResetPlanRuntime removes state, lock, retries and feedback for plan tasks.
-func (s *Store) ResetPlanRuntime(planFile string, plan domain.Plan) (int, error) {
+func (s *Store) ResetPlanRuntime(slug string, plan domain.Plan) (int, error) {
 	removed := 0
-	if err := os.Remove(s.StateFile(planFile)); err == nil {
+	if err := os.Remove(s.StateFile(slug)); err == nil {
 		removed++
 	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return removed, fmt.Errorf("remove state file: %w", err)
 	}
 
-	if err := os.Remove(s.LockFile(planFile)); err == nil {
+	if err := os.Remove(s.LockFile(slug)); err == nil {
 		removed++
 	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return removed, fmt.Errorf("remove lock file: %w", err)
@@ -193,7 +194,7 @@ func (s *Store) ResetPlanRuntime(planFile string, plan domain.Plan) (int, error)
 
 	stateTasks := domain.StateTasksFromPlan(plan)
 	for idx, task := range stateTasks {
-		signature := s.TaskSignatureForPlan(planFile, idx, task)
+		signature := s.TaskSignatureForPlan(slug, idx, task)
 		retryPath := filepath.Join(s.RetriesDir(), signature+".count")
 		if err := os.Remove(retryPath); err == nil {
 			removed++

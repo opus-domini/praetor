@@ -8,11 +8,11 @@ import (
 	"strings"
 )
 
-// DefaultConfigDir returns the directory for user configuration.
-// Resolution: $PRAETOR_HOME/config > $XDG_CONFIG_HOME/praetor > os.UserConfigDir()/praetor
-func DefaultConfigDir() (string, error) {
+// DefaultHome returns the praetor home directory.
+// Resolution: $PRAETOR_HOME > $XDG_CONFIG_HOME/praetor > ~/.config/praetor
+func DefaultHome() (string, error) {
 	if home := strings.TrimSpace(os.Getenv("PRAETOR_HOME")); home != "" {
-		return filepath.Join(home, "config"), nil
+		return home, nil
 	}
 	if xdg := strings.TrimSpace(os.Getenv("XDG_CONFIG_HOME")); xdg != "" {
 		return filepath.Join(xdg, "praetor"), nil
@@ -26,63 +26,21 @@ func DefaultConfigDir() (string, error) {
 
 // DefaultConfigFile returns the full path to config.toml.
 func DefaultConfigFile() (string, error) {
-	dir, err := DefaultConfigDir()
+	home, err := DefaultHome()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(dir, "config.toml"), nil
+	return filepath.Join(home, "config.toml"), nil
 }
 
-// DefaultStateHome returns the root for persistent machine-generated state.
-// Resolution: $PRAETOR_HOME/state > $XDG_STATE_HOME/praetor > ~/.local/state/praetor
-func DefaultStateHome() (string, error) {
-	if home := strings.TrimSpace(os.Getenv("PRAETOR_HOME")); home != "" {
-		return filepath.Join(home, "state"), nil
-	}
-	if xdg := strings.TrimSpace(os.Getenv("XDG_STATE_HOME")); xdg != "" {
-		return filepath.Join(xdg, "praetor"), nil
-	}
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(homeDir, ".local", "state", "praetor"), nil
-}
-
-// DefaultCacheHome returns the root for purgeable runtime artifacts.
-// Resolution: $PRAETOR_HOME/cache > $XDG_CACHE_HOME/praetor > os.UserCacheDir()/praetor
-func DefaultCacheHome() (string, error) {
-	if home := strings.TrimSpace(os.Getenv("PRAETOR_HOME")); home != "" {
-		return filepath.Join(home, "cache"), nil
-	}
-	if xdg := strings.TrimSpace(os.Getenv("XDG_CACHE_HOME")); xdg != "" {
-		return filepath.Join(xdg, "praetor"), nil
-	}
-	base, err := os.UserCacheDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(base, "praetor"), nil
-}
-
-// DefaultProjectStateRoot returns the per-project state directory.
-func DefaultProjectStateRoot(projectRoot string) (string, error) {
-	stateHome, err := DefaultStateHome()
+// DefaultProjectRoot returns the per-project directory under the praetor home.
+func DefaultProjectRoot(projectRoot string) (string, error) {
+	home, err := DefaultHome()
 	if err != nil {
 		return "", err
 	}
 	key := ProjectRuntimeKey(projectRoot)
-	return filepath.Join(stateHome, "projects", key), nil
-}
-
-// DefaultProjectCacheRoot returns the per-project cache directory.
-func DefaultProjectCacheRoot(projectRoot string) (string, error) {
-	cacheHome, err := DefaultCacheHome()
-	if err != nil {
-		return "", err
-	}
-	key := ProjectRuntimeKey(projectRoot)
-	return filepath.Join(cacheHome, "projects", key), nil
+	return filepath.Join(home, "projects", key), nil
 }
 
 // ProjectRuntimeKey returns the collision-resistant key for a project root path.

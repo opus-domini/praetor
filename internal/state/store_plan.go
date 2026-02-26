@@ -12,18 +12,18 @@ import (
 	"github.com/opus-domini/praetor/internal/domain"
 )
 
-// Status returns current execution status for a plan.
-func (s *Store) Status(planFile string) (domain.PlanStatus, error) {
-	planFile = strings.TrimSpace(planFile)
-	if planFile == "" {
-		return domain.PlanStatus{}, errors.New("plan file is required")
+// Status returns current execution status for a plan slug.
+func (s *Store) Status(slug string) (domain.PlanStatus, error) {
+	slug = strings.TrimSpace(slug)
+	if slug == "" {
+		return domain.PlanStatus{}, errors.New("plan slug is required")
 	}
 
+	planFile := s.PlanFile(slug)
 	if _, err := os.Stat(planFile); err != nil {
 		return domain.PlanStatus{}, fmt.Errorf("plan file not found: %w", err)
 	}
 
-	// Read plan file inline to get task count (avoids importing loop.LoadPlan).
 	planData, err := os.ReadFile(planFile)
 	if err != nil {
 		return domain.PlanStatus{}, fmt.Errorf("read plan file: %w", err)
@@ -33,10 +33,10 @@ func (s *Store) Status(planFile string) (domain.PlanStatus, error) {
 		return domain.PlanStatus{}, fmt.Errorf("decode plan file: %w", err)
 	}
 
-	stateFile := s.StateFile(planFile)
+	stateFile := s.StateFile(slug)
 	if _, err := os.Stat(stateFile); errors.Is(err, os.ErrNotExist) {
 		return domain.PlanStatus{
-			PlanFile: planFile,
+			PlanSlug: slug,
 			Total:    len(plan.Tasks),
 			Active:   len(plan.Tasks),
 			Done:     0,
@@ -45,14 +45,14 @@ func (s *Store) Status(planFile string) (domain.PlanStatus, error) {
 		return domain.PlanStatus{}, fmt.Errorf("stat state file: %w", err)
 	}
 
-	state, err := s.ReadState(planFile)
+	state, err := s.ReadState(slug)
 	if err != nil {
 		return domain.PlanStatus{}, err
 	}
-	lockRunning, _ := s.IsPlanRunning(planFile)
+	lockRunning, _ := s.IsPlanRunning(slug)
 
 	return domain.PlanStatus{
-		PlanFile:  planFile,
+		PlanSlug:  slug,
 		StateFile: stateFile,
 		UpdatedAt: state.UpdatedAt,
 		Done:      state.DoneCount(),
@@ -64,36 +64,71 @@ func (s *Store) Status(planFile string) (domain.PlanStatus, error) {
 	}, nil
 }
 
-// ListPlanStatuses returns state summaries for every known state file.
+// ListPlanSlugs returns all plan slugs found in the plans directory.
+func (s *Store) ListPlanSlugs() ([]string, error) {
+	glob := filepath.Join(s.PlansDir(), "*.json")
+	matches, err := filepath.Glob(glob)
+	if err != nil {
+		return nil, fmt.Errorf("list plan files: %w", err)
+	}
+	slugs := make([]string, 0, len(matches))
+	for _, match := range matches {
+		base := filepath.Base(match)
+		slug := strings.TrimSuffix(base, ".json")
+		if slug != "" {
+			slugs = append(slugs, slug)
+		}
+	}
+	sort.Strings(slugs)
+	return slugs, nil
+}
+
+// ListPlanStatuses returns state summaries for every known plan.
 func (s *Store) ListPlanStatuses() ([]domain.PlanStatus, error) {
-	files, err := s.ListStates()
+	slugs, err := s.ListPlanSlugs()
 	if err != nil {
 		return nil, err
 	}
-	if len(files) == 0 {
+	if len(slugs) == 0 {
 		return nil, nil
 	}
 
-	statuses := make([]domain.PlanStatus, 0, len(files))
-	for _, stateFile := range files {
+	statuses := make([]domain.PlanStatus, 0, len(slugs))
+	for _, slug := range slugs {
+		stateFile := s.StateFile(slug)
+		if _, err := os.Stat(stateFile); errors.Is(err, os.ErrNotExist) {
+			// Plan exists but has never been run.
+			planFile := s.PlanFile(slug)
+			planData, readErr := os.ReadFile(planFile)
+			if readErr != nil {
+				continue
+			}
+			var plan domain.Plan
+			if json.Unmarshal(planData, &plan) != nil {
+				continue
+			}
+			statuses = append(statuses, domain.PlanStatus{
+				PlanSlug: slug,
+				Total:    len(plan.Tasks),
+				Active:   len(plan.Tasks),
+			})
+			continue
+		} else if err != nil {
+			continue
+		}
+
 		data, readErr := os.ReadFile(stateFile)
 		if readErr != nil {
-			return nil, fmt.Errorf("read state file: %w", readErr)
+			continue
 		}
-
 		state := domain.State{}
-		if err := json.Unmarshal(data, &state); err != nil {
-			return nil, fmt.Errorf("decode state file: %w", err)
+		if json.Unmarshal(data, &state) != nil {
+			continue
 		}
 
-		planFile := strings.TrimSpace(state.PlanFile)
-		if planFile == "" {
-			planFile = inferPlanFromState(stateFile)
-		}
-
-		running, _ := s.IsPlanRunning(planFile)
+		running, _ := s.IsPlanRunning(slug)
 		statuses = append(statuses, domain.PlanStatus{
-			PlanFile:  planFile,
+			PlanSlug:  slug,
 			StateFile: stateFile,
 			UpdatedAt: state.UpdatedAt,
 			Done:      state.DoneCount(),
@@ -105,25 +140,16 @@ func (s *Store) ListPlanStatuses() ([]domain.PlanStatus, error) {
 	}
 
 	sort.Slice(statuses, func(i, j int) bool {
-		return statuses[i].PlanFile < statuses[j].PlanFile
+		return statuses[i].PlanSlug < statuses[j].PlanSlug
 	})
 	return statuses, nil
 }
 
-func inferPlanFromState(stateFile string) string {
-	base := filepath.Base(stateFile)
-	base = strings.TrimSuffix(base, ".state.json")
-	if idx := strings.LastIndex(base, "--"); idx > 0 {
-		base = base[:idx]
-	}
-	return base + ".json"
-}
-
 // IsPlanRunning reports whether the lock PID is alive.
-func (s *Store) IsPlanRunning(planFile string) (bool, int) {
+func (s *Store) IsPlanRunning(slug string) (bool, int) {
 	hostname, _ := os.Hostname()
-	runtimeKey := s.RuntimeKey(planFile)
-	data, err := os.ReadFile(s.LockFile(planFile))
+	runtimeKey := s.RuntimeKey(slug)
+	data, err := os.ReadFile(s.LockFile(slug))
 	if err != nil {
 		return false, 0
 	}

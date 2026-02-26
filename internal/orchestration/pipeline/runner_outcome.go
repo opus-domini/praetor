@@ -80,7 +80,7 @@ func (r *Runner) applyTaskOutcome(ctx context.Context, run *activeRun, selected 
 			nextStatus = domain.TaskFailed
 		}
 
-		if err := run.transitions.TransitionTask(&run.state, selected.index, nextStatus, run.planFile); err != nil {
+		if err := run.transitions.TransitionTask(&run.state, selected.index, nextStatus); err != nil {
 			return false, err
 		}
 

@@ -2,13 +2,12 @@ package cli
 
 import (
 	"fmt"
-	"path/filepath"
+	"os"
+	"os/exec"
 	"strings"
-	"time"
 
 	"github.com/opus-domini/praetor/internal/domain"
 	localstate "github.com/opus-domini/praetor/internal/state"
-	"github.com/opus-domini/praetor/internal/workspace"
 	"github.com/spf13/cobra"
 )
 
@@ -18,75 +17,134 @@ func newPlanCmd() *cobra.Command {
 		Short: "Create, manage, and execute task plans",
 		Long: `Create, manage, and execute task plans.
 
-Plans are JSON files that define a sequence of tasks with dependencies,
-executors, and reviewers. Use "praetor plan run <plan>" to execute a plan.`,
+Plans are JSON files identified by slug and stored under the praetor home directory.
+Use "praetor plan run <slug>" to execute a plan.`,
 	}
 
 	cmd.AddCommand(newRunCmd())
 	cmd.AddCommand(newPlanCreateCmd())
+	cmd.AddCommand(newPlanEditCmd())
 	cmd.AddCommand(newPlanListCmd())
 	cmd.AddCommand(newPlanStatusCmd())
+	cmd.AddCommand(newPlanShowCmd())
 	cmd.AddCommand(newPlanResetCmd())
 	cmd.AddCommand(newPlanResumeCmd())
+	cmd.AddCommand(newPlanPathCmd())
 	return cmd
 }
 
 func newPlanCreateCmd() *cobra.Command {
-	var baseDir string
-
 	cmd := &cobra.Command{
 		Use:   "create <slug>",
 		Short: "Create a new plan from a template",
-		Long:  `Create a new plan skeleton in docs/plans/ with two sample tasks.`,
+		Long:  `Create a new plan skeleton in the project plans directory.`,
 		Example: `  praetor plan create my-feature
-  praetor plan create auth-refactor --base-dir /path/to/repo`,
+  praetor plan create auth-refactor`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cmd.SilenceUsage = true
-			root := strings.TrimSpace(baseDir)
-			if root == "" {
-				root = "."
-			}
-			absRoot, err := filepath.Abs(root)
-			if err != nil {
-				return fmt.Errorf("resolve base directory: %w", err)
-			}
-
-			path, err := domain.NewPlanFile(args[0], time.Now(), absRoot)
+			store, err := resolveStore(".")
 			if err != nil {
 				return err
 			}
-			_, err = fmt.Fprintf(cmd.OutOrStdout(), "Created: %s\n", path)
-			return err
+			if err := store.Init(); err != nil {
+				return err
+			}
+
+			path, err := domain.NewPlanFile(args[0], store.PlansDir())
+			if err != nil {
+				return err
+			}
+			if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Created: %s\n", path); err != nil {
+				return err
+			}
+			return openEditor(path)
 		},
 	}
 
-	cmd.Flags().StringVar(&baseDir, "base-dir", ".", "Repository root where docs/plans/ is located")
+	return cmd
+}
+
+func newPlanEditCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:     "edit <slug>",
+		Short:   "Open a plan in $EDITOR",
+		Example: `  praetor plan edit my-feature`,
+		Args:    cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cmd.SilenceUsage = true
+			store, err := resolveStore(".")
+			if err != nil {
+				return err
+			}
+
+			path := store.PlanFile(args[0])
+			if _, err := os.Stat(path); err != nil {
+				return fmt.Errorf("plan not found: %s", args[0])
+			}
+			return openEditor(path)
+		},
+	}
+	return cmd
+}
+
+func newPlanShowCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:     "show <slug>",
+		Short:   "Print plan JSON to stdout",
+		Example: `  praetor plan show my-feature`,
+		Args:    cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cmd.SilenceUsage = true
+			store, err := resolveStore(".")
+			if err != nil {
+				return err
+			}
+
+			path := store.PlanFile(args[0])
+			data, err := os.ReadFile(path)
+			if err != nil {
+				return fmt.Errorf("plan not found: %s", args[0])
+			}
+			_, err = fmt.Fprint(cmd.OutOrStdout(), string(data))
+			return err
+		},
+	}
+	return cmd
+}
+
+func newPlanPathCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:     "path <slug>",
+		Short:   "Print absolute path of a plan file",
+		Example: `  praetor plan path my-feature`,
+		Args:    cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cmd.SilenceUsage = true
+			store, err := resolveStore(".")
+			if err != nil {
+				return err
+			}
+			_, err = fmt.Fprintln(cmd.OutOrStdout(), store.PlanFile(args[0]))
+			return err
+		},
+	}
 	return cmd
 }
 
 func newPlanStatusCmd() *cobra.Command {
-	var stateRoot string
-
 	cmd := &cobra.Command{
-		Use:     "status <plan-file>",
+		Use:     "status <slug>",
 		Short:   "Show execution status for a plan",
-		Example: `  praetor plan status docs/plans/my-plan.json`,
+		Example: `  praetor plan status my-feature`,
 		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cmd.SilenceUsage = true
-			absPlan, err := filepath.Abs(strings.TrimSpace(args[0]))
-			if err != nil {
-				return fmt.Errorf("resolve plan path: %w", err)
-			}
-
-			resolvedStateRoot, err := resolveStateRoot(stateRoot, filepath.Dir(absPlan))
+			store, err := resolveStore(".")
 			if err != nil {
 				return err
 			}
-
-			store := localstate.NewStore(resolvedStateRoot, "")
-			status, err := store.Status(absPlan)
+			status, err := store.Status(args[0])
 			if err != nil {
 				return err
 			}
@@ -94,13 +152,10 @@ func newPlanStatusCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&stateRoot, "state-root", "", "State root directory (default: $XDG_STATE_HOME/praetor/projects/<hash>)")
 	return cmd
 }
 
 func newPlanListCmd() *cobra.Command {
-	var stateRoot string
-
 	cmd := &cobra.Command{
 		Use:     "list",
 		Short:   "List tracked plans for current project",
@@ -108,25 +163,24 @@ func newPlanListCmd() *cobra.Command {
 		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cmd.SilenceUsage = true
-			resolvedStateRoot, err := resolveStateRoot(stateRoot, ".")
+			store, err := resolveStore(".")
 			if err != nil {
 				return err
 			}
 
-			store := localstate.NewStore(resolvedStateRoot, "")
 			statuses, err := store.ListPlanStatuses()
 			if err != nil {
 				return err
 			}
 			if len(statuses) == 0 {
-				_, err := fmt.Fprintf(cmd.OutOrStdout(), "No plans tracked for current project in %s\n", store.StateDir())
+				_, err := fmt.Fprintf(cmd.OutOrStdout(), "No plans found in %s\n", store.PlansDir())
 				return err
 			}
 
-			if _, err := fmt.Fprintf(cmd.OutOrStdout(), "%-55s %5s %5s %5s %5s  %s\n", "Plan", "Done", "Fail", "Left", "Total", "Status"); err != nil {
+			if _, err := fmt.Fprintf(cmd.OutOrStdout(), "%-30s %5s %5s %5s %5s  %s\n", "Plan", "Done", "Fail", "Left", "Total", "Status"); err != nil {
 				return err
 			}
-			if _, err := fmt.Fprintf(cmd.OutOrStdout(), "%-55s %5s %5s %5s %5s  %s\n", "----", "----", "----", "----", "-----", "------"); err != nil {
+			if _, err := fmt.Fprintf(cmd.OutOrStdout(), "%-30s %5s %5s %5s %5s  %s\n", "----", "----", "----", "----", "-----", "------"); err != nil {
 				return err
 			}
 
@@ -140,7 +194,10 @@ func newPlanListCmd() *cobra.Command {
 				if status.Running {
 					label = "running"
 				}
-				if _, err := fmt.Fprintf(cmd.OutOrStdout(), "%-55s %5d %5d %5d %5d  %s\n", status.PlanFile, status.Done, status.Failed, status.Active, status.Total, label); err != nil {
+				if status.StateFile == "" {
+					label = "not_started"
+				}
+				if _, err := fmt.Fprintf(cmd.OutOrStdout(), "%-30s %5d %5d %5d %5d  %s\n", status.PlanSlug, status.Done, status.Failed, status.Active, status.Total, label); err != nil {
 					return err
 				}
 			}
@@ -148,47 +205,40 @@ func newPlanListCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&stateRoot, "state-root", "", "State root directory (default: $XDG_STATE_HOME/praetor/projects/<hash>)")
 	return cmd
 }
 
 func newPlanResetCmd() *cobra.Command {
-	var stateRoot string
 	var force bool
 
 	cmd := &cobra.Command{
-		Use:     "reset <plan-file>",
+		Use:     "reset <slug>",
 		Short:   "Clear execution state for a plan",
-		Example: `  praetor plan reset docs/plans/my-plan.json`,
+		Example: `  praetor plan reset my-feature`,
 		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cmd.SilenceUsage = true
-			absPlan, err := filepath.Abs(strings.TrimSpace(args[0]))
-			if err != nil {
-				return fmt.Errorf("resolve plan path: %w", err)
-			}
-
-			plan, err := domain.LoadPlan(absPlan)
+			slug := args[0]
+			store, err := resolveStore(".")
 			if err != nil {
 				return err
 			}
 
-			resolvedStateRoot, err := resolveStateRoot(stateRoot, filepath.Dir(absPlan))
+			plan, err := domain.LoadPlan(store.PlanFile(slug))
 			if err != nil {
 				return err
 			}
 
-			store := localstate.NewStore(resolvedStateRoot, "")
-			running, pid := store.IsPlanRunning(absPlan)
+			running, pid := store.IsPlanRunning(slug)
 			if running && !force {
 				return fmt.Errorf("plan is currently running (pid=%d); use --force to reset anyway", pid)
 			}
-			removed, err := store.ResetPlanRuntime(absPlan, plan)
+			removed, err := store.ResetPlanRuntime(slug, plan)
 			if err != nil {
 				return err
 			}
 			if removed == 0 {
-				_, err = fmt.Fprintf(cmd.OutOrStdout(), "Nothing to reset for: %s\n", absPlan)
+				_, err = fmt.Fprintf(cmd.OutOrStdout(), "Nothing to reset for: %s\n", slug)
 				return err
 			}
 			_, err = fmt.Fprintf(cmd.OutOrStdout(), "Reset complete. Removed %d file(s).\n", removed)
@@ -196,54 +246,43 @@ func newPlanResetCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&stateRoot, "state-root", "", "State root directory (default: $XDG_STATE_HOME/praetor/projects/<hash>)")
 	cmd.Flags().BoolVar(&force, "force", false, "Force reset even if a running lock exists")
 	return cmd
 }
 
 func newPlanResumeCmd() *cobra.Command {
-	var stateRoot string
-
 	cmd := &cobra.Command{
-		Use:     "resume <plan-file>",
+		Use:     "resume <slug>",
 		Short:   "Restore the latest local snapshot state for a plan",
-		Example: `  praetor plan resume docs/plans/my-plan.json`,
+		Example: `  praetor plan resume my-feature`,
 		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cmd.SilenceUsage = true
-			absPlan, err := filepath.Abs(strings.TrimSpace(args[0]))
-			if err != nil {
-				return fmt.Errorf("resolve plan path: %w", err)
-			}
-
-			projectRoot, err := workspace.ResolveProjectRoot(filepath.Dir(absPlan))
+			slug := args[0]
+			store, err := resolveStore(".")
 			if err != nil {
 				return err
 			}
-			snapshot, snapshotPath, err := localstate.LoadLatestLocalSnapshot(projectRoot, absPlan)
+
+			snapshot, snapshotPath, err := localstate.LoadLatestLocalSnapshot(store.RuntimeDir(), slug)
 			if err != nil {
 				return err
 			}
 			if strings.TrimSpace(snapshotPath) == "" {
-				return fmt.Errorf("no local snapshot found for plan: %s", absPlan)
+				return fmt.Errorf("no local snapshot found for plan: %s", slug)
 			}
 
-			resolvedStateRoot, err := resolveStateRoot(stateRoot, projectRoot)
-			if err != nil {
-				return err
-			}
-			store := localstate.NewStore(resolvedStateRoot, "")
 			if err := store.Init(); err != nil {
 				return err
 			}
-			if err := store.WriteState(absPlan, snapshot.State); err != nil {
+			if err := store.WriteState(slug, snapshot.State); err != nil {
 				return fmt.Errorf("persist resumed state: %w", err)
 			}
 
 			if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Resumed from: %s\n", snapshotPath); err != nil {
 				return err
 			}
-			if _, err := fmt.Fprintf(cmd.OutOrStdout(), "State updated: %s\n", store.StateFile(absPlan)); err != nil {
+			if _, err := fmt.Fprintf(cmd.OutOrStdout(), "State updated: %s\n", store.StateFile(slug)); err != nil {
 				return err
 			}
 			_, err = fmt.Fprintf(cmd.OutOrStdout(), "Progress: %d/%d done\n", snapshot.State.DoneCount(), len(snapshot.State.Tasks))
@@ -251,20 +290,34 @@ func newPlanResumeCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&stateRoot, "state-root", "", "State root directory (default: $XDG_STATE_HOME/praetor/projects/<hash>)")
 	return cmd
 }
 
-func resolveStateRoot(explicitRoot, projectDir string) (string, error) {
-	root, err := localstate.ResolveStateRoot(explicitRoot, projectDir)
+func resolveStore(projectDir string) (*localstate.Store, error) {
+	root, err := localstate.ResolveProjectHome("", projectDir)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	return root, nil
+	return localstate.NewStore(root), nil
+}
+
+func openEditor(path string) error {
+	editor := strings.TrimSpace(os.Getenv("VISUAL"))
+	if editor == "" {
+		editor = strings.TrimSpace(os.Getenv("EDITOR"))
+	}
+	if editor == "" {
+		return nil
+	}
+	cmd := exec.Command(editor, path)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
 }
 
 func printPlanStatus(cmd *cobra.Command, status domain.PlanStatus) error {
-	if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Plan:     %s\n", status.PlanFile); err != nil {
+	if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Plan:     %s\n", status.PlanSlug); err != nil {
 		return err
 	}
 	if status.StateFile == "" {

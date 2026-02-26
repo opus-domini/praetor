@@ -29,9 +29,9 @@ func NewRunner(runtime domain.AgentRuntime) *Runner {
 }
 
 type activeRun struct {
-	planFile string
-	plan     domain.Plan
-	options  domain.RunnerOptions
+	slug    string
+	plan    domain.Plan
+	options domain.RunnerOptions
 
 	runtime     domain.AgentRuntime
 	render      domain.RenderSink
@@ -55,9 +55,9 @@ type activeRun struct {
 	stopReason        string
 }
 
-// Run executes a plan file until completion, blockage, or retry exhaustion.
-func (r *Runner) Run(ctx context.Context, render domain.RenderSink, planFile string, options domain.RunnerOptions) (domain.RunnerStats, error) {
-	run, lock, cleanupRuntime, err := r.bootstrapRun(ctx, render, planFile, options)
+// Run executes a plan slug until completion, blockage, or retry exhaustion.
+func (r *Runner) Run(ctx context.Context, render domain.RenderSink, slug string, options domain.RunnerOptions) (domain.RunnerStats, error) {
+	run, lock, cleanupRuntime, err := r.bootstrapRun(ctx, render, slug, options)
 	if err != nil {
 		r.cleanupBootstrapFailure(render, run, lock, cleanupRuntime)
 		return domain.RunnerStats{}, err
@@ -71,7 +71,7 @@ func (r *Runner) Run(ctx context.Context, render domain.RenderSink, planFile str
 	}()
 
 	if run.state.ActiveCount() == 0 {
-		run.render.Success(fmt.Sprintf("All tasks already completed: %s", run.planFile))
+		run.render.Success(fmt.Sprintf("All tasks already completed: %s", run.slug))
 		return run.stats, nil
 	}
 
@@ -96,14 +96,14 @@ func (r *Runner) cleanupBootstrapFailure(render domain.RenderSink, run activeRun
 	}
 }
 
-func (r *Runner) bootstrapRun(ctx context.Context, render domain.RenderSink, planFile string, options domain.RunnerOptions) (activeRun, localstate.RunLock, func(), error) {
-	planFile = strings.TrimSpace(planFile)
-	if planFile == "" {
-		return activeRun{}, localstate.RunLock{}, nil, errors.New("plan file is required")
+func (r *Runner) bootstrapRun(ctx context.Context, render domain.RenderSink, slug string, options domain.RunnerOptions) (activeRun, localstate.RunLock, func(), error) {
+	slug = strings.TrimSpace(slug)
+	if slug == "" {
+		return activeRun{}, localstate.RunLock{}, nil, errors.New("plan slug is required")
 	}
 
 	cleanupRuntime := func() {}
-	run := activeRun{planFile: planFile}
+	run := activeRun{slug: slug}
 
 	normalized, err := normalizeRunnerOptions(options)
 	if err != nil {
@@ -122,7 +122,11 @@ func (r *Runner) bootstrapRun(ctx context.Context, render domain.RenderSink, pla
 	}
 	run.projectRoot = projectRoot
 	run.runID = newRunID()
-	if pruneErr := localstate.PruneLocalSnapshots(projectRoot, normalized.KeepLastRuns); pruneErr != nil {
+
+	store := localstate.NewStore(normalized.ProjectHome)
+	run.store = store
+
+	if pruneErr := localstate.PruneLocalSnapshots(store.RuntimeDir(), normalized.KeepLastRuns); pruneErr != nil {
 		render.Warn(fmt.Sprintf("failed to prune local snapshots: %v", pruneErr))
 	}
 
@@ -159,6 +163,8 @@ func (r *Runner) bootstrapRun(ctx context.Context, render domain.RenderSink, pla
 		return run, localstate.RunLock{}, cleanupRuntime, ctxErr
 	}
 
+	planFile := store.PlanFile(slug)
+
 	if strings.TrimSpace(normalized.Objective) != "" {
 		planner, plannerErr := NewCognitiveAgent(normalized.PlannerAgent, runtime)
 		if plannerErr != nil {
@@ -192,10 +198,7 @@ func (r *Runner) bootstrapRun(ctx context.Context, render domain.RenderSink, pla
 		return run, localstate.RunLock{}, cleanupRuntime, err
 	}
 
-	store := localstate.NewStore(normalized.StateRoot, normalized.CacheRoot)
-	run.store = store
-
-	lock, err := store.AcquireRunLock(planFile, normalized.Force)
+	lock, err := store.AcquireRunLock(slug, normalized.Force)
 	if err != nil {
 		return run, localstate.RunLock{}, cleanupRuntime, err
 	}
@@ -204,32 +207,32 @@ func (r *Runner) bootstrapRun(ctx context.Context, render domain.RenderSink, pla
 		return run, lock, cleanupRuntime, ctxErr
 	}
 
-	state, err := store.LoadOrInitializeState(planFile, plan)
+	state, err := store.LoadOrInitializeState(slug, plan)
 	if err != nil {
 		return run, lock, cleanupRuntime, err
 	}
 	run.state = state
 
-	if latest, path, snapshotErr := localstate.LoadLatestLocalSnapshot(projectRoot, planFile); snapshotErr != nil {
+	if latest, path, snapshotErr := localstate.LoadLatestLocalSnapshot(store.RuntimeDir(), slug); snapshotErr != nil {
 		render.Warn(fmt.Sprintf("failed to inspect local snapshots: %v", snapshotErr))
 	} else if path != "" &&
 		strings.TrimSpace(latest.PlanChecksum) == strings.TrimSpace(run.state.PlanChecksum) &&
 		localstate.ParseTimestamp(latest.Timestamp).After(localstate.ParseTimestamp(run.state.UpdatedAt)) {
 		run.state = latest.State
-		if err := store.WriteState(planFile, run.state); err != nil {
+		if err := store.WriteState(slug, run.state); err != nil {
 			return run, lock, cleanupRuntime, fmt.Errorf("persist recovered state: %w", err)
 		}
 		render.Warn(fmt.Sprintf("Recovered state from local snapshot: %s", path))
 	}
 
 	stats := domain.RunnerStats{
-		PlanFile:  planFile,
-		StateFile: store.StateFile(planFile),
+		PlanSlug:  slug,
+		StateFile: store.StateFile(slug),
 	}
 	run.stats = stats
 
-	snapshotStore := localstate.NewLocalSnapshotStore(projectRoot, run.runID)
-	if err := snapshotStore.Init(planFile, run.state.PlanChecksum); err != nil {
+	snapshotStore := localstate.NewLocalSnapshotStore(store.RuntimeDir(), run.runID)
+	if err := snapshotStore.Init(slug, run.state.PlanChecksum); err != nil {
 		return run, lock, cleanupRuntime, err
 	}
 	if err := snapshotStore.WriteLock(lock.Token, os.Getpid()); err != nil {
@@ -237,7 +240,7 @@ func (r *Runner) bootstrapRun(ctx context.Context, render domain.RenderSink, pla
 	}
 	run.snapshot = snapshotStore
 
-	stuck, err := store.DetectStuckTasks(planFile, run.state, normalized.MaxRetries)
+	stuck, err := store.DetectStuckTasks(slug, run.state, normalized.MaxRetries)
 	if err != nil {
 		return run, lock, cleanupRuntime, err
 	}
@@ -245,7 +248,7 @@ func (r *Runner) bootstrapRun(ctx context.Context, render domain.RenderSink, pla
 		return run, lock, cleanupRuntime, fmt.Errorf("tasks are stuck at retry limit:\n- %s", strings.Join(stuck, "\n- "))
 	}
 
-	isolation := NewIsolationPolicy(projectRoot, normalized.Isolation)
+	isolation := NewIsolationPolicy(projectRoot, store.WorktreesDir(), normalized.Isolation)
 	run.isolation = isolation
 	if err := isolation.PruneOrphans(ctx); err != nil {
 		return run, lock, cleanupRuntime, err
@@ -255,7 +258,7 @@ func (r *Runner) bootstrapRun(ctx context.Context, render domain.RenderSink, pla
 	if planTitle := strings.TrimSpace(plan.Title); planTitle != "" {
 		render.KV("Plan:", planTitle)
 	}
-	render.KV("Plan file:", planFile)
+	render.KV("Slug:", slug)
 	render.KV("State:", stats.StateFile)
 	render.KV("Progress:", fmt.Sprintf("%d/%d done", run.state.DoneCount(), len(run.state.Tasks)))
 	if normalized.Isolation == domain.IsolationWorktree {
@@ -270,7 +273,7 @@ func (r *Runner) bootstrapRun(ctx context.Context, render domain.RenderSink, pla
 	}
 	render.KV("Run:", run.runID)
 
-	run.transitions = NewTransitionRecorder(store, planFile)
+	run.transitions = NewTransitionRecorder(store, slug)
 	run.loopStart = time.Now()
 	run.totalCost = 0
 	if err := run.persistSnapshot("bootstrap", "run initialized"); err != nil {
@@ -395,19 +398,12 @@ func normalizeRunnerOptions(options domain.RunnerOptions) (domain.RunnerOptions,
 		}
 		normalized.Workdir = cwd
 	}
-	if strings.TrimSpace(normalized.StateRoot) == "" {
-		stateRoot, err := localstate.ResolveStateRoot("", normalized.Workdir)
+	if strings.TrimSpace(normalized.ProjectHome) == "" {
+		projectHome, err := localstate.ResolveProjectHome("", normalized.Workdir)
 		if err != nil {
 			return domain.RunnerOptions{}, err
 		}
-		normalized.StateRoot = stateRoot
-	}
-	if strings.TrimSpace(normalized.CacheRoot) == "" {
-		cacheRoot, err := localstate.ResolveCacheRoot("", normalized.Workdir)
-		if err != nil {
-			return domain.RunnerOptions{}, err
-		}
-		normalized.CacheRoot = cacheRoot
+		normalized.ProjectHome = projectHome
 	}
 	if normalized.MaxRetries <= 0 {
 		return domain.RunnerOptions{}, errors.New("max retries must be greater than zero")
@@ -745,7 +741,7 @@ func (run *activeRun) persistSnapshot(phase, message string) error {
 	}
 	snapshot := localstate.LocalSnapshot{
 		RunID:             run.runID,
-		PlanFile:          run.planFile,
+		PlanSlug:          run.slug,
 		PlanChecksum:      run.state.PlanChecksum,
 		ProjectRoot:       run.projectRoot,
 		ManifestPath:      run.manifestPath,

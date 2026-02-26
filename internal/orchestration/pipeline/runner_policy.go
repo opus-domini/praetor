@@ -16,18 +16,18 @@ import (
 
 // TransitionRecorder centralizes state transition side effects.
 type TransitionRecorder struct {
-	store    *localstate.Store
-	planFile string
+	store *localstate.Store
+	slug  string
 }
 
 // NewTransitionRecorder creates a TransitionRecorder.
-func NewTransitionRecorder(store *localstate.Store, planFile string) *TransitionRecorder {
-	return &TransitionRecorder{store: store, planFile: planFile}
+func NewTransitionRecorder(store *localstate.Store, slug string) *TransitionRecorder {
+	return &TransitionRecorder{store: store, slug: slug}
 }
 
 // WriteCheckpoint writes a checkpoint entry to the audit log.
 func (r *TransitionRecorder) WriteCheckpoint(entry domain.CheckpointEntry) error {
-	return r.store.WriteCheckpoint(r.planFile, entry)
+	return r.store.WriteCheckpoint(r.slug, entry)
 }
 
 // WriteMetric writes a cost/metric entry.
@@ -36,13 +36,13 @@ func (r *TransitionRecorder) WriteMetric(entry domain.CostEntry) error {
 }
 
 // TransitionTask validates a state transition and persists the updated state.
-func (r *TransitionRecorder) TransitionTask(state *domain.State, index int, to domain.TaskStatus, planFile string) error {
+func (r *TransitionRecorder) TransitionTask(state *domain.State, index int, to domain.TaskStatus) error {
 	from := state.Tasks[index].Status
 	if err := domain.Transition(from, to); err != nil {
 		return err
 	}
 	state.Tasks[index].Status = to
-	return r.store.WriteState(planFile, *state)
+	return r.store.WriteState(r.slug, *state)
 }
 
 // CompleteTask transitions a task to done and writes a checkpoint.
@@ -53,7 +53,7 @@ func (r *TransitionRecorder) CompleteTask(state *domain.State, index int, signat
 	}
 	task.Status = domain.TaskDone
 	task.Feedback = ""
-	if err := r.store.WriteState(r.planFile, *state); err != nil {
+	if err := r.store.WriteState(r.slug, *state); err != nil {
 		return err
 	}
 	// Clean up external retry/feedback files if they exist.
@@ -77,17 +77,19 @@ type worktreeInfo struct {
 
 // IsolationPolicy controls how tasks are isolated from the main working tree.
 type IsolationPolicy struct {
-	mainDir string
-	mode    domain.IsolationMode
-	active  map[string]worktreeInfo
+	mainDir      string
+	worktreeRoot string
+	mode         domain.IsolationMode
+	active       map[string]worktreeInfo
 }
 
 // NewIsolationPolicy creates an isolation policy.
-func NewIsolationPolicy(mainDir string, mode domain.IsolationMode) *IsolationPolicy {
+func NewIsolationPolicy(mainDir, worktreeRoot string, mode domain.IsolationMode) *IsolationPolicy {
 	return &IsolationPolicy{
-		mainDir: mainDir,
-		mode:    mode,
-		active:  make(map[string]worktreeInfo),
+		mainDir:      mainDir,
+		worktreeRoot: worktreeRoot,
+		mode:         mode,
+		active:       make(map[string]worktreeInfo),
 	}
 }
 
@@ -103,7 +105,7 @@ func (p *IsolationPolicy) PrepareTask(ctx context.Context, runID, taskID string)
 
 	runToken := shortToken(runID, 8)
 	branch := fmt.Sprintf("praetor/%s--%s", sanitizePathToken(taskID), runToken)
-	worktreePath := filepath.Join(p.mainDir, ".praetor", "worktrees", fmt.Sprintf("%s--%s", sanitizePathToken(taskID), runToken))
+	worktreePath := filepath.Join(p.worktreeRoot, fmt.Sprintf("%s--%s", sanitizePathToken(taskID), runToken))
 
 	addCmd := exec.CommandContext(ctx, "git", "-C", p.mainDir, "worktree", "add", worktreePath, "-b", branch, "HEAD")
 	if out, err := addCmd.CombinedOutput(); err != nil {
@@ -192,14 +194,13 @@ func (p *IsolationPolicy) PruneOrphans(ctx context.Context) error {
 		ctx = context.Background()
 	}
 
-	// Phase 1: remove orphaned worktree directories under .praetor/worktrees/.
-	worktreeRoot := filepath.Join(p.mainDir, ".praetor", "worktrees")
-	if entries, err := os.ReadDir(worktreeRoot); err == nil {
+	// Phase 1: remove orphaned worktree directories.
+	if entries, err := os.ReadDir(p.worktreeRoot); err == nil {
 		for _, entry := range entries {
 			if !entry.IsDir() {
 				continue
 			}
-			wt := filepath.Join(worktreeRoot, entry.Name())
+			wt := filepath.Join(p.worktreeRoot, entry.Name())
 			_ = exec.CommandContext(ctx, "git", "-C", p.mainDir, "worktree", "remove", "--force", wt).Run()
 		}
 	}

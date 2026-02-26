@@ -27,13 +27,13 @@ type lockMeta struct {
 }
 
 // AcquireRunLock acquires a lock for one plan run.
-func (s *Store) AcquireRunLock(planFile string, force bool) (RunLock, error) {
+func (s *Store) AcquireRunLock(slug string, force bool) (RunLock, error) {
 	if err := s.Init(); err != nil {
 		return RunLock{}, err
 	}
 
-	runtimeKey := s.RuntimeKey(planFile)
-	lockPath := s.LockFile(planFile)
+	runtimeKey := s.RuntimeKey(slug)
+	lockPath := s.LockFile(slug)
 	hostname, _ := os.Hostname()
 
 	for range 4 {

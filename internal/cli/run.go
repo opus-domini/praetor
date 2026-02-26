@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -16,7 +15,6 @@ import (
 )
 
 func newRunCmd() *cobra.Command {
-	var stateRoot string
 	var workdir string
 	var executor string
 	var reviewer string
@@ -41,38 +39,29 @@ func newRunCmd() *cobra.Command {
 	var timeout time.Duration
 
 	cmd := &cobra.Command{
-		Use:   "run <plan-file>",
+		Use:   "run <slug>",
 		Short: "Execute a task plan",
 		Long: `Execute a task plan with executor/reviewer orchestration.
 
 Each task runs an executor agent, then an independent reviewer agent
 that gates promotion. Failed tasks are retried with feedback. Worktree
 isolation protects the main branch from partial changes.`,
-		Example: `  praetor plan run docs/plans/my-plan.json
-  praetor plan run docs/plans/my-plan.json --executor claude --reviewer claude
-  praetor plan run docs/plans/my-plan.json --runner direct --max-transitions 200 --keep-last-runs 20
-  praetor plan run docs/plans/my-plan.json --hook ./scripts/lint.sh --timeout 1h`,
+		Example: `  praetor plan run my-feature
+  praetor plan run my-feature --executor claude --reviewer claude
+  praetor plan run my-feature --runner direct --max-transitions 200 --keep-last-runs 20
+  praetor plan run my-feature --hook ./scripts/lint.sh --timeout 1h`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cmd.SilenceUsage = true
-			absPlan, err := filepath.Abs(strings.TrimSpace(args[0]))
-			if err != nil {
-				return fmt.Errorf("resolve plan path: %w", err)
-			}
+			slug := strings.TrimSpace(args[0])
 
 			absWorkdir := strings.TrimSpace(workdir)
-			if absWorkdir != "" {
-				absWorkdir, err = filepath.Abs(absWorkdir)
-				if err != nil {
-					return fmt.Errorf("resolve workdir path: %w", err)
-				}
-			}
 			projectRoot, err := workspace.ResolveProjectRoot(absWorkdir)
 			if err != nil {
 				return err
 			}
 
-			resolvedStateRoot, err := resolveStateRoot(stateRoot, projectRoot)
+			store, err := resolveStore(projectRoot)
 			if err != nil {
 				return err
 			}
@@ -147,7 +136,7 @@ isolation protects the main branch from partial changes.`,
 
 			runner := pipeline.NewRunner(nil)
 			runnerOptions := domain.RunnerOptions{
-				StateRoot:       resolvedStateRoot,
+				ProjectHome:     store.Root,
 				Workdir:         absWorkdir,
 				RunnerMode:      domain.RunnerMode(strings.ToLower(strings.TrimSpace(runnerMode))),
 				DefaultExecutor: domain.Agent(executor),
@@ -179,7 +168,7 @@ isolation protects the main branch from partial changes.`,
 			}
 
 			render := NewRenderer(cmd.OutOrStdout(), noColor)
-			stats, err := runner.Run(ctx, render, absPlan, runnerOptions)
+			stats, err := runner.Run(ctx, render, slug, runnerOptions)
 			if err != nil {
 				return err
 			}
@@ -207,7 +196,6 @@ isolation protects the main branch from partial changes.`,
 	cmd.Flags().StringVar(&tmuxSession, "tmux-session", "", "tmux session name (default: praetor-<project-hash>)")
 	cmd.Flags().StringVar(&runnerMode, "runner", string(domain.RunnerTMUX), "Runner mode: tmux, pty, or direct")
 	cmd.Flags().StringVar(&workdir, "workdir", ".", "Working directory for agents")
-	cmd.Flags().StringVar(&stateRoot, "state-root", "", "State root directory (default: $XDG_STATE_HOME/praetor/projects/<hash>)")
 	cmd.Flags().BoolVar(&noColor, "no-color", false, "Disable colored output")
 	cmd.Flags().StringVar(&isolation, "isolation", string(domain.IsolationWorktree), "Isolation mode: worktree or off")
 	cmd.Flags().StringVar(&postTaskHook, "hook", "", "Script to run after executor, before reviewer")

@@ -32,8 +32,8 @@ func TaskKey(index int, task domain.StateTask) string {
 }
 
 // TaskSignatureForPlan returns the stable, plan-scoped signature for retries/feedback.
-func (s *Store) TaskSignatureForPlan(planFile string, index int, task domain.StateTask) string {
-	scope := s.RuntimeKey(planFile) + "|" + taskSignatureKey(index, task)
+func (s *Store) TaskSignatureForPlan(slug string, index int, task domain.StateTask) string {
+	scope := s.RuntimeKey(slug) + "|" + taskSignatureKey(index, task)
 	return TaskSignature(scope)
 }
 

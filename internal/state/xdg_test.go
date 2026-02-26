@@ -1,50 +1,49 @@
 package state
 
 import (
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
 
-func TestDefaultConfigDirPraetorHome(t *testing.T) {
+func TestDefaultHomePraetorHome(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("PRAETOR_HOME", tmp)
 	t.Setenv("XDG_CONFIG_HOME", "")
 
-	dir, err := DefaultConfigDir()
+	home, err := DefaultHome()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if dir != filepath.Join(tmp, "config") {
-		t.Fatalf("expected %s, got %s", filepath.Join(tmp, "config"), dir)
+	if home != tmp {
+		t.Fatalf("expected %s, got %s", tmp, home)
 	}
 }
 
-func TestDefaultConfigDirXDG(t *testing.T) {
+func TestDefaultHomeXDG(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("PRAETOR_HOME", "")
 	t.Setenv("XDG_CONFIG_HOME", tmp)
 
-	dir, err := DefaultConfigDir()
+	home, err := DefaultHome()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if dir != filepath.Join(tmp, "praetor") {
-		t.Fatalf("expected %s, got %s", filepath.Join(tmp, "praetor"), dir)
+	if home != filepath.Join(tmp, "praetor") {
+		t.Fatalf("expected %s, got %s", filepath.Join(tmp, "praetor"), home)
 	}
 }
 
-func TestDefaultConfigDirFallback(t *testing.T) {
+func TestDefaultHomeFallback(t *testing.T) {
 	t.Setenv("PRAETOR_HOME", "")
 	t.Setenv("XDG_CONFIG_HOME", "")
 
-	dir, err := DefaultConfigDir()
+	home, err := DefaultHome()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasSuffix(dir, filepath.Join("praetor")) {
-		t.Fatalf("expected path ending in praetor, got %s", dir)
+	if !strings.HasSuffix(home, filepath.Join("praetor")) {
+		t.Fatalf("expected path ending in praetor, got %s", home)
 	}
 }
 
@@ -56,108 +55,22 @@ func TestDefaultConfigFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	expected := filepath.Join(tmp, "config", "config.toml")
+	expected := filepath.Join(tmp, "config.toml")
 	if file != expected {
 		t.Fatalf("expected %s, got %s", expected, file)
 	}
 }
 
-func TestDefaultStateHomePraetorHome(t *testing.T) {
-	tmp := t.TempDir()
-	t.Setenv("PRAETOR_HOME", tmp)
-	t.Setenv("XDG_STATE_HOME", "")
-
-	dir, err := DefaultStateHome()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if dir != filepath.Join(tmp, "state") {
-		t.Fatalf("expected %s, got %s", filepath.Join(tmp, "state"), dir)
-	}
-}
-
-func TestDefaultStateHomeXDG(t *testing.T) {
-	tmp := t.TempDir()
-	t.Setenv("PRAETOR_HOME", "")
-	t.Setenv("XDG_STATE_HOME", tmp)
-
-	dir, err := DefaultStateHome()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if dir != filepath.Join(tmp, "praetor") {
-		t.Fatalf("expected %s, got %s", filepath.Join(tmp, "praetor"), dir)
-	}
-}
-
-func TestDefaultStateHomeFallback(t *testing.T) {
-	t.Setenv("PRAETOR_HOME", "")
-	t.Setenv("XDG_STATE_HOME", "")
-
-	dir, err := DefaultStateHome()
-	if err != nil {
-		t.Fatal(err)
-	}
-	home, _ := os.UserHomeDir()
-	expected := filepath.Join(home, ".local", "state", "praetor")
-	if dir != expected {
-		t.Fatalf("expected %s, got %s", expected, dir)
-	}
-}
-
-func TestDefaultCacheHomePraetorHome(t *testing.T) {
-	tmp := t.TempDir()
-	t.Setenv("PRAETOR_HOME", tmp)
-	t.Setenv("XDG_CACHE_HOME", "")
-
-	dir, err := DefaultCacheHome()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if dir != filepath.Join(tmp, "cache") {
-		t.Fatalf("expected %s, got %s", filepath.Join(tmp, "cache"), dir)
-	}
-}
-
-func TestDefaultCacheHomeXDG(t *testing.T) {
-	tmp := t.TempDir()
-	t.Setenv("PRAETOR_HOME", "")
-	t.Setenv("XDG_CACHE_HOME", tmp)
-
-	dir, err := DefaultCacheHome()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if dir != filepath.Join(tmp, "praetor") {
-		t.Fatalf("expected %s, got %s", filepath.Join(tmp, "praetor"), dir)
-	}
-}
-
-func TestDefaultProjectStateRoot(t *testing.T) {
+func TestDefaultProjectRoot(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("PRAETOR_HOME", tmp)
 
-	root, err := DefaultProjectStateRoot("/home/user/myproject")
+	root, err := DefaultProjectRoot("/home/user/myproject")
 	if err != nil {
 		t.Fatal(err)
 	}
 	key := ProjectRuntimeKey("/home/user/myproject")
-	expected := filepath.Join(tmp, "state", "projects", key)
-	if root != expected {
-		t.Fatalf("expected %s, got %s", expected, root)
-	}
-}
-
-func TestDefaultProjectCacheRoot(t *testing.T) {
-	tmp := t.TempDir()
-	t.Setenv("PRAETOR_HOME", tmp)
-
-	root, err := DefaultProjectCacheRoot("/home/user/myproject")
-	if err != nil {
-		t.Fatal(err)
-	}
-	key := ProjectRuntimeKey("/home/user/myproject")
-	expected := filepath.Join(tmp, "cache", "projects", key)
+	expected := filepath.Join(tmp, "projects", key)
 	if root != expected {
 		t.Fatalf("expected %s, got %s", expected, root)
 	}
@@ -192,25 +105,13 @@ func TestProjectRuntimeKeyContainsBasename(t *testing.T) {
 func TestPraetorHomeTakesPrecedenceOverXDG(t *testing.T) {
 	praetorHome := t.TempDir()
 	xdgConfig := t.TempDir()
-	xdgState := t.TempDir()
-	xdgCache := t.TempDir()
 
 	t.Setenv("PRAETOR_HOME", praetorHome)
 	t.Setenv("XDG_CONFIG_HOME", xdgConfig)
-	t.Setenv("XDG_STATE_HOME", xdgState)
-	t.Setenv("XDG_CACHE_HOME", xdgCache)
 
-	configDir, _ := DefaultConfigDir()
-	stateHome, _ := DefaultStateHome()
-	cacheHome, _ := DefaultCacheHome()
+	home, _ := DefaultHome()
 
-	if configDir != filepath.Join(praetorHome, "config") {
-		t.Fatalf("PRAETOR_HOME should take precedence for config, got %s", configDir)
-	}
-	if stateHome != filepath.Join(praetorHome, "state") {
-		t.Fatalf("PRAETOR_HOME should take precedence for state, got %s", stateHome)
-	}
-	if cacheHome != filepath.Join(praetorHome, "cache") {
-		t.Fatalf("PRAETOR_HOME should take precedence for cache, got %s", cacheHome)
+	if home != praetorHome {
+		t.Fatalf("PRAETOR_HOME should take precedence, got %s", home)
 	}
 }

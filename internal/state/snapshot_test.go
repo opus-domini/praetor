@@ -13,7 +13,7 @@ func TestSnapshotStoreSaveAndLoadLatest(t *testing.T) {
 
 	root := t.TempDir()
 	store := NewSnapshotStore(root, "run-1")
-	if err := store.Init("/tmp/plan.json", "checksum-1"); err != nil {
+	if err := store.Init("test-plan", "checksum-1"); err != nil {
 		t.Fatalf("init snapshot store: %v", err)
 	}
 	if err := store.WriteLock("token-1", 1234); err != nil {
@@ -26,7 +26,7 @@ func TestSnapshotStoreSaveAndLoadLatest(t *testing.T) {
 	}
 	if err := store.Save(Snapshot{
 		RunID:        "run-1",
-		PlanFile:     "/tmp/plan.json",
+		PlanSlug:     "test-plan",
 		PlanChecksum: "checksum-1",
 		ProjectRoot:  root,
 		Phase:        "execute",
@@ -40,7 +40,7 @@ func TestSnapshotStoreSaveAndLoadLatest(t *testing.T) {
 		t.Fatalf("append event: %v", err)
 	}
 
-	loaded, path, err := LoadLatestSnapshot(root, "/tmp/plan.json")
+	loaded, path, err := LoadLatestSnapshot(root, "test-plan")
 	if err != nil {
 		t.Fatalf("load latest snapshot: %v", err)
 	}
@@ -66,12 +66,12 @@ func TestLoadLatestSnapshotSkipsChecksumMismatch(t *testing.T) {
 
 	root := t.TempDir()
 	store := NewSnapshotStore(root, "run-1")
-	if err := store.Init("/tmp/plan.json", "checksum-1"); err != nil {
+	if err := store.Init("test-plan", "checksum-1"); err != nil {
 		t.Fatalf("init snapshot store: %v", err)
 	}
 	if err := store.Save(Snapshot{
 		RunID:        "run-1",
-		PlanFile:     "/tmp/plan.json",
+		PlanSlug:     "test-plan",
 		PlanChecksum: "checksum-1",
 		ProjectRoot:  root,
 		Phase:        "execute",
@@ -84,11 +84,11 @@ func TestLoadLatestSnapshotSkipsChecksumMismatch(t *testing.T) {
 
 	// Corrupt snapshot content while keeping metadata unchanged.
 	snapshotPath := filepath.Join(store.RootDir(), "snapshot.json")
-	if err := os.WriteFile(snapshotPath, []byte(`{"version":1,"run_id":"run-1","plan_file":"/tmp/plan.json","timestamp":"2026-02-26T00:00:00Z","state":{"corrupted":true}}`), 0o644); err != nil {
+	if err := os.WriteFile(snapshotPath, []byte(`{"version":1,"run_id":"run-1","plan_slug":"test-plan","timestamp":"2026-02-26T00:00:00Z","state":{"corrupted":true}}`), 0o644); err != nil {
 		t.Fatalf("corrupt snapshot: %v", err)
 	}
 
-	loaded, path, err := LoadLatestSnapshot(root, "/tmp/plan.json")
+	loaded, path, err := LoadLatestSnapshot(root, "test-plan")
 	if err != nil {
 		t.Fatalf("load latest snapshot: %v", err)
 	}
@@ -104,16 +104,16 @@ func TestPruneLocalSnapshotsKeepsLatestRuns(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		runID := "run-" + string(rune('a'+i))
 		store := NewSnapshotStore(root, runID)
-		if err := store.Init("/tmp/plan.json", "checksum-1"); err != nil {
+		if err := store.Init("test-plan", "checksum-1"); err != nil {
 			t.Fatalf("init snapshot store %s: %v", runID, err)
 		}
 		ts := time.Now().UTC().Add(time.Duration(i) * time.Minute).Format(time.RFC3339)
 		if err := store.Save(Snapshot{
 			RunID:        runID,
-			PlanFile:     "/tmp/plan.json",
+			PlanSlug:     "test-plan",
 			PlanChecksum: "checksum-1",
 			ProjectRoot:  root,
 			Phase:        "execute",
@@ -130,11 +130,18 @@ func TestPruneLocalSnapshotsKeepsLatestRuns(t *testing.T) {
 		t.Fatalf("prune snapshots: %v", err)
 	}
 
-	entries, err := os.ReadDir(filepath.Join(root, ".praetor", "runtime"))
+	entries, err := os.ReadDir(root)
 	if err != nil {
 		t.Fatalf("read runtime root: %v", err)
 	}
-	if len(entries) != 2 {
-		t.Fatalf("expected 2 runtime dirs after prune, got %d", len(entries))
+	// Filter to directories only (ignore any non-dir files).
+	dirs := 0
+	for _, e := range entries {
+		if e.IsDir() {
+			dirs++
+		}
+	}
+	if dirs != 2 {
+		t.Fatalf("expected 2 runtime dirs after prune, got %d", dirs)
 	}
 }

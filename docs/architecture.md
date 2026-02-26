@@ -4,7 +4,7 @@
 
 `praetor` is a CLI-first orchestrator with two execution modes:
 
-- **Plan-driven execution** (`praetor plan run <plan-file>`) with Plan/Execute/Review phases.
+- **Plan-driven execution** (`praetor plan run <slug>`) with Plan/Execute/Review phases.
 - **Single-prompt dispatch** (`praetor exec`) through a centralized multi-provider `Agent` abstraction.
 
 Built-in providers:
@@ -63,11 +63,11 @@ Key contents:
 3. Selected `Agent` executes prompt through `Execute(...)`.
 4. Response is printed to stdout.
 
-### `praetor plan run <plan-file>`
+### `praetor plan run <slug>`
 
-1. CLI resolves plan path, workdir, and merged config.
+1. CLI resolves plan slug, workdir, and merged config.
 2. Runner resolves git project root and reads workspace manifest (`praetor.yaml`, `praetor.yml`, fallback `praetor.md`).
-3. Runner initializes state store (XDG roots) and acquires run lock.
+3. Runner initializes project state store and acquires run lock.
 4. Runner restores from latest local project snapshot when newer.
 5. Optional planner phase (`--objective`) generates a plan before execution.
 6. Main loop runs as FSM (`stateFn`) with explicit transitions:
@@ -79,7 +79,7 @@ Key contents:
 7. Each transition persists:
    - mutable plan state
    - checkpoints/metrics
-   - transactional local snapshot (`.praetor/runtime/<run-id>/snapshot.json` + journal)
+   - transactional local snapshot (`<project-home>/runtime/<run-id>/snapshot.json` + journal)
 8. Runner exits on completion, cancellation, blockage, or iteration cap.
 
 ```mermaid
@@ -163,10 +163,10 @@ and agent specs that invoke CLI tools without a TTY.
 
 ## State and recovery
 
-State is split into two layers:
+All state lives under a single project home directory (`<praetor-home>/projects/<project-key>/`):
 
-- **XDG project state/cache**: canonical mutable execution state, checkpoints, locks, logs.
-- **Local transactional snapshots**: `.praetor/runtime/<run-id>/` for crash-safe recovery.
+- **Project state**: canonical mutable execution state, checkpoints, locks, logs, plans.
+- **Transactional snapshots**: `<project-home>/runtime/<run-id>/` for crash-safe recovery.
 
 Snapshot files:
 

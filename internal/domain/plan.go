@@ -11,7 +11,6 @@ import (
 	"regexp"
 	"sort"
 	"strings"
-	"time"
 )
 
 // CanonicalTaskID returns the stable identifier for a plan task.
@@ -226,20 +225,18 @@ func ValidatePlan(plan Plan) error {
 
 var slugPattern = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?$`)
 
-// NewPlanFile creates a skeleton plan file in docs/plans.
-func NewPlanFile(slug string, now time.Time, baseDir string) (string, error) {
+// NewPlanFile creates a skeleton plan file in the given plans directory.
+func NewPlanFile(slug, plansDir string) (string, error) {
 	slug = strings.TrimSpace(slug)
 	if !slugPattern.MatchString(slug) {
 		return "", fmt.Errorf("invalid slug %q (allowed: lowercase letters, digits, hyphens)", slug)
 	}
 
-	plansDir := filepath.Join(baseDir, "docs", "plans")
 	if err := os.MkdirAll(plansDir, 0o755); err != nil {
-		return "", fmt.Errorf("create docs/plans directory: %w", err)
+		return "", fmt.Errorf("create plans directory: %w", err)
 	}
 
-	filename := fmt.Sprintf("PLAN-PRAETOR-%s-%s.json", now.Format("2006-01-02"), slug)
-	path := filepath.Join(plansDir, filename)
+	path := filepath.Join(plansDir, slug+".json")
 	if _, err := os.Stat(path); err == nil {
 		return "", fmt.Errorf("plan file already exists: %s", path)
 	} else if !errors.Is(err, os.ErrNotExist) {
@@ -247,8 +244,7 @@ func NewPlanFile(slug string, now time.Time, baseDir string) (string, error) {
 	}
 
 	plan := Plan{
-		Schema: "../schemas/loop-plan.schema.json",
-		Title:  strings.ReplaceAll(slug, "-", " "),
+		Title: strings.ReplaceAll(slug, "-", " "),
 		Tasks: []Task{
 			{
 				ID:          "TASK-001",

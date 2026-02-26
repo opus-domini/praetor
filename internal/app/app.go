@@ -8,16 +8,10 @@ import (
 	"github.com/opus-domini/praetor/internal/workspace"
 )
 
-// ResolveStateRoot returns the state root from explicit user input or
-// derived from the project directory via XDG conventions.
-func ResolveStateRoot(explicitRoot, projectDir string) (string, error) {
-	return state.ResolveStateRoot(explicitRoot, projectDir)
-}
-
-// ResolveCacheRoot returns the cache root from explicit user input or
-// derived from the project directory via XDG conventions.
-func ResolveCacheRoot(explicitRoot, projectDir string) (string, error) {
-	return state.ResolveCacheRoot(explicitRoot, projectDir)
+// ResolveProjectHome returns the project home from explicit user input or
+// derived from the project directory.
+func ResolveProjectHome(explicitRoot, projectDir string) (string, error) {
+	return state.ResolveProjectHome(explicitRoot, projectDir)
 }
 
 // ResolveProjectRoot resolves the git repository root for a directory.

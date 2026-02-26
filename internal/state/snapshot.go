@@ -19,7 +19,7 @@ const snapshotSchemaVersion = 1
 type Snapshot struct {
 	Version           int             `json:"version"`
 	RunID             string          `json:"run_id"`
-	PlanFile          string          `json:"plan_file"`
+	PlanSlug          string          `json:"plan_slug"`
 	PlanChecksum      string          `json:"plan_checksum"`
 	ProjectRoot       string          `json:"project_root"`
 	ManifestPath      string          `json:"manifest_path,omitempty"`
@@ -41,17 +41,17 @@ type SnapshotEvent struct {
 	Message   string `json:"message"`
 }
 
-// SnapshotStore manages local project snapshots under .praetor/runtime/<run-id>.
+// SnapshotStore manages local project snapshots under <runtimeRoot>/<run-id>.
 type SnapshotStore struct {
-	projectRoot string
+	runtimeRoot string
 	runID       string
 	rootDir     string
 }
 
-func NewSnapshotStore(projectRoot, runID string) *SnapshotStore {
-	rootDir := filepath.Join(projectRoot, ".praetor", "runtime", runID)
+func NewSnapshotStore(runtimeRoot, runID string) *SnapshotStore {
+	rootDir := filepath.Join(runtimeRoot, runID)
 	return &SnapshotStore{
-		projectRoot: strings.TrimSpace(projectRoot),
+		runtimeRoot: strings.TrimSpace(runtimeRoot),
 		runID:       strings.TrimSpace(runID),
 		rootDir:     rootDir,
 	}
@@ -77,7 +77,7 @@ func (s *SnapshotStore) metaPath() string {
 	return filepath.Join(s.rootDir, "meta.json")
 }
 
-func (s *SnapshotStore) Init(planFile, planChecksum string) error {
+func (s *SnapshotStore) Init(planSlug, planChecksum string) error {
 	if strings.TrimSpace(s.rootDir) == "" {
 		return errors.New("local snapshot root is required")
 	}
@@ -86,8 +86,8 @@ func (s *SnapshotStore) Init(planFile, planChecksum string) error {
 	}
 	meta := map[string]string{
 		"run_id":        s.runID,
-		"project_root":  s.projectRoot,
-		"plan_file":     strings.TrimSpace(planFile),
+		"runtime_root":  s.runtimeRoot,
+		"plan_slug":     strings.TrimSpace(planSlug),
 		"plan_checksum": strings.TrimSpace(planChecksum),
 		"created_at":    time.Now().UTC().Format(time.RFC3339),
 	}
@@ -110,7 +110,7 @@ func (s *SnapshotStore) Save(snapshot Snapshot) error {
 		snapshot.RunID = s.runID
 	}
 	if strings.TrimSpace(snapshot.ProjectRoot) == "" {
-		snapshot.ProjectRoot = s.projectRoot
+		snapshot.ProjectRoot = s.runtimeRoot
 	}
 	if strings.TrimSpace(snapshot.Timestamp) == "" {
 		snapshot.Timestamp = time.Now().UTC().Format(time.RFC3339)
@@ -171,8 +171,7 @@ func (s *SnapshotStore) AppendEvent(event SnapshotEvent) error {
 	return nil
 }
 
-func LoadLatestSnapshot(projectRoot, planFile string) (Snapshot, string, error) {
-	runtimeRoot := filepath.Join(projectRoot, ".praetor", "runtime")
+func LoadLatestSnapshot(runtimeRoot, planSlug string) (Snapshot, string, error) {
 	entries, err := os.ReadDir(runtimeRoot)
 	if errors.Is(err, os.ErrNotExist) {
 		return Snapshot{}, "", nil
@@ -181,7 +180,7 @@ func LoadLatestSnapshot(projectRoot, planFile string) (Snapshot, string, error) 
 		return Snapshot{}, "", fmt.Errorf("read local runtime root: %w", err)
 	}
 
-	planFile = strings.TrimSpace(planFile)
+	planSlug = strings.TrimSpace(planSlug)
 	latest := Snapshot{}
 	latestPath := ""
 	for _, entry := range entries {
@@ -200,7 +199,7 @@ func LoadLatestSnapshot(projectRoot, planFile string) (Snapshot, string, error) 
 		if unmarshalErr := json.Unmarshal(data, &candidate); unmarshalErr != nil {
 			continue
 		}
-		if strings.TrimSpace(candidate.PlanFile) != planFile {
+		if strings.TrimSpace(candidate.PlanSlug) != planSlug {
 			continue
 		}
 		if latestPath == "" || ParseTimestamp(candidate.Timestamp).After(ParseTimestamp(latest.Timestamp)) {
@@ -218,11 +217,10 @@ type runSnapshotMeta struct {
 
 // PruneLocalSnapshots keeps only the most recent keepLast run directories.
 // When keepLast <= 0, no pruning is performed.
-func PruneLocalSnapshots(projectRoot string, keepLast int) error {
+func PruneLocalSnapshots(runtimeRoot string, keepLast int) error {
 	if keepLast <= 0 {
 		return nil
 	}
-	runtimeRoot := filepath.Join(projectRoot, ".praetor", "runtime")
 	entries, err := os.ReadDir(runtimeRoot)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil

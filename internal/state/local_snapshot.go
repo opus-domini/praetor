@@ -11,7 +11,7 @@ import (
 type LocalSnapshot struct {
 	Version           int          `json:"version"`
 	RunID             string       `json:"run_id"`
-	PlanFile          string       `json:"plan_file"`
+	PlanSlug          string       `json:"plan_slug"`
 	PlanChecksum      string       `json:"plan_checksum"`
 	ProjectRoot       string       `json:"project_root"`
 	ManifestPath      string       `json:"manifest_path,omitempty"`
@@ -24,13 +24,13 @@ type LocalSnapshot struct {
 	State             domain.State `json:"state"`
 }
 
-// LocalSnapshotStore manages local project snapshots under .praetor/runtime/<run-id>.
+// LocalSnapshotStore manages local project snapshots under <runtimeRoot>/<run-id>.
 type LocalSnapshotStore struct {
 	inner *SnapshotStore
 }
 
-func NewLocalSnapshotStore(projectRoot, runID string) *LocalSnapshotStore {
-	return &LocalSnapshotStore{inner: NewSnapshotStore(projectRoot, runID)}
+func NewLocalSnapshotStore(runtimeRoot, runID string) *LocalSnapshotStore {
+	return &LocalSnapshotStore{inner: NewSnapshotStore(runtimeRoot, runID)}
 }
 
 func (s *LocalSnapshotStore) RootDir() string {
@@ -40,11 +40,11 @@ func (s *LocalSnapshotStore) RootDir() string {
 	return s.inner.RootDir()
 }
 
-func (s *LocalSnapshotStore) Init(planFile, planChecksum string) error {
+func (s *LocalSnapshotStore) Init(planSlug, planChecksum string) error {
 	if s == nil || s.inner == nil {
 		return nil
 	}
-	return s.inner.Init(planFile, planChecksum)
+	return s.inner.Init(planSlug, planChecksum)
 }
 
 func (s *LocalSnapshotStore) WriteLock(token string, pid int) error {
@@ -65,7 +65,7 @@ func (s *LocalSnapshotStore) Save(snapshot LocalSnapshot) error {
 	return s.inner.Save(Snapshot{
 		Version:           snapshot.Version,
 		RunID:             snapshot.RunID,
-		PlanFile:          snapshot.PlanFile,
+		PlanSlug:          snapshot.PlanSlug,
 		PlanChecksum:      snapshot.PlanChecksum,
 		ProjectRoot:       snapshot.ProjectRoot,
 		ManifestPath:      snapshot.ManifestPath,
@@ -86,8 +86,8 @@ func (s *LocalSnapshotStore) AppendEvent(event SnapshotEvent) error {
 	return s.inner.AppendEvent(event)
 }
 
-func LoadLatestLocalSnapshot(projectRoot, planFile string) (LocalSnapshot, string, error) {
-	snapshot, path, err := LoadLatestSnapshot(projectRoot, planFile)
+func LoadLatestLocalSnapshot(runtimeRoot, planSlug string) (LocalSnapshot, string, error) {
+	snapshot, path, err := LoadLatestSnapshot(runtimeRoot, planSlug)
 	if err != nil {
 		return LocalSnapshot{}, "", err
 	}
@@ -103,7 +103,7 @@ func LoadLatestLocalSnapshot(projectRoot, planFile string) (LocalSnapshot, strin
 	return LocalSnapshot{
 		Version:           snapshot.Version,
 		RunID:             snapshot.RunID,
-		PlanFile:          snapshot.PlanFile,
+		PlanSlug:          snapshot.PlanSlug,
 		PlanChecksum:      snapshot.PlanChecksum,
 		ProjectRoot:       snapshot.ProjectRoot,
 		ManifestPath:      snapshot.ManifestPath,

@@ -36,16 +36,16 @@ type Config struct {
 }
 
 // Path returns the config file path, respecting $PRAETOR_CONFIG.
-// Resolution: $PRAETOR_CONFIG > XDG config path.
+// Resolution: $PRAETOR_CONFIG > <home>/config.toml
 func Path() string {
 	if env := strings.TrimSpace(os.Getenv("PRAETOR_CONFIG")); env != "" {
 		return env
 	}
-	xdgPath, err := state.DefaultConfigFile()
+	path, err := state.DefaultConfigFile()
 	if err != nil {
 		return ""
 	}
-	return xdgPath
+	return path
 }
 
 // Load reads the config file and returns resolved values for a project.

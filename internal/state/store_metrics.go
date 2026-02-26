@@ -42,7 +42,7 @@ func (s *Store) WriteTaskMetrics(entry domain.CostEntry) error {
 }
 
 // WriteCheckpoint appends to the history log and overwrites the current checkpoint.
-func (s *Store) WriteCheckpoint(planFile string, entry domain.CheckpointEntry) error {
+func (s *Store) WriteCheckpoint(slug string, entry domain.CheckpointEntry) error {
 	historyPath := filepath.Join(s.CheckpointsDir(), "history.tsv")
 	f, err := os.OpenFile(historyPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
@@ -71,7 +71,7 @@ func (s *Store) WriteCheckpoint(planFile string, entry domain.CheckpointEntry) e
 		return fmt.Errorf("write checkpoint entry: %w", err)
 	}
 
-	currentPath := s.currentCheckpointFile(planFile)
+	currentPath := s.currentCheckpointFile(slug)
 	content := fmt.Sprintf("timestamp=%s\nstatus=%s\ntask_id=%s\nsignature=%s\nrun_id=%s\nmessage=%s\n",
 		entry.Timestamp, entry.Status, entry.TaskID, entry.Signature,
 		entry.RunID, entry.Message)

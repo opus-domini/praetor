@@ -82,10 +82,10 @@ func TestMissingArgsShowsUsageAndError(t *testing.T) {
 		wantError string // expected in stderr (error message)
 	}{
 		{"plan create", []string{"plan", "create"}, "create <slug>", "Error:"},
-		{"plan status", []string{"plan", "status"}, "status <plan-file>", "Error:"},
-		{"plan reset", []string{"plan", "reset"}, "reset <plan-file>", "Error:"},
-		{"plan resume", []string{"plan", "resume"}, "resume <plan-file>", "Error:"},
-		{"plan run", []string{"plan", "run"}, "run <plan-file>", "Error:"},
+		{"plan status", []string{"plan", "status"}, "status <slug>", "Error:"},
+		{"plan reset", []string{"plan", "reset"}, "reset <slug>", "Error:"},
+		{"plan resume", []string{"plan", "resume"}, "resume <slug>", "Error:"},
+		{"plan run", []string{"plan", "run"}, "run <slug>", "Error:"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

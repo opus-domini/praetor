@@ -67,7 +67,6 @@ const (
 	TaskReviewing TaskStatus = "reviewing"
 	TaskDone      TaskStatus = "done"
 	TaskFailed    TaskStatus = "failed"
-
 )
 
 // StateTask is one mutable state entry for a task.
@@ -85,9 +84,9 @@ type StateTask struct {
 	Feedback    string     `json:"feedback,omitempty"`
 }
 
-// State stores mutable progress for one plan file.
+// State stores mutable progress for one plan.
 type State struct {
-	PlanFile     string      `json:"plan_file"`
+	PlanSlug     string      `json:"plan_slug"`
 	PlanChecksum string      `json:"plan_checksum"`
 	CreatedAt    string      `json:"created_at"`
 	UpdatedAt    string      `json:"updated_at"`
@@ -123,8 +122,7 @@ func (s State) ActiveCount() int {
 
 // RunnerOptions controls loop execution behavior.
 type RunnerOptions struct {
-	StateRoot       string
-	CacheRoot       string
+	ProjectHome     string
 	Workdir         string
 	RunnerMode      RunnerMode
 	DefaultExecutor Agent
@@ -168,7 +166,7 @@ const (
 
 // RunnerStats summarizes one run invocation.
 type RunnerStats struct {
-	PlanFile      string
+	PlanSlug      string
 	StateFile     string
 	Iterations    int
 	TasksDone     int
@@ -293,7 +291,7 @@ type RenderSink interface {
 
 // PlanStatus describes execution status of a plan.
 type PlanStatus struct {
-	PlanFile  string
+	PlanSlug  string
 	StateFile string
 	UpdatedAt string
 	Done      int

@@ -15,21 +15,33 @@ import (
 )
 
 func TestPlanResumeRestoresLatestSnapshot(t *testing.T) {
-	t.Parallel()
+	// Cannot use t.Parallel because we set PRAETOR_HOME and chdir.
+	praetorHome := t.TempDir()
+	t.Setenv("PRAETOR_HOME", praetorHome)
 
 	repo := t.TempDir()
 	gitCmd(t, repo, "init")
 
-	planPath := filepath.Join(repo, "plan.json")
-	plan := domain.Plan{Tasks: []domain.Task{{ID: "TASK-001", Title: "Task 1", Executor: domain.AgentCodex, Reviewer: domain.AgentNone}}}
-	writePlanJSON(t, planPath, plan)
+	// Resolve project home the same way the CLI does.
+	projectHome, err := localstate.ResolveProjectHome("", repo)
+	if err != nil {
+		t.Fatalf("resolve project home: %v", err)
+	}
+	store := localstate.NewStore(projectHome)
+	if err := store.Init(); err != nil {
+		t.Fatalf("init store: %v", err)
+	}
 
-	checksum, err := domain.PlanChecksum(planPath)
+	slug := "test-plan"
+	plan := domain.Plan{Tasks: []domain.Task{{ID: "TASK-001", Title: "Task 1", Executor: domain.AgentCodex, Reviewer: domain.AgentNone}}}
+	writePlanJSON(t, store.PlanFile(slug), plan)
+
+	checksum, err := domain.PlanChecksum(store.PlanFile(slug))
 	if err != nil {
 		t.Fatalf("plan checksum: %v", err)
 	}
 	state := domain.State{
-		PlanFile:     planPath,
+		PlanSlug:     slug,
 		PlanChecksum: checksum,
 		CreatedAt:    time.Now().UTC().Format(time.RFC3339),
 		UpdatedAt:    time.Now().UTC().Format(time.RFC3339),
@@ -37,13 +49,13 @@ func TestPlanResumeRestoresLatestSnapshot(t *testing.T) {
 	}
 	state.Tasks[0].Status = domain.TaskDone
 
-	snapshots := localstate.NewLocalSnapshotStore(repo, "run-1")
-	if err := snapshots.Init(planPath, checksum); err != nil {
+	snapshots := localstate.NewLocalSnapshotStore(store.RuntimeDir(), "run-1")
+	if err := snapshots.Init(slug, checksum); err != nil {
 		t.Fatalf("init snapshot store: %v", err)
 	}
 	if err := snapshots.Save(localstate.LocalSnapshot{
 		RunID:        "run-1",
-		PlanFile:     planPath,
+		PlanSlug:     slug,
 		PlanChecksum: checksum,
 		ProjectRoot:  repo,
 		Phase:        "finalize",
@@ -55,13 +67,16 @@ func TestPlanResumeRestoresLatestSnapshot(t *testing.T) {
 		t.Fatalf("save snapshot: %v", err)
 	}
 
-	stateRoot := filepath.Join(repo, "state")
+	// The resume command calls resolveStore("."), which resolves from the CWD.
+	// Chdir into the repo so the project home matches.
+	t.Chdir(repo)
+
 	root := NewRootCmd()
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	root.SetOut(&stdout)
 	root.SetErr(&stderr)
-	root.SetArgs([]string{"plan", "resume", planPath, "--state-root", stateRoot})
+	root.SetArgs([]string{"plan", "resume", slug})
 
 	if err := root.Execute(); err != nil {
 		t.Fatalf("execute resume command: %v (stderr=%s)", err, stderr.String())
@@ -75,8 +90,7 @@ func TestPlanResumeRestoresLatestSnapshot(t *testing.T) {
 		t.Fatalf("expected progress output, got: %s", out)
 	}
 
-	store := localstate.NewStore(stateRoot, "")
-	restored, err := store.ReadState(planPath)
+	restored, err := store.ReadState(slug)
 	if err != nil {
 		t.Fatalf("read restored state: %v", err)
 	}
@@ -87,6 +101,9 @@ func TestPlanResumeRestoresLatestSnapshot(t *testing.T) {
 
 func writePlanJSON(t *testing.T, path string, plan domain.Plan) {
 	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("create plan dir: %v", err)
+	}
 	data, err := json.MarshalIndent(plan, "", "  ")
 	if err != nil {
 		t.Fatalf("marshal plan: %v", err)

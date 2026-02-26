@@ -1,8 +1,6 @@
 package state
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -12,11 +10,9 @@ import (
 )
 
 // Store manages mutable runner state files and runtime artifacts.
-// StateRoot holds persistent data (state, locks, costs, checkpoints).
-// CacheRoot holds purgeable artifacts (logs).
+// Root is the single per-project home directory holding all state, logs, plans, etc.
 type Store struct {
-	StateRoot string
-	CacheRoot string
+	Root string
 }
 
 // RunLock represents one acquired runtime lock owned by this process.
@@ -25,34 +21,23 @@ type RunLock struct {
 	Token string
 }
 
-// NewStore builds a store with validated root paths.
-// stateRoot holds persistent data; cacheRoot holds purgeable artifacts.
-// If cacheRoot is empty, it falls back to stateRoot.
-func NewStore(stateRoot, cacheRoot string) *Store {
-	stateRoot = strings.TrimSpace(stateRoot)
-	if stateRoot == "" {
-		resolved, err := ProjectStateRootForDir(".")
+// NewStore builds a store with a validated root path.
+func NewStore(root string) *Store {
+	root = strings.TrimSpace(root)
+	if root == "" {
+		resolved, err := ProjectHomeForDir(".")
 		if err == nil {
-			stateRoot = resolved
+			root = resolved
 		} else {
 			homeDir, homeErr := os.UserHomeDir()
 			if homeErr == nil {
-				stateRoot = filepath.Join(homeDir, ".local", "state", "praetor")
+				root = filepath.Join(homeDir, ".config", "praetor", "projects", "default")
 			} else {
-				stateRoot = filepath.Join(".", ".praetor")
+				root = filepath.Join(".", ".praetor")
 			}
 		}
 	}
-	cacheRoot = strings.TrimSpace(cacheRoot)
-	if cacheRoot == "" {
-		resolved, err := ProjectCacheRootForDir(".")
-		if err == nil {
-			cacheRoot = resolved
-		} else {
-			cacheRoot = stateRoot
-		}
-	}
-	return &Store{StateRoot: stateRoot, CacheRoot: cacheRoot}
+	return &Store{Root: root}
 }
 
 // Init ensures all required state directories exist.
@@ -63,8 +48,11 @@ func (s *Store) Init() error {
 		s.FeedbackDir(),
 		s.LocksDir(),
 		s.LogsDir(),
+		s.PlansDir(),
 		s.RetriesDir(),
+		s.RuntimeDir(),
 		s.StateDir(),
+		s.WorktreesDir(),
 	}
 	for _, dir := range dirs {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -75,69 +63,70 @@ func (s *Store) Init() error {
 }
 
 func (s *Store) CheckpointsDir() string {
-	return filepath.Join(s.StateRoot, "checkpoints")
+	return filepath.Join(s.Root, "checkpoints")
 }
 
 func (s *Store) FeedbackDir() string {
-	return filepath.Join(s.StateRoot, "feedback")
+	return filepath.Join(s.Root, "feedback")
 }
 
 func (s *Store) LocksDir() string {
-	return filepath.Join(s.StateRoot, "locks")
+	return filepath.Join(s.Root, "locks")
 }
 
 func (s *Store) LogsDir() string {
-	return filepath.Join(s.CacheRoot, "logs")
+	return filepath.Join(s.Root, "logs")
+}
+
+func (s *Store) PlansDir() string {
+	return filepath.Join(s.Root, "plans")
 }
 
 func (s *Store) RetriesDir() string {
-	return filepath.Join(s.StateRoot, "retries")
+	return filepath.Join(s.Root, "retries")
 }
 
 func (s *Store) CostsDir() string {
-	return filepath.Join(s.StateRoot, "costs")
+	return filepath.Join(s.Root, "costs")
 }
 
 func (s *Store) StateDir() string {
-	return filepath.Join(s.StateRoot, "state")
+	return filepath.Join(s.Root, "state")
 }
 
-// PlanBaseName returns a state-safe basename for one plan file.
-func (s *Store) PlanBaseName(planFile string) string {
-	return strings.TrimSuffix(filepath.Base(planFile), filepath.Ext(planFile))
+func (s *Store) RuntimeDir() string {
+	return filepath.Join(s.Root, "runtime")
 }
 
-// RuntimeKey returns the collision-resistant key used for all plan runtime artifacts.
-func (s *Store) RuntimeKey(planFile string) string {
-	clean := strings.TrimSpace(planFile)
-	if abs, err := filepath.Abs(clean); err == nil {
-		clean = abs
+func (s *Store) WorktreesDir() string {
+	return filepath.Join(s.Root, "worktrees")
+}
+
+// PlanFile returns the full path for a plan slug.
+func (s *Store) PlanFile(slug string) string {
+	return filepath.Join(s.PlansDir(), slug+".json")
+}
+
+// RuntimeKey returns the key used for plan runtime artifacts.
+// With slug-based identity, the slug itself is the key.
+func (s *Store) RuntimeKey(slug string) string {
+	slug = strings.TrimSpace(slug)
+	if slug == "" {
+		return "plan"
 	}
-	if real, err := filepath.EvalSymlinks(clean); err == nil {
-		clean = real
-	}
-
-	baseName := strings.TrimSpace(filepath.Base(clean))
-	baseName = strings.TrimSuffix(baseName, filepath.Ext(baseName))
-	baseName = domain.SanitizePathToken(baseName)
-	if baseName == "" {
-		baseName = "plan"
-	}
-
-	hash := sha256.Sum256([]byte(clean))
-	return fmt.Sprintf("%s--%s", baseName, hex.EncodeToString(hash[:])[:12])
+	return domain.SanitizePathToken(slug)
 }
 
-// StateFile returns the mutable state file path for a plan.
-func (s *Store) StateFile(planFile string) string {
-	return filepath.Join(s.StateDir(), s.RuntimeKey(planFile)+".state.json")
+// StateFile returns the mutable state file path for a plan slug.
+func (s *Store) StateFile(slug string) string {
+	return filepath.Join(s.StateDir(), s.RuntimeKey(slug)+".state.json")
 }
 
-// LockFile returns the lock file path for a plan.
-func (s *Store) LockFile(planFile string) string {
-	return filepath.Join(s.LocksDir(), s.RuntimeKey(planFile)+".lock")
+// LockFile returns the lock file path for a plan slug.
+func (s *Store) LockFile(slug string) string {
+	return filepath.Join(s.LocksDir(), s.RuntimeKey(slug)+".lock")
 }
 
-func (s *Store) currentCheckpointFile(planFile string) string {
-	return filepath.Join(s.CheckpointsDir(), s.RuntimeKey(planFile)+".state")
+func (s *Store) currentCheckpointFile(slug string) string {
+	return filepath.Join(s.CheckpointsDir(), s.RuntimeKey(slug)+".state")
 }
