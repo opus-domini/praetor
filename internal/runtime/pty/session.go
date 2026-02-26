@@ -61,6 +61,21 @@ type scriptSession struct {
 	inputClosed bool
 }
 
+type scriptMode int
+
+const (
+	scriptModeUnknown scriptMode = iota
+	scriptModeGNU
+	scriptModeBSD
+)
+
+var (
+	scriptDetectOnce sync.Once
+	detectedMode     scriptMode
+	detectedModeErr  error
+	detectedScript   string
+)
+
 // NewScriptSession creates a PTY session backed by `script -qefc`.
 func NewScriptSession() Session {
 	s := &scriptSession{
@@ -81,12 +96,19 @@ func (s *scriptSession) Start(ctx context.Context, spec CommandSpec) error {
 	if len(spec.Args) == 0 {
 		return errors.New("pty command is required")
 	}
-	if _, err := exec.LookPath("script"); err != nil {
-		return errors.New("pty session requires `script` command in PATH")
+	scriptPath, err := exec.LookPath("script")
+	if err != nil {
+		return errors.New("pty session requires `script` in PATH (install util-linux script or BSD script)")
+	}
+	mode, err := resolveScriptMode(scriptPath)
+	if err != nil {
+		return err
 	}
 
-	cmdLine := buildCommandLine(spec.Args)
-	cmd := exec.CommandContext(ctx, "script", "-qefc", cmdLine, "/dev/null")
+	cmd, err := buildScriptCommand(ctx, mode, scriptPath, spec)
+	if err != nil {
+		return err
+	}
 	if strings.TrimSpace(spec.Dir) != "" {
 		cmd.Dir = spec.Dir
 	}
@@ -120,6 +142,70 @@ func (s *scriptSession) Start(ctx context.Context, spec CommandSpec) error {
 	go s.readStream(stderr, StreamStderr)
 	go s.waitProcess()
 	return nil
+}
+
+func resolveScriptMode(scriptPath string) (scriptMode, error) {
+	scriptPath = strings.TrimSpace(scriptPath)
+	if scriptPath == "" {
+		return scriptModeUnknown, errors.New("pty session requires `script` in PATH")
+	}
+	scriptDetectOnce.Do(func() {
+		detectedScript = scriptPath
+		switch {
+		case probeScriptGNU(scriptPath):
+			detectedMode = scriptModeGNU
+		case probeScriptBSD(scriptPath):
+			detectedMode = scriptModeBSD
+		default:
+			detectedMode = scriptModeUnknown
+			detectedModeErr = errors.New("unsupported `script` implementation: expected util-linux (-c) or BSD variant")
+		}
+	})
+	if detectedScript != scriptPath {
+		// New binary path observed in process lifetime (tests/overrides): probe directly.
+		switch {
+		case probeScriptGNU(scriptPath):
+			return scriptModeGNU, nil
+		case probeScriptBSD(scriptPath):
+			return scriptModeBSD, nil
+		default:
+			return scriptModeUnknown, errors.New("unsupported `script` implementation: expected util-linux (-c) or BSD variant")
+		}
+	}
+	if detectedModeErr != nil {
+		return scriptModeUnknown, detectedModeErr
+	}
+	if detectedMode == scriptModeUnknown {
+		return scriptModeUnknown, errors.New("unsupported `script` implementation")
+	}
+	return detectedMode, nil
+}
+
+func buildScriptCommand(ctx context.Context, mode scriptMode, scriptPath string, spec CommandSpec) (*exec.Cmd, error) {
+	switch mode {
+	case scriptModeGNU:
+		cmdLine := buildCommandLine(spec.Args)
+		return exec.CommandContext(ctx, scriptPath, "-qefc", cmdLine, "/dev/null"), nil
+	case scriptModeBSD:
+		args := append([]string{"-q", "/dev/null"}, spec.Args...)
+		return exec.CommandContext(ctx, scriptPath, args...), nil
+	default:
+		return nil, errors.New("unsupported script mode")
+	}
+}
+
+func probeScriptGNU(scriptPath string) bool {
+	cmd := exec.Command(scriptPath, "-qefc", "true", "/dev/null")
+	cmd.Stdout = io.Discard
+	cmd.Stderr = io.Discard
+	return cmd.Run() == nil
+}
+
+func probeScriptBSD(scriptPath string) bool {
+	cmd := exec.Command(scriptPath, "-q", "/dev/null", "/bin/sh", "-lc", "true")
+	cmd.Stdout = io.Discard
+	cmd.Stderr = io.Discard
+	return cmd.Run() == nil
 }
 
 func (s *scriptSession) Events() <-chan StreamEvent {

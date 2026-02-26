@@ -3,6 +3,7 @@ package pty
 import (
 	"context"
 	"os/exec"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -46,5 +47,35 @@ func TestScriptSessionInteractiveWrite(t *testing.T) {
 	}
 	if !strings.Contains(output, "ERR:hello") {
 		t.Fatalf("expected ERR:hello in output, got: %q", output)
+	}
+}
+
+func TestBuildScriptCommandGNU(t *testing.T) {
+	t.Parallel()
+
+	cmd, err := buildScriptCommand(context.Background(), scriptModeGNU, "script", CommandSpec{
+		Args: []string{"echo", "hello world"},
+	})
+	if err != nil {
+		t.Fatalf("build script command: %v", err)
+	}
+	want := []string{"script", "-qefc", "'echo' 'hello world'", "/dev/null"}
+	if !reflect.DeepEqual(cmd.Args, want) {
+		t.Fatalf("unexpected gnu command args: got=%v want=%v", cmd.Args, want)
+	}
+}
+
+func TestBuildScriptCommandBSD(t *testing.T) {
+	t.Parallel()
+
+	cmd, err := buildScriptCommand(context.Background(), scriptModeBSD, "script", CommandSpec{
+		Args: []string{"echo", "hello world"},
+	})
+	if err != nil {
+		t.Fatalf("build script command: %v", err)
+	}
+	want := []string{"script", "-q", "/dev/null", "echo", "hello world"}
+	if !reflect.DeepEqual(cmd.Args, want) {
+		t.Fatalf("unexpected bsd command args: got=%v want=%v", cmd.Args, want)
 	}
 }

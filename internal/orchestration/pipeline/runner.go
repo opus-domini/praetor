@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/opus-domini/praetor/internal/domain"
+	"github.com/opus-domini/praetor/internal/orchestration/fsm"
 	localstate "github.com/opus-domini/praetor/internal/state"
 	"github.com/opus-domini/praetor/internal/workspace"
 )
@@ -39,16 +40,19 @@ type activeRun struct {
 	isolation   *IsolationPolicy
 	snapshot    *localstate.LocalSnapshotStore
 
-	runID          string
-	projectRoot    string
-	manifestPath   string
-	projectContext string
-	state          domain.State
-	stats          domain.RunnerStats
-	totalCost      float64
-	loopStart      time.Time
-	stopRequested  bool
-	stopReason     string
+	runID             string
+	projectRoot       string
+	manifestPath      string
+	manifestHash      string
+	manifestTruncated bool
+	projectContext    string
+	state             domain.State
+	stats             domain.RunnerStats
+	totalCost         float64
+	loopStart         time.Time
+	stateTransitions  int
+	stopRequested     bool
+	stopReason        string
 }
 
 // Run executes a plan file until completion, blockage, or retry exhaustion.
@@ -118,6 +122,9 @@ func (r *Runner) bootstrapRun(ctx context.Context, render domain.RenderSink, pla
 	}
 	run.projectRoot = projectRoot
 	run.runID = newRunID()
+	if pruneErr := localstate.PruneLocalSnapshots(projectRoot, normalized.KeepLastRuns); pruneErr != nil {
+		render.Warn(fmt.Sprintf("failed to prune local snapshots: %v", pruneErr))
+	}
 
 	manifest, manifestErr := workspace.ReadManifest(projectRoot)
 	if manifestErr != nil {
@@ -127,6 +134,8 @@ func (r *Runner) bootstrapRun(ctx context.Context, render domain.RenderSink, pla
 		render.Warn("workspace manifest exceeds 16 KiB; content truncated")
 	}
 	run.manifestPath = manifest.Path
+	run.manifestHash = manifest.Hash
+	run.manifestTruncated = manifest.Truncated
 	run.projectContext = manifest.Context
 
 	runtime := r.runtime
@@ -272,18 +281,40 @@ func (r *Runner) bootstrapRun(ctx context.Context, render domain.RenderSink, pla
 }
 
 func (r *Runner) runLoop(ctx context.Context, run *activeRun) error {
-	state := runnerStateCheckGuards
-	for state != nil {
-		next, err := state(ctx, r, run)
-		if err != nil {
-			return err
-		}
-		state = next
+	machine := runnerLoopMachine{
+		runner: r,
+		run:    run,
+		next:   runnerStateCheckGuards,
 	}
-	return nil
+	return fsm.Run(ctx, &machine, runnerLoopStep)
 }
 
 type runnerStateFn func(ctx context.Context, runner *Runner, run *activeRun) (runnerStateFn, error)
+
+type runnerLoopMachine struct {
+	runner *Runner
+	run    *activeRun
+	next   runnerStateFn
+}
+
+func runnerLoopStep(ctx context.Context, machine *runnerLoopMachine) (fsm.StateFn[runnerLoopMachine], error) {
+	if machine == nil || machine.next == nil {
+		return nil, nil
+	}
+	if machine.run.options.MaxTransitions > 0 && machine.run.stateTransitions >= machine.run.options.MaxTransitions {
+		return nil, fmt.Errorf("max transitions reached (%d)", machine.run.options.MaxTransitions)
+	}
+	machine.run.stateTransitions++
+	next, err := machine.next(ctx, machine.runner, machine.run)
+	if err != nil {
+		return nil, err
+	}
+	machine.next = next
+	if machine.next == nil {
+		return nil, nil
+	}
+	return runnerLoopStep, nil
+}
 
 func runnerStateCheckGuards(ctx context.Context, runner *Runner, run *activeRun) (runnerStateFn, error) {
 	if ctxErr := ctx.Err(); ctxErr != nil {
@@ -344,329 +375,15 @@ func runnerStateFinalize(_ context.Context, _ *Runner, run *activeRun) (runnerSt
 }
 
 func (r *Runner) runIteration(ctx context.Context, run *activeRun) (bool, error) {
-	index, task, ok := domain.NextRunnableTask(run.state)
-	if !ok {
-		if run.state.OpenCount() == 0 {
-			_ = run.appendSnapshotEvent("completed", "", "all tasks completed")
-			_ = run.persistSnapshot("completed", "all tasks completed")
-			run.render.Success("All tasks completed")
-			return true, nil
-		}
-
-		report := domain.BlockedTasksReport(run.state, 5)
-		if len(report) == 0 {
-			if err := run.transitions.WriteCheckpoint(domain.CheckpointEntry{
-				Timestamp: time.Now().UTC().Format(time.RFC3339),
-				Status:    "blocked",
-				TaskID:    "",
-				Signature: "",
-				RunID:     "",
-				Message:   "plan is blocked: open tasks exist but none are runnable",
-			}); err != nil {
-				return false, fmt.Errorf("write blocked checkpoint: %w", err)
-			}
-			_ = run.appendSnapshotEvent("blocked", "", "plan is blocked: open tasks exist but none are runnable")
-			_ = run.persistSnapshot("blocked", "plan is blocked: open tasks exist but none are runnable")
-			return false, errors.New("plan is blocked: open tasks exist but none are runnable")
-		}
-		if err := run.transitions.WriteCheckpoint(domain.CheckpointEntry{
-			Timestamp: time.Now().UTC().Format(time.RFC3339),
-			Status:    "blocked",
-			TaskID:    "",
-			Signature: "",
-			RunID:     "",
-			Message:   fmt.Sprintf("plan is blocked by dependencies: %s", strings.Join(report, ", ")),
-		}); err != nil {
-			return false, fmt.Errorf("write blocked checkpoint: %w", err)
-		}
-		_ = run.appendSnapshotEvent("blocked", "", "plan is blocked by dependencies")
-		_ = run.persistSnapshot("blocked", "plan is blocked by dependencies")
-		return false, fmt.Errorf("plan is blocked by dependencies:\n- %s", strings.Join(report, "\n- "))
+	machine := iterationMachine{
+		runner: r,
+		run:    run,
+		next:   iterationStateSelectTask,
 	}
-
-	executor, err := resolveExecutor(task, run.options.DefaultExecutor)
-	if err != nil {
-		return false, fmt.Errorf("task %s: %w", task.ID, err)
-	}
-	reviewer, err := resolveReviewer(task, run.options.DefaultReviewer, run.options.SkipReview)
-	if err != nil {
-		return false, fmt.Errorf("task %s: %w", task.ID, err)
-	}
-
-	signature := run.store.TaskSignatureForPlan(run.planFile, index, task)
-
-	if task.Attempt >= run.options.MaxRetries {
-		return false, fmt.Errorf("retry limit reached for task %s (%s)", task.ID, task.Title)
-	}
-
-	progress := fmt.Sprintf("%d/%d", run.state.DoneCount()+1, len(run.state.Tasks))
-	selected := taskSelection{
-		index:     index,
-		task:      task,
-		executor:  executor,
-		reviewer:  reviewer,
-		signature: signature,
-		retries:   task.Attempt,
-		feedback:  task.Feedback,
-		progress:  progress,
-	}
-	runDir, err := prepareRunDir(run.store.LogsDir(), task, signature)
-	if err != nil {
+	if err := fsm.Run(ctx, &machine, iterationStep); err != nil {
 		return false, err
 	}
-	runID := filepath.Base(runDir)
-
-	taskWorkdir, err := run.isolation.PrepareTask(ctx, runID, task.ID)
-	if err != nil {
-		return false, err
-	}
-
-	taskLabel := task.ID
-	if strings.TrimSpace(taskLabel) == "" {
-		taskLabel = fmt.Sprintf("#%d", index)
-	}
-	selected.taskLabel = taskLabel
-	_ = run.appendSnapshotEvent("task_selected", task.ID, fmt.Sprintf("task selected: %s", task.Title))
-	_ = run.persistSnapshot("task_selected", fmt.Sprintf("task selected: %s", task.ID))
-	run.render.Task(progress, taskLabel, task.Title)
-
-	// Transition to executing state before running the agent.
-	if err := run.transitions.TransitionTask(&run.state, index, domain.TaskExecuting, run.planFile); err != nil {
-		return false, err
-	}
-
-	run.render.Phase("executor", string(selected.executor), fmt.Sprintf("attempt %d/%d", selected.retries+1, run.options.MaxRetries))
-
-	executorSystemPrompt := BuildExecutorSystemPrompt(run.projectContext)
-	executorTaskPrompt := BuildExecutorTaskPrompt(run.planFile, selected.index, selected.task, selected.feedback, selected.retries, run.plan.Title, selected.progress, taskWorkdir)
-	_ = writeText(filepath.Join(runDir, "executor.system.txt"), executorSystemPrompt)
-	_ = writeText(filepath.Join(runDir, "executor.prompt.txt"), executorTaskPrompt)
-
-	execResult, execErr := run.runtime.Run(ctx, domain.AgentRequest{
-		Role:         "execute",
-		Agent:        selected.executor,
-		Prompt:       executorTaskPrompt,
-		SystemPrompt: executorSystemPrompt,
-		Model:        selected.task.Model,
-		Workdir:      taskWorkdir,
-		RunDir:       runDir,
-		OutputPrefix: "executor",
-		TaskLabel:    taskLabel,
-		CodexBin:     run.options.CodexBin,
-		ClaudeBin:    run.options.ClaudeBin,
-		Verbose:      run.options.Verbose,
-	})
-	executorOutput := execResult.Output
-	run.totalCost += execResult.CostUSD
-	_ = writeText(filepath.Join(runDir, "executor.output.txt"), executorOutput)
-
-	run.render.Phase("executor", string(selected.executor), fmt.Sprintf("attempt %d/%d [%.1fs]", selected.retries+1, run.options.MaxRetries, execResult.DurationS))
-
-	if execErr != nil {
-		if isCancellationErr(execErr) || ctx.Err() != nil {
-			cancelErr := cancellationCause(ctx, execErr)
-			_, applyErr := r.applyTaskOutcome(ctx, run, selected, runID, taskOutcome{
-				kind:      taskOutcomeCanceled,
-				message:   cancelErr.Error(),
-				cancelErr: cancelErr,
-			})
-			return false, applyErr
-		}
-		return r.applyTaskOutcome(ctx, run, selected, runID, taskOutcome{
-			kind:         taskOutcomeRetry,
-			status:       "executor_crashed",
-			message:      fmt.Sprintf("executor process failed: %v", execErr),
-			feedback:     fmt.Sprintf("executor process failed: %v", execErr),
-			rollback:     true,
-			renderLevel:  "error",
-			renderFormat: "Executor failed: %v (retry %d/%d)",
-			renderArgs:   []any{execErr},
-			metrics: []domain.CostEntry{
-				{
-					Timestamp: time.Now().UTC().Format(time.RFC3339),
-					RunID:     runID,
-					TaskID:    selected.task.ID,
-					Agent:     string(selected.executor),
-					Role:      "executor",
-					DurationS: execResult.DurationS,
-					Status:    "fail",
-					CostUSD:   execResult.CostUSD,
-				},
-			},
-		})
-	}
-
-	result := domain.ParseExecutorResult(executorOutput)
-	if result != domain.ExecutorResultPass {
-		feedback := "executor self-reported RESULT: FAIL"
-		if result == domain.ExecutorResultUnknown {
-			feedback = "executor output missing or invalid RESULT line"
-		}
-		return r.applyTaskOutcome(ctx, run, selected, runID, taskOutcome{
-			kind:         taskOutcomeRetry,
-			status:       "executor_fail",
-			message:      fmt.Sprintf("executor reported RESULT: %s", result),
-			feedback:     feedback,
-			rollback:     true,
-			renderLevel:  "error",
-			renderFormat: "Executor reported %s (retry %d/%d)",
-			renderArgs:   []any{result},
-			metrics: []domain.CostEntry{
-				{
-					Timestamp: time.Now().UTC().Format(time.RFC3339),
-					RunID:     runID,
-					TaskID:    selected.task.ID,
-					Agent:     string(selected.executor),
-					Role:      "executor",
-					DurationS: execResult.DurationS,
-					Status:    "fail",
-					CostUSD:   execResult.CostUSD,
-				},
-			},
-		})
-	}
-
-	if err := run.transitions.WriteMetric(domain.CostEntry{
-		Timestamp: time.Now().UTC().Format(time.RFC3339),
-		RunID:     runID,
-		TaskID:    selected.task.ID,
-		Agent:     string(selected.executor),
-		Role:      "executor",
-		DurationS: execResult.DurationS,
-		Status:    "pass",
-		CostUSD:   execResult.CostUSD,
-	}); err != nil {
-		return false, fmt.Errorf("write executor metric: %w", err)
-	}
-
-	if run.options.PostTaskHook != "" {
-		run.render.Phase("hook", "post-task", run.options.PostTaskHook)
-		hookPassed, hookFeedback := runPostTaskHook(ctx, run.options.PostTaskHook, taskWorkdir, runDir)
-		if !hookPassed {
-			if ctx.Err() != nil {
-				cancelErr := cancellationCause(ctx, nil)
-				_, applyErr := r.applyTaskOutcome(ctx, run, selected, runID, taskOutcome{
-					kind:      taskOutcomeCanceled,
-					message:   cancelErr.Error(),
-					cancelErr: cancelErr,
-				})
-				return false, applyErr
-			}
-			return r.applyTaskOutcome(ctx, run, selected, runID, taskOutcome{
-				kind:         taskOutcomeRetry,
-				status:       "hook_failed",
-				message:      "post-task hook failed",
-				feedback:     hookFeedback,
-				rollback:     true,
-				renderLevel:  "error",
-				renderFormat: "Post-task hook failed (retry %d/%d)",
-			})
-		}
-	}
-
-	decision := domain.ReviewDecision{Pass: true, Reason: "review skipped"}
-	if selected.reviewer != domain.AgentNone {
-		// Transition to reviewing state before running the reviewer.
-		if err := run.transitions.TransitionTask(&run.state, selected.index, domain.TaskReviewing, run.planFile); err != nil {
-			return false, err
-		}
-		run.render.Phase("reviewer", string(selected.reviewer), "reviewing task result")
-		gitDiff := CaptureGitDiff(taskWorkdir, 500)
-
-		reviewerSystemPrompt := BuildReviewerSystemPrompt(run.projectContext)
-		reviewerTaskPrompt := BuildReviewerTaskPrompt(run.planFile, selected.task, executorOutput, taskWorkdir, run.plan.Title, selected.progress, gitDiff)
-		_ = writeText(filepath.Join(runDir, "reviewer.system.txt"), reviewerSystemPrompt)
-		_ = writeText(filepath.Join(runDir, "reviewer.prompt.txt"), reviewerTaskPrompt)
-
-		reviewResult, reviewErr := run.runtime.Run(ctx, domain.AgentRequest{
-			Role:         "review",
-			Agent:        selected.reviewer,
-			Prompt:       reviewerTaskPrompt,
-			SystemPrompt: reviewerSystemPrompt,
-			Model:        selected.task.Model,
-			Workdir:      taskWorkdir,
-			RunDir:       runDir,
-			OutputPrefix: "reviewer",
-			TaskLabel:    taskLabel,
-			CodexBin:     run.options.CodexBin,
-			ClaudeBin:    run.options.ClaudeBin,
-			Verbose:      run.options.Verbose,
-		})
-		reviewerOutput := reviewResult.Output
-		run.totalCost += reviewResult.CostUSD
-		_ = writeText(filepath.Join(runDir, "reviewer.output.txt"), reviewerOutput)
-
-		run.render.Phase("reviewer", string(selected.reviewer), fmt.Sprintf("review complete [%.1fs]", reviewResult.DurationS))
-
-		if reviewErr != nil {
-			if isCancellationErr(reviewErr) || ctx.Err() != nil {
-				cancelErr := cancellationCause(ctx, reviewErr)
-				_, applyErr := r.applyTaskOutcome(ctx, run, selected, runID, taskOutcome{
-					kind:      taskOutcomeCanceled,
-					message:   cancelErr.Error(),
-					cancelErr: cancelErr,
-				})
-				return false, applyErr
-			}
-			return r.applyTaskOutcome(ctx, run, selected, runID, taskOutcome{
-				kind:         taskOutcomeRetry,
-				status:       "reviewer_crashed",
-				message:      fmt.Sprintf("reviewer process failed: %v", reviewErr),
-				feedback:     fmt.Sprintf("reviewer process failed: %v", reviewErr),
-				rollback:     true,
-				renderLevel:  "error",
-				renderFormat: "Reviewer failed: %v (retry %d/%d)",
-				renderArgs:   []any{reviewErr},
-				metrics: []domain.CostEntry{
-					{
-						Timestamp: time.Now().UTC().Format(time.RFC3339),
-						RunID:     runID,
-						TaskID:    selected.task.ID,
-						Agent:     string(selected.reviewer),
-						Role:      "reviewer",
-						DurationS: reviewResult.DurationS,
-						Status:    "fail",
-						CostUSD:   reviewResult.CostUSD,
-					},
-				},
-			})
-		}
-
-		if err := run.transitions.WriteMetric(domain.CostEntry{
-			Timestamp: time.Now().UTC().Format(time.RFC3339),
-			RunID:     runID,
-			TaskID:    selected.task.ID,
-			Agent:     string(selected.reviewer),
-			Role:      "reviewer",
-			DurationS: reviewResult.DurationS,
-			Status:    "pass",
-			CostUSD:   reviewResult.CostUSD,
-		}); err != nil {
-			return false, fmt.Errorf("write reviewer metric: %w", err)
-		}
-
-		decision = domain.ParseReviewDecision(reviewerOutput)
-	}
-
-	if !decision.Pass {
-		return r.applyTaskOutcome(ctx, run, selected, runID, taskOutcome{
-			kind:         taskOutcomeRetry,
-			status:       "review_rejected",
-			message:      decision.Reason,
-			feedback:     decision.Reason,
-			rollback:     true,
-			renderLevel:  "warn",
-			renderFormat: "Review rejected: %s (retry %d/%d)",
-			renderArgs:   []any{decision.Reason},
-		})
-	}
-
-	return r.applyTaskOutcome(ctx, run, selected, runID, taskOutcome{
-		kind:         taskOutcomeComplete,
-		message:      fmt.Sprintf("task completed: %s", selected.task.Title),
-		renderFormat: "Completed: %s",
-		renderArgs:   []any{selected.taskLabel},
-	})
+	return machine.stop, nil
 }
 
 func normalizeRunnerOptions(options domain.RunnerOptions) (domain.RunnerOptions, error) {
@@ -697,6 +414,12 @@ func normalizeRunnerOptions(options domain.RunnerOptions) (domain.RunnerOptions,
 	}
 	if normalized.MaxIterations < 0 {
 		return domain.RunnerOptions{}, errors.New("max iterations cannot be negative")
+	}
+	if normalized.MaxTransitions < 0 {
+		return domain.RunnerOptions{}, errors.New("max transitions cannot be negative")
+	}
+	if normalized.KeepLastRuns < 0 {
+		return domain.RunnerOptions{}, errors.New("keep-last-runs cannot be negative")
 	}
 	switch normalized.Isolation {
 	case domain.IsolationWorktree, domain.IsolationOff:
@@ -1021,15 +744,18 @@ func (run *activeRun) persistSnapshot(phase, message string) error {
 		return nil
 	}
 	snapshot := localstate.LocalSnapshot{
-		RunID:        run.runID,
-		PlanFile:     run.planFile,
-		PlanChecksum: run.state.PlanChecksum,
-		ProjectRoot:  run.projectRoot,
-		Phase:        strings.TrimSpace(phase),
-		Message:      strings.TrimSpace(message),
-		Iteration:    run.stats.Iterations,
-		Timestamp:    time.Now().UTC().Format(time.RFC3339),
-		State:        run.state,
+		RunID:             run.runID,
+		PlanFile:          run.planFile,
+		PlanChecksum:      run.state.PlanChecksum,
+		ProjectRoot:       run.projectRoot,
+		ManifestPath:      run.manifestPath,
+		ManifestHash:      run.manifestHash,
+		ManifestTruncated: run.manifestTruncated,
+		Phase:             strings.TrimSpace(phase),
+		Message:           strings.TrimSpace(message),
+		Iteration:         run.stats.Iterations,
+		Timestamp:         time.Now().UTC().Format(time.RFC3339),
+		State:             run.state,
 	}
 	return run.snapshot.Save(snapshot)
 }

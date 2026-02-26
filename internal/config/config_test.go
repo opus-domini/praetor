@@ -166,6 +166,8 @@ func TestParserTypes(t *testing.T) {
 	t.Parallel()
 	input := `
 max-retries = 5
+max-transitions = 100
+keep-last-runs = 20
 no-review = true
 executor = "claude"
 `
@@ -182,6 +184,12 @@ executor = "claude"
 	}
 	if cfg.NoReview == nil || *cfg.NoReview != true {
 		t.Fatal("expected no-review=true")
+	}
+	if cfg.MaxTransitions == nil || *cfg.MaxTransitions != 100 {
+		t.Fatal("expected max-transitions=100")
+	}
+	if cfg.KeepLastRuns == nil || *cfg.KeepLastRuns != 20 {
+		t.Fatal("expected keep-last-runs=20")
 	}
 	if cfg.Executor != "claude" {
 		t.Fatal("expected executor=claude")

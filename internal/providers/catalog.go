@@ -1,3 +1,5 @@
+// Package providers is deprecated.
+// Use internal/agents as the canonical provider abstraction layer.
 package providers
 
 import (

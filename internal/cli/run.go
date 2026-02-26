@@ -24,6 +24,8 @@ func newRunCmd() *cobra.Command {
 	var objective string
 	var maxRetries int
 	var maxIterations int
+	var maxTransitions int
+	var keepLastRuns int
 	var noReview bool
 	var force bool
 	var codexBin string
@@ -48,6 +50,7 @@ that gates promotion. Failed tasks are retried with feedback. Worktree
 isolation protects the main branch from partial changes.`,
 		Example: `  praetor plan run docs/plans/my-plan.json
   praetor plan run docs/plans/my-plan.json --executor claude --reviewer claude
+  praetor plan run docs/plans/my-plan.json --runner direct --max-transitions 200 --keep-last-runs 20
   praetor plan run docs/plans/my-plan.json --hook ./scripts/lint.sh --timeout 1h`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -94,6 +97,12 @@ isolation protects the main branch from partial changes.`,
 			}
 			if !f.Changed("max-iterations") && cfg.MaxIterations != nil {
 				maxIterations = *cfg.MaxIterations
+			}
+			if !f.Changed("max-transitions") && cfg.MaxTransitions != nil {
+				maxTransitions = *cfg.MaxTransitions
+			}
+			if !f.Changed("keep-last-runs") && cfg.KeepLastRuns != nil {
+				keepLastRuns = *cfg.KeepLastRuns
 			}
 			if !f.Changed("no-review") && cfg.NoReview != nil {
 				noReview = *cfg.NoReview
@@ -147,6 +156,8 @@ isolation protects the main branch from partial changes.`,
 				Objective:       strings.TrimSpace(objective),
 				MaxRetries:      maxRetries,
 				MaxIterations:   maxIterations,
+				MaxTransitions:  maxTransitions,
+				KeepLastRuns:    keepLastRuns,
 				SkipReview:      noReview,
 				Force:           force,
 				CodexBin:        codexBin,
@@ -184,6 +195,8 @@ isolation protects the main branch from partial changes.`,
 	cmd.Flags().StringVar(&objective, "objective", "", "Objective text for macro-planning before execution")
 	cmd.Flags().IntVar(&maxRetries, "max-retries", 3, "Maximum retries per task (must be > 0)")
 	cmd.Flags().IntVar(&maxIterations, "max-iterations", 0, "Maximum loop iterations (0 = unlimited)")
+	cmd.Flags().IntVar(&maxTransitions, "max-transitions", 0, "Maximum FSM state transitions (0 = unlimited)")
+	cmd.Flags().IntVar(&keepLastRuns, "keep-last-runs", 20, "Keep only the most recent N local runtime runs (0 = no pruning)")
 	cmd.Flags().BoolVar(&noReview, "no-review", false, "Skip the reviewer gate and auto-approve executor outputs")
 	cmd.Flags().BoolVar(&force, "force", false, "Override an existing plan lock")
 	cmd.Flags().StringVar(&codexBin, "codex-bin", "codex", "Codex binary path or name")

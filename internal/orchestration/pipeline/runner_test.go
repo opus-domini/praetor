@@ -137,7 +137,7 @@ func TestRunPostTaskHookCapturesStderr(t *testing.T) {
 
 	tmpDir := t.TempDir()
 	hookPath := filepath.Join(tmpDir, "hook.sh")
-	script := "#!/usr/bin/env bash\necho 'hook stderr output' 1>&2\nexit 1\n"
+	script := "#!/bin/sh\necho 'hook stderr output' 1>&2\nexit 1\n"
 	if err := os.WriteFile(hookPath, []byte(script), 0o755); err != nil {
 		t.Fatalf("write hook: %v", err)
 	}
@@ -232,6 +232,134 @@ func TestRunnerReleasesLockWhenBootstrapFailsAfterLock(t *testing.T) {
 	}
 }
 
+func TestRunnerFailsWhenMaxTransitionsExceeded(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	git(t, tmpDir, "init")
+
+	planPath := filepath.Join(tmpDir, "plan.json")
+	writePlanFile(t, planPath, domain.Plan{
+		Tasks: []domain.Task{
+			{ID: "TASK-001", Title: "Task", Executor: domain.AgentCodex, Reviewer: domain.AgentNone},
+		},
+	})
+
+	runner := NewRunner(scriptedRuntime{
+		executeOutput: "RESULT: PASS\nSUMMARY: ok",
+		reviewOutput:  "PASS|ok",
+	})
+	_, err := runner.Run(context.Background(), discardSink{}, planPath, domain.RunnerOptions{
+		StateRoot:       filepath.Join(tmpDir, "state"),
+		CacheRoot:       filepath.Join(tmpDir, "cache"),
+		Workdir:         tmpDir,
+		DefaultExecutor: domain.AgentCodex,
+		DefaultReviewer: domain.AgentNone,
+		MaxRetries:      2,
+		MaxTransitions:  1,
+		SkipReview:      true,
+		CodexBin:        mustExecutablePath(t),
+		ClaudeBin:       mustExecutablePath(t),
+		Isolation:       domain.IsolationOff,
+		RunnerMode:      domain.RunnerDirect,
+	})
+	if err == nil {
+		t.Fatal("expected max transitions error")
+	}
+	if !strings.Contains(err.Error(), "max transitions reached") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestRunnerReviewRejectionExhaustsRetries(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	git(t, tmpDir, "init")
+
+	planPath := filepath.Join(tmpDir, "plan.json")
+	writePlanFile(t, planPath, domain.Plan{
+		Tasks: []domain.Task{
+			{ID: "TASK-001", Title: "Task", Executor: domain.AgentCodex, Reviewer: domain.AgentClaude},
+		},
+	})
+
+	runner := NewRunner(scriptedRuntime{
+		executeOutput: "RESULT: PASS\nSUMMARY: ok",
+		reviewOutput:  "FAIL|missing tests",
+	})
+	stateRoot := filepath.Join(tmpDir, "state")
+	_, err := runner.Run(context.Background(), discardSink{}, planPath, domain.RunnerOptions{
+		StateRoot:       stateRoot,
+		CacheRoot:       filepath.Join(tmpDir, "cache"),
+		Workdir:         tmpDir,
+		DefaultExecutor: domain.AgentCodex,
+		DefaultReviewer: domain.AgentClaude,
+		MaxRetries:      1,
+		SkipReview:      false,
+		CodexBin:        mustExecutablePath(t),
+		ClaudeBin:       mustExecutablePath(t),
+		Isolation:       domain.IsolationOff,
+		RunnerMode:      domain.RunnerDirect,
+	})
+	if err != nil {
+		t.Fatalf("run pipeline: %v", err)
+	}
+
+	store := localstate.NewStore(stateRoot, stateRoot)
+	state, readErr := store.ReadState(planPath)
+	if readErr != nil {
+		t.Fatalf("read state: %v", readErr)
+	}
+	if got := state.Tasks[0].Status; got != domain.TaskFailed {
+		t.Fatalf("expected failed task after retry exhaustion, got %s", got)
+	}
+}
+
+func TestRunnerWritesRuntimeStrategyCheckpoint(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	git(t, tmpDir, "init")
+
+	planPath := filepath.Join(tmpDir, "plan.json")
+	writePlanFile(t, planPath, domain.Plan{
+		Tasks: []domain.Task{
+			{ID: "TASK-001", Title: "Task", Executor: domain.AgentCodex, Reviewer: domain.AgentNone},
+		},
+	})
+
+	stateRoot := filepath.Join(tmpDir, "state")
+	runner := NewRunner(scriptedRuntime{
+		executeOutput: "RESULT: PASS\nSUMMARY: ok",
+	})
+	_, err := runner.Run(context.Background(), discardSink{}, planPath, domain.RunnerOptions{
+		StateRoot:       stateRoot,
+		CacheRoot:       filepath.Join(tmpDir, "cache"),
+		Workdir:         tmpDir,
+		DefaultExecutor: domain.AgentCodex,
+		DefaultReviewer: domain.AgentNone,
+		MaxRetries:      2,
+		SkipReview:      true,
+		CodexBin:        mustExecutablePath(t),
+		ClaudeBin:       mustExecutablePath(t),
+		Isolation:       domain.IsolationOff,
+		RunnerMode:      domain.RunnerDirect,
+	})
+	if err != nil {
+		t.Fatalf("run pipeline: %v", err)
+	}
+
+	historyPath := filepath.Join(stateRoot, "checkpoints", "history.tsv")
+	history, readErr := os.ReadFile(historyPath)
+	if readErr != nil {
+		t.Fatalf("read checkpoint history: %v", readErr)
+	}
+	if !strings.Contains(string(history), "\truntime_strategy\t") {
+		t.Fatalf("expected runtime_strategy checkpoint entry, got:\n%s", string(history))
+	}
+}
+
 func TestRunnerKeepsTaskOpenWhenMergeFails(t *testing.T) {
 	t.Parallel()
 
@@ -319,6 +447,36 @@ func mustExecutablePath(t *testing.T) string {
 type mergeConflictRuntime struct {
 	mainDir string
 	done    bool
+}
+
+type scriptedRuntime struct {
+	executeOutput string
+	executeErr    error
+	reviewOutput  string
+	reviewErr     error
+}
+
+func (r scriptedRuntime) Run(_ context.Context, req domain.AgentRequest) (domain.AgentResult, error) {
+	switch req.Role {
+	case "execute":
+		return domain.AgentResult{
+			Output:    r.executeOutput,
+			DurationS: 0.1,
+			Strategy:  domain.ExecutionStrategyProcess,
+		}, r.executeErr
+	case "review":
+		return domain.AgentResult{
+			Output:    r.reviewOutput,
+			DurationS: 0.1,
+			Strategy:  domain.ExecutionStrategyProcess,
+		}, r.reviewErr
+	default:
+		return domain.AgentResult{
+			Output:    "RESULT: PASS\nSUMMARY: ok",
+			DurationS: 0.1,
+			Strategy:  domain.ExecutionStrategyStructured,
+		}, nil
+	}
 }
 
 func (r *mergeConflictRuntime) Run(_ context.Context, req domain.AgentRequest) (domain.AgentResult, error) {

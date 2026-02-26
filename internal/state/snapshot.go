@@ -1,11 +1,14 @@
 package state
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 )
@@ -14,16 +17,19 @@ const snapshotSchemaVersion = 1
 
 // Snapshot captures transactional runtime state for one run.
 type Snapshot struct {
-	Version      int             `json:"version"`
-	RunID        string          `json:"run_id"`
-	PlanFile     string          `json:"plan_file"`
-	PlanChecksum string          `json:"plan_checksum"`
-	ProjectRoot  string          `json:"project_root"`
-	Phase        string          `json:"phase"`
-	Message      string          `json:"message"`
-	Iteration    int             `json:"iteration"`
-	Timestamp    string          `json:"timestamp"`
-	State        json.RawMessage `json:"state"`
+	Version           int             `json:"version"`
+	RunID             string          `json:"run_id"`
+	PlanFile          string          `json:"plan_file"`
+	PlanChecksum      string          `json:"plan_checksum"`
+	ProjectRoot       string          `json:"project_root"`
+	ManifestPath      string          `json:"manifest_path,omitempty"`
+	ManifestHash      string          `json:"manifest_hash,omitempty"`
+	ManifestTruncated bool            `json:"manifest_truncated,omitempty"`
+	Phase             string          `json:"phase"`
+	Message           string          `json:"message"`
+	Iteration         int             `json:"iteration"`
+	Timestamp         string          `json:"timestamp"`
+	State             json.RawMessage `json:"state"`
 }
 
 // SnapshotEvent is one append-only event in events.log.
@@ -112,7 +118,29 @@ func (s *SnapshotStore) Save(snapshot Snapshot) error {
 	if len(snapshot.State) == 0 {
 		snapshot.State = json.RawMessage("{}")
 	}
-	return writeJSONAtomic(s.snapshotPath(), snapshot)
+	encoded, err := marshalJSON(snapshot)
+	if err != nil {
+		return fmt.Errorf("encode snapshot: %w", err)
+	}
+	if err := writeBytesAtomic(s.snapshotPath(), encoded); err != nil {
+		return err
+	}
+	checksum := sha256Hex(encoded)
+	return s.updateMeta(map[string]string{
+		"snapshot_sha256":     checksum,
+		"snapshot_updated_at": time.Now().UTC().Format(time.RFC3339),
+	})
+}
+
+func (s *SnapshotStore) updateMeta(fields map[string]string) error {
+	meta := map[string]string{}
+	if data, err := os.ReadFile(s.metaPath()); err == nil {
+		_ = json.Unmarshal(data, &meta)
+	}
+	for key, value := range fields {
+		meta[key] = value
+	}
+	return writeJSONAtomic(s.metaPath(), meta)
 }
 
 func (s *SnapshotStore) AppendEvent(event SnapshotEvent) error {
@@ -165,6 +193,9 @@ func LoadLatestSnapshot(projectRoot, planFile string) (Snapshot, string, error) 
 		if readErr != nil {
 			continue
 		}
+		if !snapshotChecksumMatches(filepath.Join(runtimeRoot, entry.Name(), "meta.json"), data) {
+			continue
+		}
 		candidate := Snapshot{}
 		if unmarshalErr := json.Unmarshal(data, &candidate); unmarshalErr != nil {
 			continue
@@ -180,6 +211,89 @@ func LoadLatestSnapshot(projectRoot, planFile string) (Snapshot, string, error) 
 	return latest, latestPath, nil
 }
 
+type runSnapshotMeta struct {
+	dir       string
+	timestamp time.Time
+}
+
+// PruneLocalSnapshots keeps only the most recent keepLast run directories.
+// When keepLast <= 0, no pruning is performed.
+func PruneLocalSnapshots(projectRoot string, keepLast int) error {
+	if keepLast <= 0 {
+		return nil
+	}
+	runtimeRoot := filepath.Join(projectRoot, ".praetor", "runtime")
+	entries, err := os.ReadDir(runtimeRoot)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("read local runtime root: %w", err)
+	}
+
+	runs := make([]runSnapshotMeta, 0, len(entries))
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		runDir := filepath.Join(runtimeRoot, entry.Name())
+		ts := time.Time{}
+
+		if data, readErr := os.ReadFile(filepath.Join(runDir, "snapshot.json")); readErr == nil {
+			s := Snapshot{}
+			if jsonErr := json.Unmarshal(data, &s); jsonErr == nil {
+				ts = ParseTimestamp(s.Timestamp)
+			}
+		}
+		if ts.IsZero() {
+			if info, statErr := os.Stat(runDir); statErr == nil {
+				ts = info.ModTime().UTC()
+			}
+		}
+		runs = append(runs, runSnapshotMeta{dir: runDir, timestamp: ts})
+	}
+
+	sort.Slice(runs, func(i, j int) bool {
+		return runs[i].timestamp.After(runs[j].timestamp)
+	})
+
+	for idx, run := range runs {
+		if idx < keepLast {
+			continue
+		}
+		if err := os.RemoveAll(run.dir); err != nil {
+			return fmt.Errorf("remove old local runtime %s: %w", run.dir, err)
+		}
+	}
+	return nil
+}
+
+func snapshotChecksumMatches(metaPath string, snapshotData []byte) bool {
+	metaBytes, err := os.ReadFile(metaPath)
+	if err != nil {
+		// Metadata missing is tolerated for backward compatibility.
+		return true
+	}
+	meta := map[string]any{}
+	if err := json.Unmarshal(metaBytes, &meta); err != nil {
+		return true
+	}
+	expected := strings.TrimSpace(anyToString(meta["snapshot_sha256"]))
+	if expected == "" {
+		return true
+	}
+	return strings.EqualFold(expected, sha256Hex(snapshotData))
+}
+
+func anyToString(value any) string {
+	switch v := value.(type) {
+	case string:
+		return v
+	default:
+		return ""
+	}
+}
+
 func ParseTimestamp(value string) time.Time {
 	value = strings.TrimSpace(value)
 	if value == "" {
@@ -193,11 +307,23 @@ func ParseTimestamp(value string) time.Time {
 }
 
 func writeJSONAtomic(path string, value any) error {
+	data, err := marshalJSON(value)
+	if err != nil {
+		return err
+	}
+	return writeBytesAtomic(path, data)
+}
+
+func marshalJSON(value any) ([]byte, error) {
 	data, err := json.MarshalIndent(value, "", "  ")
 	if err != nil {
-		return fmt.Errorf("encode json %s: %w", path, err)
+		return nil, fmt.Errorf("encode json: %w", err)
 	}
 	data = append(data, '\n')
+	return data, nil
+}
+
+func writeBytesAtomic(path string, data []byte) error {
 	tmp := path + ".tmp"
 
 	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
@@ -231,4 +357,9 @@ func syncDir(path string) error {
 	}
 	defer func() { _ = d.Close() }()
 	return d.Sync()
+}
+
+func sha256Hex(data []byte) string {
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
 }

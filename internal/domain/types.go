@@ -143,6 +143,8 @@ type RunnerOptions struct {
 	Objective       string
 	MaxRetries      int
 	MaxIterations   int
+	MaxTransitions  int
+	KeepLastRuns    int
 	SkipReview      bool
 	Force           bool
 	CodexBin        string
@@ -206,7 +208,17 @@ type AgentResult struct {
 	Output    string
 	CostUSD   float64
 	DurationS float64
+	Strategy  ExecutionStrategy
 }
+
+// ExecutionStrategy captures which runtime path was used to execute an agent call.
+type ExecutionStrategy string
+
+const (
+	ExecutionStrategyStructured ExecutionStrategy = "structured"
+	ExecutionStrategyProcess    ExecutionStrategy = "process"
+	ExecutionStrategyPTY        ExecutionStrategy = "pty"
+)
 
 // CommandSpec describes a process invocation, agnostic of how it will be executed.
 type CommandSpec struct {

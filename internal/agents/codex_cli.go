@@ -48,7 +48,7 @@ func (a *CodexCLI) Plan(ctx context.Context, req PlanRequest) (PlanResponse, err
 	if c := strings.TrimSpace(req.WorkspaceContext); c != "" {
 		prompt = "Project context:\n" + c + "\n\n" + prompt
 	}
-	resp, err := a.run(ctx, req.Workdir, req.Model, prompt)
+	resp, err := a.run(ctx, req.Workdir, req.Model, prompt, req.RunDir, req.OutputPrefix, req.TaskLabel)
 	if err != nil {
 		return PlanResponse{}, err
 	}
@@ -60,7 +60,7 @@ func (a *CodexCLI) Plan(ctx context.Context, req PlanRequest) (PlanResponse, err
 }
 
 func (a *CodexCLI) Execute(ctx context.Context, req ExecuteRequest) (ExecuteResponse, error) {
-	resp, err := a.run(ctx, req.Workdir, req.Model, combinePrompt(req.SystemPrompt, req.Prompt))
+	resp, err := a.run(ctx, req.Workdir, req.Model, combinePrompt(req.SystemPrompt, req.Prompt), req.RunDir, req.OutputPrefix, req.TaskLabel)
 	if err != nil {
 		return ExecuteResponse{}, err
 	}
@@ -68,11 +68,12 @@ func (a *CodexCLI) Execute(ctx context.Context, req ExecuteRequest) (ExecuteResp
 		Output:    resp.Output,
 		CostUSD:   resp.CostUSD,
 		DurationS: resp.DurationS,
+		Strategy:  resp.Strategy,
 	}, nil
 }
 
 func (a *CodexCLI) Review(ctx context.Context, req ReviewRequest) (ReviewResponse, error) {
-	resp, err := a.run(ctx, req.Workdir, req.Model, combinePrompt(req.SystemPrompt, req.Prompt))
+	resp, err := a.run(ctx, req.Workdir, req.Model, combinePrompt(req.SystemPrompt, req.Prompt), req.RunDir, req.OutputPrefix, req.TaskLabel)
 	if err != nil {
 		return ReviewResponse{}, err
 	}
@@ -83,10 +84,11 @@ func (a *CodexCLI) Review(ctx context.Context, req ReviewRequest) (ReviewRespons
 		Output:    resp.Output,
 		CostUSD:   resp.CostUSD,
 		DurationS: resp.DurationS,
+		Strategy:  resp.Strategy,
 	}, nil
 }
 
-func (a *CodexCLI) run(ctx context.Context, workdir, model, prompt string) (PlanResponse, error) {
+func (a *CodexCLI) run(ctx context.Context, workdir, model, prompt, runDir, outputPrefix, taskLabel string) (PlanResponse, error) {
 	start := time.Now()
 	args := []string{a.Binary, "exec", "--json",
 		"--sandbox", "workspace-write",
@@ -102,9 +104,12 @@ func (a *CodexCLI) run(ctx context.Context, workdir, model, prompt string) (Plan
 	args = append(args, strings.TrimSpace(prompt))
 
 	result, err := a.Runner.Run(ctx, CommandSpec{
-		Args:   args,
-		Dir:    strings.TrimSpace(workdir),
-		UsePTY: false,
+		Args:         args,
+		Dir:          strings.TrimSpace(workdir),
+		UsePTY:       false,
+		RunDir:       strings.TrimSpace(runDir),
+		OutputPrefix: strings.TrimSpace(outputPrefix),
+		WindowHint:   strings.TrimSpace(taskLabel),
 	})
 	if err != nil {
 		return PlanResponse{DurationS: time.Since(start).Seconds()}, err
@@ -117,6 +122,7 @@ func (a *CodexCLI) run(ctx context.Context, workdir, model, prompt string) (Plan
 	return PlanResponse{
 		Output:    output,
 		DurationS: time.Since(start).Seconds(),
+		Strategy:  result.Strategy,
 	}, nil
 }
 

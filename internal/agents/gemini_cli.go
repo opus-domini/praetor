@@ -48,37 +48,40 @@ func (a *GeminiCLI) Plan(ctx context.Context, req PlanRequest) (PlanResponse, er
 	if c := strings.TrimSpace(req.WorkspaceContext); c != "" {
 		prompt = "Project context:\n" + c + "\n\n" + prompt
 	}
-	return a.run(ctx, req.Workdir, req.Model, prompt)
+	return a.run(ctx, req.Workdir, req.Model, prompt, req.RunDir, req.OutputPrefix, req.TaskLabel)
 }
 
 func (a *GeminiCLI) Execute(ctx context.Context, req ExecuteRequest) (ExecuteResponse, error) {
-	resp, err := a.run(ctx, req.Workdir, req.Model, combinePrompt(req.SystemPrompt, req.Prompt))
+	resp, err := a.run(ctx, req.Workdir, req.Model, combinePrompt(req.SystemPrompt, req.Prompt), req.RunDir, req.OutputPrefix, req.TaskLabel)
 	if err != nil {
 		return ExecuteResponse{}, err
 	}
-	return ExecuteResponse{Output: resp.Output, DurationS: resp.DurationS}, nil
+	return ExecuteResponse{Output: resp.Output, DurationS: resp.DurationS, Strategy: resp.Strategy}, nil
 }
 
 func (a *GeminiCLI) Review(ctx context.Context, req ReviewRequest) (ReviewResponse, error) {
-	resp, err := a.run(ctx, req.Workdir, req.Model, combinePrompt(req.SystemPrompt, req.Prompt))
+	resp, err := a.run(ctx, req.Workdir, req.Model, combinePrompt(req.SystemPrompt, req.Prompt), req.RunDir, req.OutputPrefix, req.TaskLabel)
 	if err != nil {
 		return ReviewResponse{}, err
 	}
 	decision, reason := parseReview(resp.Output)
-	return ReviewResponse{Decision: decision, Reason: reason, Output: resp.Output, DurationS: resp.DurationS}, nil
+	return ReviewResponse{Decision: decision, Reason: reason, Output: resp.Output, DurationS: resp.DurationS, Strategy: resp.Strategy}, nil
 }
 
-func (a *GeminiCLI) run(ctx context.Context, workdir, model, prompt string) (PlanResponse, error) {
+func (a *GeminiCLI) run(ctx context.Context, workdir, model, prompt, runDir, outputPrefix, taskLabel string) (PlanResponse, error) {
 	start := time.Now()
 	args := []string{a.Binary, "-p"}
 	if model = strings.TrimSpace(model); model != "" {
 		args = append(args, "--model", model)
 	}
 	result, err := a.Runner.Run(ctx, CommandSpec{
-		Args:   args,
-		Dir:    strings.TrimSpace(workdir),
-		Stdin:  strings.TrimSpace(prompt),
-		UsePTY: true,
+		Args:         args,
+		Dir:          strings.TrimSpace(workdir),
+		Stdin:        strings.TrimSpace(prompt),
+		UsePTY:       true,
+		RunDir:       strings.TrimSpace(runDir),
+		OutputPrefix: strings.TrimSpace(outputPrefix),
+		WindowHint:   strings.TrimSpace(taskLabel),
 	})
 	if err != nil {
 		return PlanResponse{DurationS: time.Since(start).Seconds()}, err
@@ -86,5 +89,5 @@ func (a *GeminiCLI) run(ctx context.Context, workdir, model, prompt string) (Pla
 	if result.ExitCode != 0 {
 		return PlanResponse{DurationS: time.Since(start).Seconds()}, fmt.Errorf("gemini exit code %d: %s", result.ExitCode, tailText(result.Stderr, 20))
 	}
-	return PlanResponse{Output: strings.TrimSpace(result.Stdout), DurationS: time.Since(start).Seconds()}, nil
+	return PlanResponse{Output: strings.TrimSpace(result.Stdout), DurationS: time.Since(start).Seconds(), Strategy: result.Strategy}, nil
 }

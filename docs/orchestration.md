@@ -22,11 +22,13 @@ praetor plan run docs/plans/my-plan.json
 
 ```bash
 praetor plan run docs/plans/my-plan.json \
-  --executor claude \
+  --runner direct \
+  --executor codex \
   --reviewer claude \
   --max-retries 5 \
+  --max-transitions 200 \
+  --keep-last-runs 20 \
   --hook ./scripts/validate.sh \
-  --tmux-session praetor-team \
   --timeout 2h
 ```
 
@@ -76,6 +78,14 @@ praetor plan migrate-state --dry-run  # preview without copying
 ```
 
 Copies legacy `~/.praetor/` data to XDG-compliant locations (`$XDG_CONFIG_HOME/praetor/`, `$XDG_STATE_HOME/praetor/`, `$XDG_CACHE_HOME/praetor/`). Original files are preserved. Safe to run multiple times (idempotent).
+
+### Resume from local snapshot
+
+```bash
+praetor plan resume docs/plans/my-plan.json
+```
+
+Restores the latest valid local snapshot from `.praetor/runtime/<run-id>/snapshot.json` into project state storage.
 
 ## Plan format
 
@@ -177,6 +187,18 @@ $XDG_CACHE_HOME/praetor/projects/<hash>/
 
 The project hash is derived from the git repository root path (SHA-256), ensuring state isolation between projects.
 
+Local transactional snapshots are stored in the repository under:
+
+```text
+<repo>/.praetor/runtime/<run-id>/
+├── snapshot.json
+├── events.log
+├── lock.json
+└── meta.json
+```
+
+`meta.json` stores `snapshot_sha256`, which is validated during recovery to skip corrupted snapshots.
+
 ### Task state machine
 
 Each task follows an explicit finite state machine with five states and validated transitions. The design adapts Rob Pike's function-as-state pattern for persistence: each state maps to a step function that does its work and returns the next `TaskStatus` to persist.
@@ -193,28 +215,24 @@ Each task follows an explicit finite state machine with five states and validate
 
 #### State diagram
 
-```
-┌───────────┐
-│  pending   │◀─────────────────────────────────┐
-└─────┬──────┘                                  │
-      │ stepExecute                             │
-      ▼                                         │
-┌───────────┐   crash/FAIL     ┌─────────┐     │
-│ executing  │────────────────▶│  guard   │─────┘  attempt < max
-└─────┬──────┘                 │retry ok? │
-      │ PASS                   └────┬─────┘
-      ▼                             │ attempt >= max
-┌───────────┐   reject             ▼
-│ reviewing  │──────────┐    ┌──────────┐
-└─────┬──────┘          │    │  failed   │ (terminal)
-      │ approve         │    └──────────┘
-      ▼                 │
-┌───────────┐           │
-│   done     │           │
-└───────────┘           │
-      ▲                 │
-      └─────────────────┘
-        (retry → pending)
+```mermaid
+---
+config:
+  theme: dark
+  look: neo
+---
+stateDiagram
+    [*] --> pending
+    pending --> executing: stepExecute
+    executing --> reviewing: PASS
+    executing --> done: PASS + reviewer=none
+    executing --> pending: FAIL/crash (attempt < max)
+    executing --> failed: FAIL/crash (attempt >= max)
+    reviewing --> done: approve
+    reviewing --> pending: reject/crash (attempt < max)
+    reviewing --> failed: reject/crash (attempt >= max)
+    done --> [*]
+    failed --> [*]
 ```
 
 Tasks with `reviewer = none` skip the `reviewing` state: `executing` transitions directly to `done` on success.
@@ -291,18 +309,36 @@ Each task carries its retry state in `StateTask.Attempt` and `StateTask.Feedback
 
 `Attempt` and `Feedback` are cleared when a task completes successfully. They persist across process restarts as part of the state file.
 
-## Project context (`praetor.md`)
+## Project context (`praetor.yaml` / `praetor.md`)
 
-Place a `praetor.md` file at your git repository root to inject project-specific context into executor and reviewer system prompts. This file is automatically detected and loaded at run start.
+At run start, Praetor resolves context from repository root in this order:
 
-Content is prepended to the system prompt under a `## Project Context` header. Use it for:
+1. `praetor.yaml`
+2. `praetor.yml`
+3. `praetor.md`
+
+When YAML follows the lightweight schema below, content is normalized before injection:
+
+```yaml
+version: "1"
+instructions:
+  - keep public API stable
+constraints:
+  - do not modify infra manifests
+test_commands:
+  - go test ./...
+```
+
+Unknown YAML keys fall back to raw fenced YAML. Normalized context is injected into planner/executor/reviewer prompts.
+
+Use project context for:
 
 - Coding conventions and style guidelines
 - Architecture constraints agents must respect
 - Testing requirements and CI expectations
 - Technology-specific instructions
 
-The file is limited to 16 KiB. If it exceeds this limit, content is truncated with a warning.
+Manifest content is limited to 16 KiB. If it exceeds this limit, content is truncated with a warning.
 
 ## Safety mechanisms
 
@@ -332,7 +368,7 @@ Use this for linters, type checkers, or integration tests that must pass before 
 
 Before the run starts, all required binaries are validated with `exec.LookPath`:
 
-- `tmux` (always required in tmux runner mode)
+- `tmux` (required only in `--runner tmux`)
 - `codex` (if any task uses the codex executor or reviewer)
 - `claude` (if any task uses the claude executor or reviewer)
 - `gemini` (if any task uses the gemini executor or reviewer)
@@ -368,7 +404,7 @@ Every state transition appends to `checkpoints/history.tsv`:
 timestamp	status	task_id	signature	run_id	message
 ```
 
-Tracked transitions: `completed`, `executor_crashed`, `executor_self_fail`, `hook_failed`, `reviewer_crashed`, `review_rejected`, `blocked`.
+Tracked transitions include `completed`, `executor_crashed`, `hook_failed`, `reviewer_crashed`, `review_rejected`, `blocked`, and `runtime_strategy`.
 
 The current checkpoint is also written as a key-value file at `checkpoints/<plan>.state`.
 
@@ -415,3 +451,13 @@ The tmux session is auto-created if it doesn't exist and auto-destroyed on clean
 ```bash
 tmux attach -t praetor-<project-hash>
 ```
+
+## Execution strategy and fallback
+
+Each agent invocation records the effective execution strategy:
+
+- `structured` for native structured transports (for example REST/Ollama)
+- `process` for regular subprocess execution
+- `pty` for interactive terminal execution
+
+In `--runner direct`, CLI execution prefers `process` and falls back to `pty` when TTY-related failures are detected.

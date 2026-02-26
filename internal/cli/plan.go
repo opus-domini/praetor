@@ -8,6 +8,7 @@ import (
 
 	"github.com/opus-domini/praetor/internal/domain"
 	localstate "github.com/opus-domini/praetor/internal/state"
+	"github.com/opus-domini/praetor/internal/workspace"
 	"github.com/spf13/cobra"
 )
 
@@ -26,6 +27,7 @@ executors, and reviewers. Use "praetor plan run <plan>" to execute a plan.`,
 	cmd.AddCommand(newPlanListCmd())
 	cmd.AddCommand(newPlanStatusCmd())
 	cmd.AddCommand(newPlanResetCmd())
+	cmd.AddCommand(newPlanResumeCmd())
 	cmd.AddCommand(newPlanMigrateStateCmd())
 	return cmd
 }
@@ -218,6 +220,60 @@ Original files are preserved as a safety net.`,
 	}
 
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Show what would be migrated without acting")
+	return cmd
+}
+
+func newPlanResumeCmd() *cobra.Command {
+	var stateRoot string
+
+	cmd := &cobra.Command{
+		Use:     "resume <plan-file>",
+		Short:   "Restore the latest local snapshot state for a plan",
+		Example: `  praetor plan resume docs/plans/my-plan.json`,
+		Args:    cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cmd.SilenceUsage = true
+			absPlan, err := filepath.Abs(strings.TrimSpace(args[0]))
+			if err != nil {
+				return fmt.Errorf("resolve plan path: %w", err)
+			}
+
+			projectRoot, err := workspace.ResolveProjectRoot(filepath.Dir(absPlan))
+			if err != nil {
+				return err
+			}
+			snapshot, snapshotPath, err := localstate.LoadLatestLocalSnapshot(projectRoot, absPlan)
+			if err != nil {
+				return err
+			}
+			if strings.TrimSpace(snapshotPath) == "" {
+				return fmt.Errorf("no local snapshot found for plan: %s", absPlan)
+			}
+
+			resolvedStateRoot, err := resolveStateRoot(stateRoot, projectRoot)
+			if err != nil {
+				return err
+			}
+			store := localstate.NewStore(resolvedStateRoot, "")
+			if err := store.Init(); err != nil {
+				return err
+			}
+			if err := store.WriteState(absPlan, snapshot.State); err != nil {
+				return fmt.Errorf("persist resumed state: %w", err)
+			}
+
+			if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Resumed from: %s\n", snapshotPath); err != nil {
+				return err
+			}
+			if _, err := fmt.Fprintf(cmd.OutOrStdout(), "State updated: %s\n", store.StateFile(absPlan)); err != nil {
+				return err
+			}
+			_, err = fmt.Fprintf(cmd.OutOrStdout(), "Progress: %d/%d done\n", snapshot.State.DoneCount(), len(snapshot.State.Tasks))
+			return err
+		},
+	}
+
+	cmd.Flags().StringVar(&stateRoot, "state-root", "", "State root directory (default: $XDG_STATE_HOME/praetor/projects/<hash>)")
 	return cmd
 }
 

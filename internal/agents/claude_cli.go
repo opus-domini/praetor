@@ -49,7 +49,7 @@ func (a *ClaudeCLI) Plan(ctx context.Context, req PlanRequest) (PlanResponse, er
 		systemPrompt = "Project context:\n" + c + "\n\n" + systemPrompt
 	}
 	prompt := "Create a dependency-aware execution plan for:\n\n" + objective
-	resp, err := a.run(ctx, req.Workdir, req.Model, systemPrompt, prompt)
+	resp, err := a.run(ctx, req.Workdir, req.Model, systemPrompt, prompt, req.RunDir, req.OutputPrefix, req.TaskLabel)
 	if err != nil {
 		return PlanResponse{}, err
 	}
@@ -61,7 +61,7 @@ func (a *ClaudeCLI) Plan(ctx context.Context, req PlanRequest) (PlanResponse, er
 }
 
 func (a *ClaudeCLI) Execute(ctx context.Context, req ExecuteRequest) (ExecuteResponse, error) {
-	resp, err := a.run(ctx, req.Workdir, req.Model, req.SystemPrompt, req.Prompt)
+	resp, err := a.run(ctx, req.Workdir, req.Model, req.SystemPrompt, req.Prompt, req.RunDir, req.OutputPrefix, req.TaskLabel)
 	if err != nil {
 		return ExecuteResponse{}, err
 	}
@@ -69,11 +69,12 @@ func (a *ClaudeCLI) Execute(ctx context.Context, req ExecuteRequest) (ExecuteRes
 		Output:    resp.Output,
 		CostUSD:   resp.CostUSD,
 		DurationS: resp.DurationS,
+		Strategy:  resp.Strategy,
 	}, nil
 }
 
 func (a *ClaudeCLI) Review(ctx context.Context, req ReviewRequest) (ReviewResponse, error) {
-	resp, err := a.run(ctx, req.Workdir, req.Model, req.SystemPrompt, req.Prompt)
+	resp, err := a.run(ctx, req.Workdir, req.Model, req.SystemPrompt, req.Prompt, req.RunDir, req.OutputPrefix, req.TaskLabel)
 	if err != nil {
 		return ReviewResponse{}, err
 	}
@@ -84,10 +85,11 @@ func (a *ClaudeCLI) Review(ctx context.Context, req ReviewRequest) (ReviewRespon
 		Output:    resp.Output,
 		CostUSD:   resp.CostUSD,
 		DurationS: resp.DurationS,
+		Strategy:  resp.Strategy,
 	}, nil
 }
 
-func (a *ClaudeCLI) run(ctx context.Context, workdir, model, systemPrompt, prompt string) (PlanResponse, error) {
+func (a *ClaudeCLI) run(ctx context.Context, workdir, model, systemPrompt, prompt, runDir, outputPrefix, taskLabel string) (PlanResponse, error) {
 	start := time.Now()
 	args := []string{a.Binary, "-p",
 		"--dangerously-skip-permissions",
@@ -103,10 +105,13 @@ func (a *ClaudeCLI) run(ctx context.Context, workdir, model, systemPrompt, promp
 	}
 
 	result, err := a.Runner.Run(ctx, CommandSpec{
-		Args:   args,
-		Dir:    strings.TrimSpace(workdir),
-		Stdin:  strings.TrimSpace(prompt),
-		UsePTY: true,
+		Args:         args,
+		Dir:          strings.TrimSpace(workdir),
+		Stdin:        strings.TrimSpace(prompt),
+		UsePTY:       true,
+		RunDir:       strings.TrimSpace(runDir),
+		OutputPrefix: strings.TrimSpace(outputPrefix),
+		WindowHint:   strings.TrimSpace(taskLabel),
 	})
 	if err != nil {
 		return PlanResponse{DurationS: time.Since(start).Seconds()}, err
@@ -119,6 +124,7 @@ func (a *ClaudeCLI) run(ctx context.Context, workdir, model, systemPrompt, promp
 		Output:    output,
 		CostUSD:   cost,
 		DurationS: time.Since(start).Seconds(),
+		Strategy:  result.Strategy,
 	}, nil
 }
 

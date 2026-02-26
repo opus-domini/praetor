@@ -12,11 +12,14 @@ import (
 
 // CommandSpec describes one command invocation.
 type CommandSpec struct {
-	Args   []string
-	Env    []string
-	Dir    string
-	Stdin  string
-	UsePTY bool
+	Args         []string
+	Env          []string
+	Dir          string
+	Stdin        string
+	UsePTY       bool
+	RunDir       string
+	OutputPrefix string
+	WindowHint   string
 }
 
 // CommandResult holds raw process output.
@@ -24,6 +27,7 @@ type CommandResult struct {
 	Stdout   string
 	Stderr   string
 	ExitCode int
+	Strategy string
 }
 
 // CommandRunner executes command specs.
@@ -65,7 +69,28 @@ func (r *execCommandRunner) Run(ctx context.Context, spec CommandSpec) (CommandR
 	if usePTY {
 		return runWithPTY(ctx, spec)
 	}
+	result, err := runWithoutPTY(ctx, spec)
+	if ctx.Err() != nil {
+		return CommandResult{}, ctx.Err()
+	}
+	if err == nil && result.ExitCode == 0 {
+		return result, nil
+	}
+	if r.options.DisablePTY {
+		return result, err
+	}
+	if shouldFallbackToPTY(result, err) {
+		fallbackSpec := spec
+		fallbackSpec.UsePTY = true
+		ptyResult, ptyErr := runWithPTY(ctx, fallbackSpec)
+		if ptyErr == nil || ptyResult.ExitCode == 0 {
+			return ptyResult, ptyErr
+		}
+	}
+	return result, err
+}
 
+func runWithoutPTY(ctx context.Context, spec CommandSpec) (CommandResult, error) {
 	cmd := exec.CommandContext(ctx, spec.Args[0], spec.Args[1:]...)
 	if strings.TrimSpace(spec.Dir) != "" {
 		cmd.Dir = spec.Dir
@@ -99,7 +124,37 @@ func (r *execCommandRunner) Run(ctx context.Context, spec CommandSpec) (CommandR
 		Stdout:   strings.TrimSpace(stdoutBuilder.String()),
 		Stderr:   strings.TrimSpace(stderrBuilder.String()),
 		ExitCode: exitCode,
+		Strategy: "process",
 	}, err
+}
+
+func shouldFallbackToPTY(result CommandResult, err error) bool {
+	combined := strings.ToLower(strings.TrimSpace(strings.Join([]string{
+		strings.TrimSpace(result.Stderr),
+		strings.TrimSpace(result.Stdout),
+	}, "\n")))
+	if err != nil {
+		if combined == "" {
+			combined = strings.ToLower(strings.TrimSpace(err.Error()))
+		} else {
+			combined = combined + "\n" + strings.ToLower(strings.TrimSpace(err.Error()))
+		}
+	}
+	if combined == "" {
+		return false
+	}
+	patterns := []string{
+		"not a tty",
+		"requires a tty",
+		"stdin is not a tty",
+		"terminal is required",
+	}
+	for _, pattern := range patterns {
+		if strings.Contains(combined, pattern) {
+			return true
+		}
+	}
+	return false
 }
 
 func runWithPTY(ctx context.Context, spec CommandSpec) (CommandResult, error) {
@@ -147,5 +202,6 @@ func runWithPTY(ctx context.Context, spec CommandSpec) (CommandResult, error) {
 		Stdout:   strings.TrimSpace(stdoutBuilder.String()),
 		Stderr:   strings.TrimSpace(stderrBuilder.String()),
 		ExitCode: exitCode,
+		Strategy: "pty",
 	}, waitErr
 }

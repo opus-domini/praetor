@@ -15,22 +15,24 @@ import (
 // Config holds resolved configuration values.
 // Pointer fields distinguish "not set" from "set to zero/false".
 type Config struct {
-	Executor      string
-	Reviewer      string
-	Planner       string
-	MaxRetries    *int
-	MaxIterations *int
-	Runner        string
-	Isolation     string
-	NoReview      *bool
-	NoColor       *bool
-	CodexBin      string
-	ClaudeBin     string
-	GeminiBin     string
-	OllamaURL     string
-	OllamaModel   string
-	Hook          string
-	Timeout       string
+	Executor       string
+	Reviewer       string
+	Planner        string
+	MaxRetries     *int
+	MaxIterations  *int
+	MaxTransitions *int
+	KeepLastRuns   *int
+	Runner         string
+	Isolation      string
+	NoReview       *bool
+	NoColor        *bool
+	CodexBin       string
+	ClaudeBin      string
+	GeminiBin      string
+	OllamaURL      string
+	OllamaModel    string
+	Hook           string
+	Timeout        string
 }
 
 // Path returns the config file path, respecting $PRAETOR_CONFIG.
@@ -138,6 +140,26 @@ func configFromMap(section string, m map[string]string) (Config, error) {
 		}
 		cfg.MaxIterations = &value
 	}
+	if v, ok := m["max-transitions"]; ok {
+		value, err := strconv.Atoi(strings.TrimSpace(v))
+		if err != nil {
+			return Config{}, fmt.Errorf("section %q key %q: invalid integer %q", section, "max-transitions", v)
+		}
+		if value < 0 {
+			return Config{}, fmt.Errorf("section %q key %q: cannot be negative", section, "max-transitions")
+		}
+		cfg.MaxTransitions = &value
+	}
+	if v, ok := m["keep-last-runs"]; ok {
+		value, err := strconv.Atoi(strings.TrimSpace(v))
+		if err != nil {
+			return Config{}, fmt.Errorf("section %q key %q: invalid integer %q", section, "keep-last-runs", v)
+		}
+		if value < 0 {
+			return Config{}, fmt.Errorf("section %q key %q: cannot be negative", section, "keep-last-runs")
+		}
+		cfg.KeepLastRuns = &value
+	}
 	if v, ok := m["runner"]; ok {
 		cfg.Runner = strings.TrimSpace(v)
 	}
@@ -208,6 +230,12 @@ func mergeConfig(global, project Config) Config {
 	}
 	if project.MaxIterations != nil {
 		merged.MaxIterations = project.MaxIterations
+	}
+	if project.MaxTransitions != nil {
+		merged.MaxTransitions = project.MaxTransitions
+	}
+	if project.KeepLastRuns != nil {
+		merged.KeepLastRuns = project.KeepLastRuns
 	}
 	if project.Runner != "" {
 		merged.Runner = project.Runner

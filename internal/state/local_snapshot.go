@@ -9,16 +9,19 @@ import (
 
 // LocalSnapshot captures transactional runtime state for one run.
 type LocalSnapshot struct {
-	Version      int          `json:"version"`
-	RunID        string       `json:"run_id"`
-	PlanFile     string       `json:"plan_file"`
-	PlanChecksum string       `json:"plan_checksum"`
-	ProjectRoot  string       `json:"project_root"`
-	Phase        string       `json:"phase"`
-	Message      string       `json:"message"`
-	Iteration    int          `json:"iteration"`
-	Timestamp    string       `json:"timestamp"`
-	State        domain.State `json:"state"`
+	Version           int          `json:"version"`
+	RunID             string       `json:"run_id"`
+	PlanFile          string       `json:"plan_file"`
+	PlanChecksum      string       `json:"plan_checksum"`
+	ProjectRoot       string       `json:"project_root"`
+	ManifestPath      string       `json:"manifest_path,omitempty"`
+	ManifestHash      string       `json:"manifest_hash,omitempty"`
+	ManifestTruncated bool         `json:"manifest_truncated,omitempty"`
+	Phase             string       `json:"phase"`
+	Message           string       `json:"message"`
+	Iteration         int          `json:"iteration"`
+	Timestamp         string       `json:"timestamp"`
+	State             domain.State `json:"state"`
 }
 
 // LocalSnapshotStore manages local project snapshots under .praetor/runtime/<run-id>.
@@ -60,16 +63,19 @@ func (s *LocalSnapshotStore) Save(snapshot LocalSnapshot) error {
 		return fmt.Errorf("encode snapshot state: %w", err)
 	}
 	return s.inner.Save(Snapshot{
-		Version:      snapshot.Version,
-		RunID:        snapshot.RunID,
-		PlanFile:     snapshot.PlanFile,
-		PlanChecksum: snapshot.PlanChecksum,
-		ProjectRoot:  snapshot.ProjectRoot,
-		Phase:        snapshot.Phase,
-		Message:      snapshot.Message,
-		Iteration:    snapshot.Iteration,
-		Timestamp:    snapshot.Timestamp,
-		State:        statePayload,
+		Version:           snapshot.Version,
+		RunID:             snapshot.RunID,
+		PlanFile:          snapshot.PlanFile,
+		PlanChecksum:      snapshot.PlanChecksum,
+		ProjectRoot:       snapshot.ProjectRoot,
+		ManifestPath:      snapshot.ManifestPath,
+		ManifestHash:      snapshot.ManifestHash,
+		ManifestTruncated: snapshot.ManifestTruncated,
+		Phase:             snapshot.Phase,
+		Message:           snapshot.Message,
+		Iteration:         snapshot.Iteration,
+		Timestamp:         snapshot.Timestamp,
+		State:             statePayload,
 	})
 }
 
@@ -95,15 +101,18 @@ func LoadLatestLocalSnapshot(projectRoot, planFile string) (LocalSnapshot, strin
 		}
 	}
 	return LocalSnapshot{
-		Version:      snapshot.Version,
-		RunID:        snapshot.RunID,
-		PlanFile:     snapshot.PlanFile,
-		PlanChecksum: snapshot.PlanChecksum,
-		ProjectRoot:  snapshot.ProjectRoot,
-		Phase:        snapshot.Phase,
-		Message:      snapshot.Message,
-		Iteration:    snapshot.Iteration,
-		Timestamp:    snapshot.Timestamp,
-		State:        state,
+		Version:           snapshot.Version,
+		RunID:             snapshot.RunID,
+		PlanFile:          snapshot.PlanFile,
+		PlanChecksum:      snapshot.PlanChecksum,
+		ProjectRoot:       snapshot.ProjectRoot,
+		ManifestPath:      snapshot.ManifestPath,
+		ManifestHash:      snapshot.ManifestHash,
+		ManifestTruncated: snapshot.ManifestTruncated,
+		Phase:             snapshot.Phase,
+		Message:           snapshot.Message,
+		Iteration:         snapshot.Iteration,
+		Timestamp:         snapshot.Timestamp,
+		State:             state,
 	}, path, nil
 }

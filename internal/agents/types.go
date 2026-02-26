@@ -41,6 +41,9 @@ type PlanRequest struct {
 	WorkspaceContext string
 	Workdir          string
 	Model            string
+	RunDir           string
+	OutputPrefix     string
+	TaskLabel        string
 }
 
 // PlanResponse is the standardized planning result.
@@ -49,6 +52,7 @@ type PlanResponse struct {
 	Output    string
 	CostUSD   float64
 	DurationS float64
+	Strategy  string
 }
 
 // ExecuteRequest is the atomic execution request contract.
@@ -57,6 +61,9 @@ type ExecuteRequest struct {
 	SystemPrompt string
 	Workdir      string
 	Model        string
+	RunDir       string
+	OutputPrefix string
+	TaskLabel    string
 }
 
 // ExecuteResponse is the standardized execution result.
@@ -64,6 +71,7 @@ type ExecuteResponse struct {
 	Output    string
 	CostUSD   float64
 	DurationS float64
+	Strategy  string
 }
 
 // ReviewRequest is the isolated review request contract.
@@ -72,6 +80,9 @@ type ReviewRequest struct {
 	SystemPrompt string
 	Workdir      string
 	Model        string
+	RunDir       string
+	OutputPrefix string
+	TaskLabel    string
 }
 
 // ReviewDecision classifies review output.
@@ -90,6 +101,7 @@ type ReviewResponse struct {
 	Output    string
 	CostUSD   float64
 	DurationS float64
+	Strategy  string
 }
 
 // Agent is the central polymorphic contract across CLI and REST providers.

@@ -84,6 +84,7 @@ func TestMissingArgsShowsUsageAndError(t *testing.T) {
 		{"plan create", []string{"plan", "create"}, "create <slug>", "Error:"},
 		{"plan status", []string{"plan", "status"}, "status <plan-file>", "Error:"},
 		{"plan reset", []string{"plan", "reset"}, "reset <plan-file>", "Error:"},
+		{"plan resume", []string{"plan", "resume"}, "resume <plan-file>", "Error:"},
 		{"plan run", []string{"plan", "run"}, "run <plan-file>", "Error:"},
 	}
 	for _, tt := range tests {

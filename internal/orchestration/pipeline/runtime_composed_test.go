@@ -1,41 +1,58 @@
 package pipeline
 
 import (
-	"context"
 	"strings"
 	"testing"
 
 	"github.com/opus-domini/praetor/internal/domain"
-	processruntime "github.com/opus-domini/praetor/internal/runtime/process"
 )
 
-func TestComposedRuntimeUnsupportedAgent(t *testing.T) {
+func TestBuildAgentRuntimeReturnsUnifiedRuntime(t *testing.T) {
 	t.Parallel()
 
-	rt := newComposedRuntime(defaultAgents(), &processruntime.Runner{})
-	_, err := rt.Run(context.Background(), domain.AgentRequest{
-		Agent:  domain.Agent("unknown-agent"),
-		Prompt: "test",
+	runtime, err := BuildAgentRuntime(domain.RunnerOptions{
+		RunnerMode:  domain.RunnerDirect,
+		CodexBin:    "codex",
+		ClaudeBin:   "claude",
+		GeminiBin:   "gemini",
+		OllamaURL:   "http://127.0.0.1:11434",
+		OllamaModel: "llama3",
 	})
-	if err == nil {
-		t.Fatal("expected unsupported agent error")
+	if err != nil {
+		t.Fatalf("build runtime: %v", err)
 	}
-	if !strings.Contains(err.Error(), "unsupported agent") {
-		t.Fatalf("unexpected error: %v", err)
+	if runtime == nil {
+		t.Fatal("expected non-nil runtime")
 	}
 }
 
-func TestComposedRuntimeSessionManagerDelegation(t *testing.T) {
+func TestBuildAgentRuntimeTMUXSessionName(t *testing.T) {
 	t.Parallel()
 
-	// processruntime.Runner does not implement SessionManager.
-	rt := newComposedRuntime(defaultAgents(), &processruntime.Runner{})
-	if err := rt.EnsureSession(); err != nil {
-		t.Fatalf("expected no error from non-session runner: %v", err)
+	runtime, err := BuildAgentRuntime(domain.RunnerOptions{
+		RunnerMode:  domain.RunnerTMUX,
+		TMUXSession: "praetor-test",
+	})
+	if err != nil {
+		t.Fatalf("build runtime: %v", err)
 	}
-	if name := rt.SessionName(); name != "" {
-		t.Fatalf("expected empty session name from non-session runner, got %q", name)
+	sm, ok := runtime.(domain.SessionManager)
+	if !ok {
+		t.Fatal("expected runtime to implement SessionManager")
 	}
-	// Cleanup should be a no-op.
-	rt.Cleanup()
+	if got := sm.SessionName(); got != "praetor-test" {
+		t.Fatalf("unexpected tmux session name: %q", got)
+	}
+}
+
+func TestBuildAgentRuntimeRejectsUnsupportedMode(t *testing.T) {
+	t.Parallel()
+
+	_, err := BuildAgentRuntime(domain.RunnerOptions{RunnerMode: domain.RunnerMode("invalid")})
+	if err == nil {
+		t.Fatal("expected unsupported runner mode error")
+	}
+	if !strings.Contains(err.Error(), "unsupported runner mode") {
+		t.Fatalf("unexpected error: %v", err)
+	}
 }

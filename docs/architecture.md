@@ -83,6 +83,34 @@ Key contents:
    - transactional local snapshot (`.praetor/runtime/<run-id>/snapshot.json` + journal)
 8. Runner exits on completion, cancellation, blockage, or iteration cap.
 
+```mermaid
+---
+config:
+  theme: dark
+---
+flowchart TD
+    A[CLI: plan run] --> B[Resolve project root + manifest]
+    B --> C[Init state + lock]
+    C --> D{Snapshot recoverable?}
+    D -- yes --> E[Restore latest valid snapshot]
+    D -- no --> F[Use current state]
+    E --> G{Objective provided?}
+    F --> G
+    G -- yes --> H[Plan phase]
+    G -- no --> I[Loop FSM]
+    H --> I
+    I --> J[Select task]
+    J --> K[Execute]
+    K --> L{Review enabled?}
+    L -- yes --> M[Review]
+    L -- no --> N[Apply outcome]
+    M --> N
+    N --> O[Persist checkpoint + snapshot]
+    O --> P{Done/blocked/canceled?}
+    P -- no --> I
+    P -- yes --> Q[Finalize + release lock]
+```
+
 ## Orchestration
 
 ### FSM (`internal/orchestration/fsm`)
@@ -99,14 +127,15 @@ Contains the full Plan/Execute/Review orchestration engine:
 - **Runner:** Dependency-aware plan executor with retries, review gates, and isolation.
 - **Cognitive agents:** Polymorphic `CognitiveAgent` interface for Plan/Execute/Review.
 - **Prompts:** System and task prompt builders for executor, reviewer, and planner.
-- **Runtime composition:** `composedRuntime` (tmux) and `BuildAgentRuntime` factory.
+- **Runtime composition:** unified `BuildAgentRuntime` factory based on `agents.RegistryRuntime` for `tmux`, `pty`, and `direct`.
 
 ## Runtime model
 
-`pipeline.Runner` chooses runtime by mode:
+`pipeline.Runner` chooses mode-specific process execution strategy through one runtime contract:
 
-- `tmux`: classic composed runtime (`codex`/`claude`) with visible tmux windows.
-- `direct` / `pty`: central `agents.Agent` registry runtime (supports CLI + REST backends).
+- `tmux`: same `agents.Agent` contract backed by tmux session/process adapter.
+- `direct`: same contract with non-PTY subprocess execution.
+- `pty`: same contract with PTY-first subprocess execution.
 
 The cognitive strategy is **Plan-and-Execute** with explicit **Review gate**:
 
@@ -148,6 +177,8 @@ Snapshot files:
 - `meta.json`
 
 Writes are atomic (`tmp + rename`) and synced (`fsync`) on critical paths.
+`meta.json` stores snapshot checksum (`snapshot_sha256`) for integrity checks on recovery.
+Local run retention is enforced with `keep-last-runs` pruning and explicit resume is available via `praetor plan resume`.
 
 ## Design principles
 

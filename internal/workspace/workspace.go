@@ -1,6 +1,8 @@
 package workspace
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -13,9 +15,11 @@ const MaxManifestSize = 16 * 1024 // 16 KiB
 
 // Manifest holds one resolved workspace-level context file.
 type Manifest struct {
-	Path      string
-	Context   string
-	Truncated bool
+	Path       string
+	RawContext string
+	Context    string
+	Truncated  bool
+	Hash       string
 }
 
 // ResolveProjectRoot resolves the git repository root for a directory.
@@ -111,14 +115,131 @@ func readManifestFile(path string) (Manifest, error) {
 		context = context[:MaxManifestSize]
 		truncated = true
 	}
+	rawContext := context
 	if strings.HasSuffix(strings.ToLower(path), ".yaml") || strings.HasSuffix(strings.ToLower(path), ".yml") {
-		context = "```yaml\n" + context + "\n```"
+		if normalized := normalizeWorkspaceYAML(context); normalized != "" {
+			context = normalized
+		} else {
+			context = "```yaml\n" + context + "\n```"
+		}
 	}
 	return Manifest{
-		Path:      path,
-		Context:   context,
-		Truncated: truncated,
+		Path:       path,
+		RawContext: rawContext,
+		Context:    context,
+		Truncated:  truncated,
+		Hash:       sha256Hex(data),
 	}, nil
+}
+
+func sha256Hex(data []byte) string {
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
+}
+
+type parsedWorkspaceManifest struct {
+	Version      string
+	Instructions []string
+	Constraints  []string
+	TestCommands []string
+}
+
+func normalizeWorkspaceYAML(input string) string {
+	parsed, ok := parseWorkspaceYAML(input)
+	if !ok {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("## Workspace Manifest")
+	if strings.TrimSpace(parsed.Version) != "" {
+		b.WriteString("\n")
+		b.WriteString("Version: ")
+		b.WriteString(strings.TrimSpace(parsed.Version))
+	}
+	if len(parsed.Instructions) > 0 {
+		b.WriteString("\n\nInstructions:")
+		for _, v := range parsed.Instructions {
+			b.WriteString("\n- ")
+			b.WriteString(v)
+		}
+	}
+	if len(parsed.Constraints) > 0 {
+		b.WriteString("\n\nConstraints:")
+		for _, v := range parsed.Constraints {
+			b.WriteString("\n- ")
+			b.WriteString(v)
+		}
+	}
+	if len(parsed.TestCommands) > 0 {
+		b.WriteString("\n\nTest Commands:")
+		for _, v := range parsed.TestCommands {
+			b.WriteString("\n- ")
+			b.WriteString(v)
+		}
+	}
+	return strings.TrimSpace(b.String())
+}
+
+func parseWorkspaceYAML(input string) (parsedWorkspaceManifest, bool) {
+	lines := strings.Split(strings.TrimSpace(input), "\n")
+	if len(lines) == 0 {
+		return parsedWorkspaceManifest{}, false
+	}
+	out := parsedWorkspaceManifest{}
+	currentList := ""
+	recognized := false
+
+	appendItem := func(value string) {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			return
+		}
+		switch currentList {
+		case "instructions":
+			out.Instructions = append(out.Instructions, value)
+		case "constraints":
+			out.Constraints = append(out.Constraints, value)
+		case "test_commands":
+			out.TestCommands = append(out.TestCommands, value)
+		}
+	}
+
+	for _, raw := range lines {
+		line := strings.TrimSpace(raw)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if strings.HasPrefix(line, "- ") {
+			appendItem(strings.TrimSpace(strings.TrimPrefix(line, "- ")))
+			continue
+		}
+		key, value, found := strings.Cut(line, ":")
+		if !found {
+			// Not a subset we can normalize.
+			return parsedWorkspaceManifest{}, false
+		}
+		key = strings.TrimSpace(strings.ToLower(key))
+		value = strings.TrimSpace(value)
+		switch key {
+		case "version":
+			recognized = true
+			currentList = ""
+			out.Version = strings.Trim(value, "\"'")
+		case "instructions", "constraints", "test_commands":
+			recognized = true
+			currentList = key
+			if value != "" {
+				appendItem(strings.Trim(value, "\"'"))
+			}
+		default:
+			// Unknown key: fallback to raw fenced YAML.
+			return parsedWorkspaceManifest{}, false
+		}
+	}
+	if !recognized {
+		return parsedWorkspaceManifest{}, false
+	}
+	return out, true
 }
 
 func ExpandPath(path string) (string, error) {

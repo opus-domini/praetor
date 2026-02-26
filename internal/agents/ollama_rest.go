@@ -71,7 +71,7 @@ func (a *OllamaREST) Execute(ctx context.Context, req ExecuteRequest) (ExecuteRe
 	if err != nil {
 		return ExecuteResponse{}, err
 	}
-	return ExecuteResponse{Output: resp.Output, DurationS: resp.DurationS}, nil
+	return ExecuteResponse{Output: resp.Output, DurationS: resp.DurationS, Strategy: resp.Strategy}, nil
 }
 
 func (a *OllamaREST) Review(ctx context.Context, req ReviewRequest) (ReviewResponse, error) {
@@ -80,7 +80,7 @@ func (a *OllamaREST) Review(ctx context.Context, req ReviewRequest) (ReviewRespo
 		return ReviewResponse{}, err
 	}
 	decision, reason := parseReview(resp.Output)
-	return ReviewResponse{Decision: decision, Reason: reason, Output: resp.Output, DurationS: resp.DurationS}, nil
+	return ReviewResponse{Decision: decision, Reason: reason, Output: resp.Output, DurationS: resp.DurationS, Strategy: resp.Strategy}, nil
 }
 
 func (a *OllamaREST) generate(ctx context.Context, model, prompt string) (PlanResponse, error) {
@@ -131,5 +131,6 @@ func (a *OllamaREST) generate(ctx context.Context, model, prompt string) (PlanRe
 	return PlanResponse{
 		Output:    strings.TrimSpace(decoded.Response),
 		DurationS: time.Since(start).Seconds(),
+		Strategy:  "structured",
 	}, nil
 }
