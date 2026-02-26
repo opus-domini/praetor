@@ -274,13 +274,13 @@ func TestIsPlanRunningIgnoresForeignHostLock(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	meta := lockMeta{
-		Version:   lockSchemaVersion,
-		PID:       os.Getpid(),
-		Hostname:  "remote-host",
-		StartedAt: time.Now().UTC().Format(time.RFC3339),
-		Token:     "token",
-		Runtime:   store.RuntimeKey(planPath),
+	meta := map[string]any{
+		"version":     2,
+		"pid":         os.Getpid(),
+		"hostname":    "remote-host",
+		"started_at":  time.Now().UTC().Format(time.RFC3339),
+		"token":       "token",
+		"runtime_key": store.RuntimeKey(planPath),
 	}
 	data, err := json.Marshal(meta)
 	if err != nil {
@@ -312,13 +312,13 @@ func TestAcquireRunLockIgnoresForeignRuntimeLock(t *testing.T) {
 	}
 
 	hostname, _ := os.Hostname()
-	meta := lockMeta{
-		Version:   lockSchemaVersion,
-		PID:       os.Getpid(),
-		Hostname:  hostname,
-		StartedAt: time.Now().UTC().Format(time.RFC3339),
-		Token:     "token",
-		Runtime:   "different-runtime",
+	meta := map[string]any{
+		"version":     2,
+		"pid":         os.Getpid(),
+		"hostname":    hostname,
+		"started_at":  time.Now().UTC().Format(time.RFC3339),
+		"token":       "token",
+		"runtime_key": "different-runtime",
 	}
 	data, err := json.Marshal(meta)
 	if err != nil {

@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/opus-domini/praetor/internal/paths"
+	"github.com/opus-domini/praetor/internal/state"
 )
 
 // Config holds resolved configuration values.
@@ -39,13 +39,13 @@ func Path() string {
 	if env := strings.TrimSpace(os.Getenv("PRAETOR_CONFIG")); env != "" {
 		return env
 	}
-	xdgPath, err := paths.DefaultConfigFile()
+	xdgPath, err := state.DefaultConfigFile()
 	if err != nil {
 		return ""
 	}
 	// Read-fallback: if XDG config doesn't exist, check legacy location.
 	if _, statErr := os.Stat(xdgPath); statErr != nil {
-		if legacy := paths.LegacyConfigFile(); legacy != "" {
+		if legacy := state.LegacyConfigFile(); legacy != "" {
 			return legacy
 		}
 	}

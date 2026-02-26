@@ -1,4 +1,4 @@
-package paths
+package state
 
 import (
 	"os"
@@ -165,9 +165,6 @@ func TestDefaultProjectCacheRoot(t *testing.T) {
 
 func TestLegacyRootReturnsEmptyWhenAbsent(t *testing.T) {
 	t.Parallel()
-	// LegacyRoot checks ~/.praetor existence. Since this is a test env,
-	// we can't easily control it. Instead we test the function returns
-	// a string (possibly empty) without panicking.
 	result := LegacyRoot()
 	_ = result // no panic is the assertion
 }

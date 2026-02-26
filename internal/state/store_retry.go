@@ -1,4 +1,4 @@
-package loop
+package state
 
 import (
 	"crypto/sha256"
@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/opus-domini/praetor/internal/domain"
 )
 
 // TaskSignature returns a stable signature used by retries and feedback files.
@@ -17,7 +19,7 @@ func TaskSignature(taskKey string) string {
 	return hex.EncodeToString(hash[:])
 }
 
-func taskSignatureKey(index int, task StateTask) string {
+func taskSignatureKey(index int, task domain.StateTask) string {
 	if strings.TrimSpace(task.ID) != "" {
 		return "id:" + strings.TrimSpace(task.ID)
 	}
@@ -25,12 +27,12 @@ func taskSignatureKey(index int, task StateTask) string {
 }
 
 // TaskKey builds the signature key for a task.
-func TaskKey(index int, task StateTask) string {
+func TaskKey(index int, task domain.StateTask) string {
 	return taskSignatureKey(index, task)
 }
 
 // TaskSignatureForPlan returns the stable, plan-scoped signature for retries/feedback.
-func (s *Store) TaskSignatureForPlan(planFile string, index int, task StateTask) string {
+func (s *Store) TaskSignatureForPlan(planFile string, index int, task domain.StateTask) string {
 	scope := s.RuntimeKey(planFile) + "|" + taskSignatureKey(index, task)
 	return TaskSignature(scope)
 }

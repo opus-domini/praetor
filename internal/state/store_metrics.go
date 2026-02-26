@@ -1,14 +1,16 @@
-package loop
+package state
 
 import (
 	"fmt"
 	"os"
 	"path/filepath"
 	"syscall"
+
+	"github.com/opus-domini/praetor/internal/domain"
 )
 
 // WriteTaskMetrics appends one cost entry to the tracking ledger.
-func (s *Store) WriteTaskMetrics(entry CostEntry) error {
+func (s *Store) WriteTaskMetrics(entry domain.CostEntry) error {
 	path := filepath.Join(s.CostsDir(), "tracking.tsv")
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
@@ -40,7 +42,7 @@ func (s *Store) WriteTaskMetrics(entry CostEntry) error {
 }
 
 // WriteCheckpoint appends to the history log and overwrites the current checkpoint.
-func (s *Store) WriteCheckpoint(planFile string, entry CheckpointEntry) error {
+func (s *Store) WriteCheckpoint(planFile string, entry domain.CheckpointEntry) error {
 	historyPath := filepath.Join(s.CheckpointsDir(), "history.tsv")
 	f, err := os.OpenFile(historyPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {

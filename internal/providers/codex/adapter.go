@@ -5,10 +5,10 @@ import (
 	"errors"
 	"strings"
 
-	"github.com/opus-domini/praetor/internal/orchestrator"
+	"github.com/opus-domini/praetor/internal/providers"
 )
 
-// Provider adapts the Codex SDK to the orchestrator interface.
+// Provider adapts the Codex SDK to the providers interface.
 type Provider struct {
 	client *Codex
 }
@@ -23,24 +23,24 @@ func NewProvider(options CodexOptions) (*Provider, error) {
 }
 
 // ID returns the provider identifier.
-func (p *Provider) ID() orchestrator.ProviderID {
-	return orchestrator.ProviderCodex
+func (p *Provider) ID() providers.ID {
+	return providers.Codex
 }
 
 // Run executes a single turn through Codex.
-func (p *Provider) Run(ctx context.Context, req orchestrator.Request) (orchestrator.Result, error) {
+func (p *Provider) Run(ctx context.Context, req providers.Request) (providers.Result, error) {
 	prompt := strings.TrimSpace(req.Prompt)
 	if prompt == "" {
-		return orchestrator.Result{}, errors.New("prompt is required")
+		return providers.Result{}, errors.New("prompt is required")
 	}
 
 	thread := p.client.StartThread(nil)
 	turn, err := thread.Run(ctx, prompt, nil)
 	if err != nil {
-		return orchestrator.Result{}, err
+		return providers.Result{}, err
 	}
 
-	return orchestrator.Result{
+	return providers.Result{
 		Provider: p.ID(),
 		Response: strings.TrimSpace(turn.FinalResponse),
 	}, nil

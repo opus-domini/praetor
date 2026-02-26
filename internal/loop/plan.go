@@ -1,210 +1,37 @@
 package loop
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
-	"encoding/json"
-	"errors"
-	"fmt"
-	"os"
-	"path/filepath"
-	"regexp"
-	"sort"
-	"strings"
 	"time"
+
+	"github.com/opus-domini/praetor/internal/domain"
 )
 
-var slugPattern = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?$`)
-
-// LoadPlan reads and validates a plan file.
+// LoadPlan delegates to domain.LoadPlan.
 func LoadPlan(path string) (Plan, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return Plan{}, fmt.Errorf("read plan file: %w", err)
-	}
-
-	var plan Plan
-	if err := json.Unmarshal(data, &plan); err != nil {
-		return Plan{}, fmt.Errorf("decode plan file: %w", err)
-	}
-
-	if err := ValidatePlan(plan); err != nil {
-		return Plan{}, err
-	}
-	return plan, nil
+	return domain.LoadPlan(path)
 }
 
-// ValidatePlan validates logical constraints for a plan.
+// ValidatePlan delegates to domain.ValidatePlan.
 func ValidatePlan(plan Plan) error {
-	if len(plan.Tasks) == 0 {
-		return errors.New("plan validation failed:\n- tasks array cannot be empty")
-	}
-
-	errorsList := make([]string, 0)
-	canonicalIDs := make(map[string]int, len(plan.Tasks))
-
-	for idx, task := range plan.Tasks {
-		title := strings.TrimSpace(task.Title)
-		if title == "" {
-			errorsList = append(errorsList, fmt.Sprintf("tasks[%d]: title is required", idx))
-		}
-
-		id := canonicalTaskID(task, idx)
-		if prev, exists := canonicalIDs[id]; exists {
-			errorsList = append(errorsList, fmt.Sprintf("tasks[%d]: duplicated id %q already used by tasks[%d]", idx, id, prev))
-		} else {
-			canonicalIDs[id] = idx
-		}
-
-		if task.Executor != "" {
-			if _, ok := validExecutors[normalizeAgent(task.Executor)]; !ok {
-				errorsList = append(errorsList, fmt.Sprintf("tasks[%d]: invalid executor %q (allowed: codex, claude, gemini, ollama)", idx, task.Executor))
-			}
-		}
-
-		if task.Reviewer != "" {
-			if _, ok := validReviewers[normalizeAgent(task.Reviewer)]; !ok {
-				errorsList = append(errorsList, fmt.Sprintf("tasks[%d]: invalid reviewer %q (allowed: codex, claude, gemini, ollama, none)", idx, task.Reviewer))
-			}
-		}
-
-		if task.Model != "" && strings.TrimSpace(task.Model) == "" {
-			errorsList = append(errorsList, fmt.Sprintf("tasks[%d]: model cannot be blank", idx))
-		}
-	}
-
-	knownIDs := make(map[string]struct{}, len(plan.Tasks))
-	for idx, task := range plan.Tasks {
-		id := canonicalTaskID(task, idx)
-		knownIDs[id] = struct{}{}
-	}
-
-	for idx, task := range plan.Tasks {
-		for _, dep := range task.DependsOn {
-			dep = strings.TrimSpace(dep)
-			if dep == "" {
-				errorsList = append(errorsList, fmt.Sprintf("tasks[%d]: depends_on contains an empty id", idx))
-				continue
-			}
-			if _, ok := knownIDs[dep]; !ok {
-				errorsList = append(errorsList, fmt.Sprintf("tasks[%d]: depends_on references unknown task id %q", idx, dep))
-			}
-		}
-	}
-
-	if len(errorsList) == 0 {
-		return nil
-	}
-
-	sort.Strings(errorsList)
-	return errors.New("plan validation failed:\n- " + strings.Join(errorsList, "\n- "))
+	return domain.ValidatePlan(plan)
 }
 
-func canonicalTaskID(task Task, index int) string {
-	id := strings.TrimSpace(task.ID)
-	if id != "" {
-		return id
-	}
-	return autoTaskID(task)
-}
-
-func autoTaskID(task Task) string {
-	payload := autoTaskFingerprint(
-		task.Title,
-		task.Executor,
-		task.Reviewer,
-		task.Model,
-		task.Description,
-		task.Criteria,
-		task.DependsOn,
-	)
-	hash := sha256.Sum256([]byte(payload))
-	return "auto-" + hex.EncodeToString(hash[:])[:12]
-}
-
-func autoTaskFingerprint(title string, executor Agent, reviewer Agent, model, description, criteria string, dependsOn []string) string {
-	normalizedDeps := make([]string, 0, len(dependsOn))
-	for _, dep := range dependsOn {
-		dep = strings.TrimSpace(dep)
-		if dep == "" {
-			continue
-		}
-		normalizedDeps = append(normalizedDeps, dep)
-	}
-	sort.Strings(normalizedDeps)
-
-	parts := []string{
-		strings.TrimSpace(title),
-		string(normalizeAgent(executor)),
-		string(normalizeAgent(reviewer)),
-		strings.TrimSpace(model),
-		strings.TrimSpace(description),
-		strings.TrimSpace(criteria),
-		strings.Join(normalizedDeps, ","),
-	}
-	return strings.Join(parts, "\n")
-}
-
-// PlanChecksum computes a stable checksum for the immutable plan file.
+// PlanChecksum delegates to domain.PlanChecksum.
 func PlanChecksum(path string) (string, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return "", fmt.Errorf("read plan file for checksum: %w", err)
-	}
-	hash := sha256.Sum256(data)
-	return hex.EncodeToString(hash[:]), nil
+	return domain.PlanChecksum(path)
 }
 
-// NewPlanFile creates a skeleton plan file in docs/plans.
+// NewPlanFile delegates to domain.NewPlanFile.
 func NewPlanFile(slug string, now time.Time, baseDir string) (string, error) {
-	slug = strings.TrimSpace(slug)
-	if !slugPattern.MatchString(slug) {
-		return "", fmt.Errorf("invalid slug %q (allowed: lowercase letters, digits, hyphens)", slug)
-	}
+	return domain.NewPlanFile(slug, now, baseDir)
+}
 
-	plansDir := filepath.Join(baseDir, "docs", "plans")
-	if err := os.MkdirAll(plansDir, 0o755); err != nil {
-		return "", fmt.Errorf("create docs/plans directory: %w", err)
-	}
+// canonicalTaskID delegates to domain.CanonicalTaskID.
+func canonicalTaskID(task Task, index int) string {
+	return domain.CanonicalTaskID(task, index)
+}
 
-	filename := fmt.Sprintf("PLAN-PRAETOR-%s-%s.json", now.Format("2006-01-02"), slug)
-	path := filepath.Join(plansDir, filename)
-	if _, err := os.Stat(path); err == nil {
-		return "", fmt.Errorf("plan file already exists: %s", path)
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return "", fmt.Errorf("check plan file: %w", err)
-	}
-
-	plan := Plan{
-		Schema: "../schemas/loop-plan.schema.json",
-		Title:  strings.ReplaceAll(slug, "-", " "),
-		Tasks: []Task{
-			{
-				ID:          "TASK-001",
-				Title:       "First task",
-				Executor:    AgentCodex,
-				Reviewer:    AgentClaude,
-				Description: "TODO: describe what this task should do.",
-			},
-			{
-				ID:          "TASK-002",
-				Title:       "Second task",
-				DependsOn:   []string{"TASK-001"},
-				Executor:    AgentCodex,
-				Reviewer:    AgentClaude,
-				Description: "TODO: describe what this task should do.",
-			},
-		},
-	}
-
-	encoded, err := json.MarshalIndent(plan, "", "  ")
-	if err != nil {
-		return "", fmt.Errorf("encode plan skeleton: %w", err)
-	}
-	encoded = append(encoded, '\n')
-
-	if err := os.WriteFile(path, encoded, 0o644); err != nil {
-		return "", fmt.Errorf("write plan file: %w", err)
-	}
-	return path, nil
+// autoTaskFingerprint delegates to domain.AutoTaskFingerprint.
+func autoTaskFingerprint(title string, executor Agent, reviewer Agent, model, description, criteria string, dependsOn []string) string {
+	return domain.AutoTaskFingerprint(title, executor, reviewer, model, description, criteria, dependsOn)
 }

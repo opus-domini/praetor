@@ -1,4 +1,4 @@
-package paths
+package state
 
 import (
 	"crypto/sha256"

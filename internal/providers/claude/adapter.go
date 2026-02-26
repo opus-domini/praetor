@@ -6,10 +6,10 @@ import (
 	"errors"
 	"strings"
 
-	"github.com/opus-domini/praetor/internal/orchestrator"
+	"github.com/opus-domini/praetor/internal/providers"
 )
 
-// Provider adapts the Claude SDK to the orchestrator interface.
+// Provider adapts the Claude SDK to the providers interface.
 type Provider struct {
 	options Options
 }
@@ -20,28 +20,28 @@ func NewProvider(options Options) *Provider {
 }
 
 // ID returns the provider identifier.
-func (p *Provider) ID() orchestrator.ProviderID {
-	return orchestrator.ProviderClaude
+func (p *Provider) ID() providers.ID {
+	return providers.Claude
 }
 
 // Run executes a one-shot prompt through Claude.
-func (p *Provider) Run(ctx context.Context, req orchestrator.Request) (orchestrator.Result, error) {
+func (p *Provider) Run(ctx context.Context, req providers.Request) (providers.Result, error) {
 	prompt := strings.TrimSpace(req.Prompt)
 	if prompt == "" {
-		return orchestrator.Result{}, errors.New("prompt is required")
+		return providers.Result{}, errors.New("prompt is required")
 	}
 
 	msg, err := Prompt(ctx, prompt, p.options)
 	if err != nil {
-		return orchestrator.Result{}, err
+		return providers.Result{}, err
 	}
 
 	response, err := decodePromptResult(msg)
 	if err != nil {
-		return orchestrator.Result{}, err
+		return providers.Result{}, err
 	}
 
-	return orchestrator.Result{
+	return providers.Result{
 		Provider: p.ID(),
 		Response: response,
 	}, nil

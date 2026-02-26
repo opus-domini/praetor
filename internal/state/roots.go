@@ -4,7 +4,6 @@ import (
 	"os"
 	"strings"
 
-	"github.com/opus-domini/praetor/internal/paths"
 	"github.com/opus-domini/praetor/internal/workspace"
 )
 
@@ -24,12 +23,12 @@ func ProjectStateRootForDir(projectDir string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	xdgRoot, err := paths.DefaultProjectStateRoot(projectRoot)
+	xdgRoot, err := DefaultProjectStateRoot(projectRoot)
 	if err != nil {
 		return "", err
 	}
 	if _, statErr := os.Stat(xdgRoot); statErr != nil {
-		if legacy := paths.LegacyProjectStateRoot(projectRoot); legacy != "" {
+		if legacy := LegacyProjectStateRoot(projectRoot); legacy != "" {
 			return legacy, nil
 		}
 	}
@@ -42,7 +41,7 @@ func ProjectCacheRootForDir(projectDir string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return paths.DefaultProjectCacheRoot(projectRoot)
+	return DefaultProjectCacheRoot(projectRoot)
 }
 
 // ResolveCacheRoot returns the cache root from explicit input or derived project scope.
@@ -60,5 +59,5 @@ func ProjectRuntimeKeyForDir(projectDir string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return paths.ProjectRuntimeKey(projectRoot), nil
+	return ProjectRuntimeKey(projectRoot), nil
 }

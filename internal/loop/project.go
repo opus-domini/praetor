@@ -1,7 +1,6 @@
 package loop
 
 import (
-	"github.com/opus-domini/praetor/internal/paths"
 	localstate "github.com/opus-domini/praetor/internal/state"
 	"github.com/opus-domini/praetor/internal/workspace"
 )
@@ -38,7 +37,7 @@ func ResolveProjectRoot(dir string) (string, error) {
 }
 
 func projectRuntimeKey(projectRoot string) string {
-	return paths.ProjectRuntimeKey(projectRoot)
+	return localstate.ProjectRuntimeKey(projectRoot)
 }
 
 const maxWorkspaceManifestSize = workspace.MaxManifestSize

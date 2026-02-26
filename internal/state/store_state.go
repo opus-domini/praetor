@@ -1,4 +1,4 @@
-package loop
+package state
 
 import (
 	"encoding/json"
@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/opus-domini/praetor/internal/domain"
 )
 
 func (s *Store) findStateFile(planFile string) (string, bool, error) {
@@ -27,12 +29,12 @@ func (s *Store) findStateFile(planFile string) (string, bool, error) {
 	return v2, false, nil
 }
 
-func (s *Store) migrateStateFileIfNeeded(planFile, source string, state State) error {
+func (s *Store) migrateStateFileIfNeeded(planFile, source string, state domain.State) error {
 	target := s.stateFileV2(planFile)
 	if source == target {
 		return nil
 	}
-	if err := writeJSONFile(target, state); err != nil {
+	if err := domain.WriteJSONFile(target, state); err != nil {
 		return fmt.Errorf("migrate legacy state file: %w", err)
 	}
 	_ = os.Remove(source)
@@ -40,52 +42,52 @@ func (s *Store) migrateStateFileIfNeeded(planFile, source string, state State) e
 }
 
 // LoadOrInitializeState creates state from plan or merges existing state after plan changes.
-func (s *Store) LoadOrInitializeState(planFile string, plan Plan) (State, error) {
+func (s *Store) LoadOrInitializeState(planFile string, plan domain.Plan) (domain.State, error) {
 	if err := s.Init(); err != nil {
-		return State{}, err
+		return domain.State{}, err
 	}
 
-	checksum, err := PlanChecksum(planFile)
+	checksum, err := domain.PlanChecksum(planFile)
 	if err != nil {
-		return State{}, err
+		return domain.State{}, err
 	}
 
 	stateFile, legacy, err := s.findStateFile(planFile)
 	if err != nil {
-		return State{}, err
+		return domain.State{}, err
 	}
 	now := time.Now().UTC().Format(time.RFC3339)
 
 	if _, err := os.Stat(stateFile); errors.Is(err, os.ErrNotExist) {
-		state := State{
+		state := domain.State{
 			PlanFile:     planFile,
 			PlanChecksum: checksum,
 			CreatedAt:    now,
 			UpdatedAt:    now,
-			Tasks:        stateTasksFromPlan(plan),
+			Tasks:        domain.StateTasksFromPlan(plan),
 		}
-		if err := writeJSONFile(s.StateFile(planFile), state); err != nil {
-			return State{}, err
+		if err := domain.WriteJSONFile(s.StateFile(planFile), state); err != nil {
+			return domain.State{}, err
 		}
 		return state, nil
 	} else if err != nil {
-		return State{}, fmt.Errorf("stat state file: %w", err)
+		return domain.State{}, fmt.Errorf("stat state file: %w", err)
 	}
 
 	state, err := s.ReadState(planFile)
 	if err != nil {
-		return State{}, err
+		return domain.State{}, err
 	}
 
 	migrated := s.normalizeTaskStatuses(planFile, &state)
 	if state.PlanChecksum == checksum {
 		if legacy || migrated {
 			if migrateErr := s.migrateStateFileIfNeeded(planFile, stateFile, state); migrateErr != nil {
-				return State{}, migrateErr
+				return domain.State{}, migrateErr
 			}
 			if !legacy && migrated {
-				if err := writeJSONFile(s.StateFile(planFile), state); err != nil {
-					return State{}, err
+				if err := domain.WriteJSONFile(s.StateFile(planFile), state); err != nil {
+					return domain.State{}, err
 				}
 			}
 		}
@@ -93,8 +95,8 @@ func (s *Store) LoadOrInitializeState(planFile string, plan Plan) (State, error)
 	}
 
 	merged := mergeState(planFile, checksum, state, plan)
-	if err := writeJSONFile(s.StateFile(planFile), merged); err != nil {
-		return State{}, err
+	if err := domain.WriteJSONFile(s.StateFile(planFile), merged); err != nil {
+		return domain.State{}, err
 	}
 	if legacy {
 		_ = os.Remove(stateFile)
@@ -103,76 +105,40 @@ func (s *Store) LoadOrInitializeState(planFile string, plan Plan) (State, error)
 }
 
 // ReadState reads state from disk.
-func (s *Store) ReadState(planFile string) (State, error) {
+func (s *Store) ReadState(planFile string) (domain.State, error) {
 	path, legacy, err := s.findStateFile(planFile)
 	if err != nil {
-		return State{}, err
+		return domain.State{}, err
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return State{}, fmt.Errorf("read state file: %w", err)
+		return domain.State{}, fmt.Errorf("read state file: %w", err)
 	}
-	var state State
+	var state domain.State
 	if err := json.Unmarshal(data, &state); err != nil {
-		return State{}, fmt.Errorf("decode state file: %w", err)
+		return domain.State{}, fmt.Errorf("decode state file: %w", err)
 	}
 	if legacy {
 		if migrateErr := s.migrateStateFileIfNeeded(planFile, path, state); migrateErr != nil {
-			return State{}, migrateErr
+			return domain.State{}, migrateErr
 		}
 	}
 	return state, nil
 }
 
 // WriteState persists state atomically.
-func (s *Store) WriteState(planFile string, state State) error {
+func (s *Store) WriteState(planFile string, state domain.State) error {
 	state.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
-	return writeJSONFile(s.StateFile(planFile), state)
+	return domain.WriteJSONFile(s.StateFile(planFile), state)
 }
 
-func stateTasksFromPlan(plan Plan) []StateTask {
-	tasks := make([]StateTask, 0, len(plan.Tasks))
-	for i, task := range plan.Tasks {
-		tasks = append(tasks, StateTask{
-			ID:          canonicalTaskID(task, i),
-			Title:       strings.TrimSpace(task.Title),
-			DependsOn:   normalizedDependsOn(task.DependsOn),
-			Executor:    normalizeAgent(task.Executor),
-			Reviewer:    normalizeAgent(task.Reviewer),
-			Model:       strings.TrimSpace(task.Model),
-			Description: strings.TrimSpace(task.Description),
-			Criteria:    strings.TrimSpace(task.Criteria),
-			Status:      TaskPending,
-		})
-	}
-	return tasks
-}
-
-func normalizedDependsOn(dependsOn []string) []string {
-	if len(dependsOn) == 0 {
-		return nil
-	}
-	result := make([]string, 0, len(dependsOn))
-	for _, dep := range dependsOn {
-		dep = strings.TrimSpace(dep)
-		if dep == "" {
-			continue
-		}
-		result = append(result, dep)
-	}
-	if len(result) == 0 {
-		return nil
-	}
-	return result
-}
-
-func mergeState(planFile, checksum string, previous State, plan Plan) State {
-	statusByID := make(map[string]TaskStatus, len(previous.Tasks))
-	statusByAutoFingerprint := make(map[string]TaskStatus)
+func mergeState(planFile, checksum string, previous domain.State, plan domain.Plan) domain.State {
+	statusByID := make(map[string]domain.TaskStatus, len(previous.Tasks))
+	statusByAutoFingerprint := make(map[string]domain.TaskStatus)
 	for _, task := range previous.Tasks {
 		statusByID[task.ID] = task.Status
 		if strings.HasPrefix(task.ID, "auto-") {
-			statusByAutoFingerprint[autoTaskFingerprint(
+			statusByAutoFingerprint[domain.AutoTaskFingerprint(
 				task.Title,
 				task.Executor,
 				task.Reviewer,
@@ -185,12 +151,12 @@ func mergeState(planFile, checksum string, previous State, plan Plan) State {
 	}
 
 	now := time.Now().UTC().Format(time.RFC3339)
-	merged := State{
+	merged := domain.State{
 		PlanFile:     planFile,
 		PlanChecksum: checksum,
 		CreatedAt:    previous.CreatedAt,
 		UpdatedAt:    now,
-		Tasks:        stateTasksFromPlan(plan),
+		Tasks:        domain.StateTasksFromPlan(plan),
 	}
 	if merged.CreatedAt == "" {
 		merged.CreatedAt = now
@@ -202,7 +168,7 @@ func mergeState(planFile, checksum string, previous State, plan Plan) State {
 			continue
 		}
 		if strings.HasPrefix(task.ID, "auto-") {
-			if status, ok := statusByAutoFingerprint[autoTaskFingerprint(
+			if status, ok := statusByAutoFingerprint[domain.AutoTaskFingerprint(
 				task.Title,
 				task.Executor,
 				task.Reviewer,
@@ -218,28 +184,11 @@ func mergeState(planFile, checksum string, previous State, plan Plan) State {
 	return merged
 }
 
-func writeJSONFile(path string, value any) error {
-	encoded, err := json.MarshalIndent(value, "", "  ")
-	if err != nil {
-		return fmt.Errorf("encode json file %s: %w", path, err)
-	}
-	encoded = append(encoded, '\n')
-
-	tmpFile := path + ".tmp"
-	if err := os.WriteFile(tmpFile, encoded, 0o644); err != nil {
-		return fmt.Errorf("write tmp file %s: %w", tmpFile, err)
-	}
-	if err := os.Rename(tmpFile, path); err != nil {
-		return fmt.Errorf("rename tmp file %s: %w", path, err)
-	}
-	return nil
-}
-
 // DetectStuckTasks reports tasks that are in failed state.
-func (s *Store) DetectStuckTasks(_ string, state State, _ int) ([]string, error) {
+func (s *Store) DetectStuckTasks(_ string, state domain.State, _ int) ([]string, error) {
 	report := make([]string, 0)
 	for _, task := range state.Tasks {
-		if task.Status == TaskFailed {
+		if task.Status == domain.TaskFailed {
 			report = append(report, fmt.Sprintf("%s: %s (failed after %d attempts)", task.ID, task.Title, task.Attempt))
 		}
 	}
@@ -248,18 +197,18 @@ func (s *Store) DetectStuckTasks(_ string, state State, _ int) ([]string, error)
 
 // normalizeTaskStatuses migrates legacy statuses and absorbs external retry/feedback
 // files into StateTask fields. Returns true if any task was modified.
-func (s *Store) normalizeTaskStatuses(planFile string, state *State) bool {
+func (s *Store) normalizeTaskStatuses(planFile string, state *domain.State) bool {
 	changed := false
 	for i := range state.Tasks {
 		task := &state.Tasks[i]
-		normalized := NormalizeStatus(task.Status)
+		normalized := domain.NormalizeStatus(task.Status)
 		if normalized != task.Status {
 			task.Status = normalized
 			changed = true
 		}
 
 		// Absorb external retry count if task has no inline attempt count.
-		if task.Attempt == 0 && task.Status == TaskPending {
+		if task.Attempt == 0 && task.Status == domain.TaskPending {
 			sig := s.TaskSignatureForPlan(planFile, i, *task)
 			if count, err := s.ReadRetryCount(sig); err == nil && count > 0 {
 				task.Attempt = count
@@ -277,7 +226,7 @@ func (s *Store) normalizeTaskStatuses(planFile string, state *State) bool {
 }
 
 // ResetPlanRuntime removes state, lock, retries and feedback for plan tasks.
-func (s *Store) ResetPlanRuntime(planFile string, plan Plan) (int, error) {
+func (s *Store) ResetPlanRuntime(planFile string, plan domain.Plan) (int, error) {
 	removed := 0
 	for _, statePath := range []string{s.stateFileV2(planFile), s.stateFileLegacy(planFile)} {
 		if err := os.Remove(statePath); err == nil {
@@ -295,7 +244,7 @@ func (s *Store) ResetPlanRuntime(planFile string, plan Plan) (int, error) {
 		}
 	}
 
-	stateTasks := stateTasksFromPlan(plan)
+	stateTasks := domain.StateTasksFromPlan(plan)
 	for idx, task := range stateTasks {
 		signature := s.TaskSignatureForPlan(planFile, idx, task)
 		retryPath := filepath.Join(s.RetriesDir(), signature+".count")
