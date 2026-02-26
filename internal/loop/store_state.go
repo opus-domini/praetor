@@ -77,10 +77,16 @@ func (s *Store) LoadOrInitializeState(planFile string, plan Plan) (State, error)
 		return State{}, err
 	}
 
+	migrated := s.normalizeTaskStatuses(planFile, &state)
 	if state.PlanChecksum == checksum {
-		if legacy {
+		if legacy || migrated {
 			if migrateErr := s.migrateStateFileIfNeeded(planFile, stateFile, state); migrateErr != nil {
 				return State{}, migrateErr
+			}
+			if !legacy && migrated {
+				if err := writeJSONFile(s.StateFile(planFile), state); err != nil {
+					return State{}, err
+				}
 			}
 		}
 		return state, nil
@@ -136,7 +142,7 @@ func stateTasksFromPlan(plan Plan) []StateTask {
 			Model:       strings.TrimSpace(task.Model),
 			Description: strings.TrimSpace(task.Description),
 			Criteria:    strings.TrimSpace(task.Criteria),
-			Status:      TaskStatusOpen,
+			Status:      TaskPending,
 		})
 	}
 	return tasks
@@ -229,27 +235,45 @@ func writeJSONFile(path string, value any) error {
 	return nil
 }
 
-// DetectStuckTasks reports open tasks that already reached retry limit.
-func (s *Store) DetectStuckTasks(planFile string, state State, maxRetries int) ([]string, error) {
-	if maxRetries <= 0 {
-		return nil, nil
-	}
-
+// DetectStuckTasks reports tasks that are in failed state.
+func (s *Store) DetectStuckTasks(_ string, state State, _ int) ([]string, error) {
 	report := make([]string, 0)
-	for idx, task := range state.Tasks {
-		if task.Status != TaskStatusOpen {
-			continue
-		}
-		signature := s.TaskSignatureForPlan(planFile, idx, task)
-		retries, err := s.ReadRetryCount(signature)
-		if err != nil {
-			return nil, err
-		}
-		if retries >= maxRetries {
-			report = append(report, fmt.Sprintf("%s: %s (%d/%d retries)", task.ID, task.Title, retries, maxRetries))
+	for _, task := range state.Tasks {
+		if task.Status == TaskFailed {
+			report = append(report, fmt.Sprintf("%s: %s (failed after %d attempts)", task.ID, task.Title, task.Attempt))
 		}
 	}
 	return report, nil
+}
+
+// normalizeTaskStatuses migrates legacy statuses and absorbs external retry/feedback
+// files into StateTask fields. Returns true if any task was modified.
+func (s *Store) normalizeTaskStatuses(planFile string, state *State) bool {
+	changed := false
+	for i := range state.Tasks {
+		task := &state.Tasks[i]
+		normalized := NormalizeStatus(task.Status)
+		if normalized != task.Status {
+			task.Status = normalized
+			changed = true
+		}
+
+		// Absorb external retry count if task has no inline attempt count.
+		if task.Attempt == 0 && task.Status == TaskPending {
+			sig := s.TaskSignatureForPlan(planFile, i, *task)
+			if count, err := s.ReadRetryCount(sig); err == nil && count > 0 {
+				task.Attempt = count
+				changed = true
+			}
+			if task.Feedback == "" {
+				if fb, err := s.ReadFeedback(sig); err == nil && fb != "" {
+					task.Feedback = fb
+					changed = true
+				}
+			}
+		}
+	}
+	return changed
 }
 
 // ResetPlanRuntime removes state, lock, retries and feedback for plan tasks.

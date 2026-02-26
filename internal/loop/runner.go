@@ -268,17 +268,9 @@ func (r *Runner) runIteration(ctx context.Context, run *activeRun) (bool, error)
 	}
 
 	signature := run.store.TaskSignatureForPlan(run.planFile, index, task)
-	retries, err := run.store.ReadRetryCount(signature)
-	if err != nil {
-		return false, err
-	}
-	if retries >= run.options.MaxRetries {
-		return false, fmt.Errorf("retry limit reached for task %s (%s)", task.ID, task.Title)
-	}
 
-	feedback, err := run.store.ReadFeedback(signature)
-	if err != nil {
-		return false, err
+	if task.Attempt >= run.options.MaxRetries {
+		return false, fmt.Errorf("retry limit reached for task %s (%s)", task.ID, task.Title)
 	}
 
 	progress := fmt.Sprintf("%d/%d", run.state.DoneCount()+1, len(run.state.Tasks))
@@ -288,8 +280,8 @@ func (r *Runner) runIteration(ctx context.Context, run *activeRun) (bool, error)
 		executor:  executor,
 		reviewer:  reviewer,
 		signature: signature,
-		retries:   retries,
-		feedback:  feedback,
+		retries:   task.Attempt,
+		feedback:  task.Feedback,
 		progress:  progress,
 	}
 	runDir, err := prepareRunDir(run.store.LogsDir(), task, signature)
@@ -309,6 +301,12 @@ func (r *Runner) runIteration(ctx context.Context, run *activeRun) (bool, error)
 	}
 	selected.taskLabel = taskLabel
 	run.render.Task(progress, taskLabel, task.Title)
+
+	// Transition to executing state before running the agent.
+	if err := run.transitions.TransitionTask(&run.state, index, TaskExecuting, run.planFile); err != nil {
+		return false, err
+	}
+
 	run.render.Phase("executor", string(selected.executor), fmt.Sprintf("attempt %d/%d", selected.retries+1, run.options.MaxRetries))
 
 	executorSystemPrompt := buildExecutorSystemPrompt()
@@ -440,6 +438,10 @@ func (r *Runner) runIteration(ctx context.Context, run *activeRun) (bool, error)
 
 	decision := ReviewDecision{Pass: true, Reason: "review skipped"}
 	if selected.reviewer != AgentNone {
+		// Transition to reviewing state before running the reviewer.
+		if err := run.transitions.TransitionTask(&run.state, selected.index, TaskReviewing, run.planFile); err != nil {
+			return false, err
+		}
 		run.render.Phase("reviewer", string(selected.reviewer), "reviewing task result")
 		gitDiff := CaptureGitDiff(taskWorkdir, 500)
 

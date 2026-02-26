@@ -120,22 +120,24 @@ func newPlanListCmd() *cobra.Command {
 				return err
 			}
 
-			if _, err := fmt.Fprintf(cmd.OutOrStdout(), "%-55s %5s %5s %5s  %s\n", "Plan", "Done", "Open", "Total", "Status"); err != nil {
+			if _, err := fmt.Fprintf(cmd.OutOrStdout(), "%-55s %5s %5s %5s %5s  %s\n", "Plan", "Done", "Fail", "Left", "Total", "Status"); err != nil {
 				return err
 			}
-			if _, err := fmt.Fprintf(cmd.OutOrStdout(), "%-55s %5s %5s %5s  %s\n", "----", "----", "----", "-----", "------"); err != nil {
+			if _, err := fmt.Fprintf(cmd.OutOrStdout(), "%-55s %5s %5s %5s %5s  %s\n", "----", "----", "----", "----", "-----", "------"); err != nil {
 				return err
 			}
 
 			for _, status := range statuses {
 				label := "in_progress"
-				if status.Open == 0 {
+				if status.Active == 0 && status.Failed == 0 {
 					label = "completed"
+				} else if status.Active == 0 && status.Failed > 0 {
+					label = "failed"
 				}
 				if status.Running {
 					label = "running"
 				}
-				if _, err := fmt.Fprintf(cmd.OutOrStdout(), "%-55s %5d %5d %5d  %s\n", status.PlanFile, status.Done, status.Open, status.Total, label); err != nil {
+				if _, err := fmt.Fprintf(cmd.OutOrStdout(), "%-55s %5d %5d %5d %5d  %s\n", status.PlanFile, status.Done, status.Failed, status.Active, status.Total, label); err != nil {
 					return err
 				}
 			}
@@ -227,9 +229,16 @@ func printPlanStatus(cmd *cobra.Command, status loop.PlanStatus) error {
 	if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Progress: %d/%d tasks done\n", status.Done, status.Total); err != nil {
 		return err
 	}
+	if status.Failed > 0 {
+		if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Failed:   %d\n", status.Failed); err != nil {
+			return err
+		}
+	}
 	stateLabel := "in progress"
-	if status.Open == 0 {
+	if status.Active == 0 && status.Failed == 0 {
 		stateLabel = "completed"
+	} else if status.Active == 0 && status.Failed > 0 {
+		stateLabel = "failed"
 	}
 	if status.Running {
 		stateLabel = "running"
@@ -243,16 +252,26 @@ func printPlanStatus(cmd *cobra.Command, status loop.PlanStatus) error {
 			return err
 		}
 		for _, task := range status.Tasks {
-			mark := " "
-			if task.Status == loop.TaskStatusDone {
-				mark = "x"
-			}
+			mark := taskStatusMark(task.Status)
 			if _, err := fmt.Fprintf(cmd.OutOrStdout(), "  [%s] %s: %s\n", mark, task.ID, task.Title); err != nil {
 				return err
 			}
 		}
 	}
 	return nil
+}
+
+func taskStatusMark(status loop.TaskStatus) string {
+	switch status {
+	case loop.TaskDone:
+		return "x"
+	case loop.TaskFailed:
+		return "!"
+	case loop.TaskExecuting, loop.TaskReviewing:
+		return ">"
+	default:
+		return " "
+	}
 }
 
 func fallback(value, defaultValue string) string {

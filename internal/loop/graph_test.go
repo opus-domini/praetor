@@ -7,9 +7,9 @@ func TestNextRunnableTaskRespectsDependencies(t *testing.T) {
 
 	state := State{
 		Tasks: []StateTask{
-			{ID: "TASK-001", Title: "A", Status: TaskStatusDone},
-			{ID: "TASK-002", Title: "B", DependsOn: []string{"TASK-001"}, Status: TaskStatusOpen},
-			{ID: "TASK-003", Title: "C", DependsOn: []string{"TASK-999"}, Status: TaskStatusOpen},
+			{ID: "TASK-001", Title: "A", Status: TaskDone},
+			{ID: "TASK-002", Title: "B", DependsOn: []string{"TASK-001"}, Status: TaskPending},
+			{ID: "TASK-003", Title: "C", DependsOn: []string{"TASK-999"}, Status: TaskPending},
 		},
 	}
 
@@ -27,8 +27,8 @@ func TestBlockedTasksReport(t *testing.T) {
 
 	state := State{
 		Tasks: []StateTask{
-			{ID: "TASK-001", Title: "A", Status: TaskStatusOpen, DependsOn: []string{"TASK-002"}},
-			{ID: "TASK-002", Title: "B", Status: TaskStatusOpen, DependsOn: []string{"TASK-003"}},
+			{ID: "TASK-001", Title: "A", Status: TaskPending, DependsOn: []string{"TASK-002"}},
+			{ID: "TASK-002", Title: "B", Status: TaskPending, DependsOn: []string{"TASK-003"}},
 		},
 	}
 

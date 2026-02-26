@@ -16,7 +16,8 @@ type PlanStatus struct {
 	StateFile string
 	UpdatedAt string
 	Done      int
-	Open      int
+	Failed    int
+	Active    int
 	Total     int
 	Running   bool
 	Tasks     []StateTask
@@ -46,7 +47,7 @@ func (s *Store) Status(planFile string) (PlanStatus, error) {
 		return PlanStatus{
 			PlanFile: planFile,
 			Total:    len(plan.Tasks),
-			Open:     len(plan.Tasks),
+			Active:   len(plan.Tasks),
 			Done:     0,
 		}, nil
 	} else if err != nil {
@@ -64,7 +65,8 @@ func (s *Store) Status(planFile string) (PlanStatus, error) {
 		StateFile: stateFile,
 		UpdatedAt: state.UpdatedAt,
 		Done:      state.DoneCount(),
-		Open:      state.OpenCount(),
+		Failed:    state.FailedCount(),
+		Active:    state.ActiveCount(),
 		Total:     len(state.Tasks),
 		Running:   lockRunning,
 		Tasks:     state.Tasks,
@@ -104,7 +106,8 @@ func (s *Store) ListPlanStatuses() ([]PlanStatus, error) {
 			StateFile: stateFile,
 			UpdatedAt: state.UpdatedAt,
 			Done:      state.DoneCount(),
-			Open:      state.OpenCount(),
+			Failed:    state.FailedCount(),
+			Active:    state.ActiveCount(),
 			Total:     len(state.Tasks),
 			Running:   running,
 		})

@@ -29,34 +29,33 @@ func (r *TransitionRecorder) WriteMetric(entry CostEntry) error {
 	return r.store.WriteTaskMetrics(entry)
 }
 
-func (r *TransitionRecorder) RetryTask(signature, feedback string) (int, error) {
-	nextRetry, err := r.store.IncrementRetryCount(signature)
-	if err != nil {
-		return 0, err
+// TransitionTask validates a state transition and persists the updated state.
+func (r *TransitionRecorder) TransitionTask(state *State, index int, to TaskStatus, planFile string) error {
+	from := state.Tasks[index].Status
+	if err := Transition(from, to); err != nil {
+		return err
 	}
-	if feedback != "" {
-		if err := r.store.WriteFeedback(signature, feedback); err != nil {
-			return 0, err
-		}
-	}
-	return nextRetry, nil
+	state.Tasks[index].Status = to
+	return r.store.WriteState(planFile, *state)
 }
 
 func (r *TransitionRecorder) CompleteTask(state *State, index int, signature, runID, message string) error {
-	state.Tasks[index].Status = TaskStatusDone
+	task := &state.Tasks[index]
+	if err := Transition(task.Status, TaskDone); err != nil {
+		return err
+	}
+	task.Status = TaskDone
+	task.Feedback = ""
 	if err := r.store.WriteState(r.planFile, *state); err != nil {
 		return err
 	}
-	if err := r.store.ClearRetryCount(signature); err != nil {
-		return err
-	}
-	if err := r.store.ClearFeedback(signature); err != nil {
-		return err
-	}
+	// Clean up legacy external files if they exist.
+	_ = r.store.ClearRetryCount(signature)
+	_ = r.store.ClearFeedback(signature)
 	return r.WriteCheckpoint(CheckpointEntry{
 		Timestamp: time.Now().UTC().Format(time.RFC3339),
 		Status:    "completed",
-		TaskID:    state.Tasks[index].ID,
+		TaskID:    task.ID,
 		Signature: signature,
 		RunID:     runID,
 		Message:   message,

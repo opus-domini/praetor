@@ -30,7 +30,7 @@ func TestLoadOrInitializeStateMergesPlanChanges(t *testing.T) {
 		t.Fatalf("initialize state: %v", err)
 	}
 
-	state.Tasks[0].Status = TaskStatusDone
+	state.Tasks[0].Status = TaskDone
 	if err := store.WriteState(planPath, state); err != nil {
 		t.Fatalf("write state: %v", err)
 	}
@@ -46,10 +46,10 @@ func TestLoadOrInitializeStateMergesPlanChanges(t *testing.T) {
 	if len(merged.Tasks) != 3 {
 		t.Fatalf("unexpected merged task count: %d", len(merged.Tasks))
 	}
-	if merged.Tasks[0].Status != TaskStatusDone {
+	if merged.Tasks[0].Status != TaskDone {
 		t.Fatalf("expected first task to remain done")
 	}
-	if merged.Tasks[2].Status != TaskStatusOpen {
+	if merged.Tasks[2].Status != TaskPending {
 		t.Fatalf("expected new task to be open")
 	}
 }
@@ -74,7 +74,7 @@ func TestLoadOrInitializeStatePreservesImplicitTaskStatusAfterReorder(t *testing
 		t.Fatalf("initialize state: %v", err)
 	}
 
-	state.Tasks[0].Status = TaskStatusDone
+	state.Tasks[0].Status = TaskDone
 	if err := store.WriteState(planPath, state); err != nil {
 		t.Fatalf("write state: %v", err)
 	}
@@ -95,7 +95,7 @@ func TestLoadOrInitializeStatePreservesImplicitTaskStatusAfterReorder(t *testing
 	if len(merged.Tasks) != 2 {
 		t.Fatalf("unexpected merged task count: %d", len(merged.Tasks))
 	}
-	if merged.Tasks[1].Status != TaskStatusDone {
+	if merged.Tasks[1].Status != TaskDone {
 		t.Fatalf("expected reordered first task to remain done, got %s", merged.Tasks[1].Status)
 	}
 }

@@ -50,8 +50,16 @@ type Task struct {
 type TaskStatus string
 
 const (
+	TaskPending   TaskStatus = "pending"
+	TaskExecuting TaskStatus = "executing"
+	TaskReviewing TaskStatus = "reviewing"
+	TaskDone      TaskStatus = "done"
+	TaskFailed    TaskStatus = "failed"
+
+	// TaskStatusOpen is a legacy alias kept for migration compatibility.
 	TaskStatusOpen TaskStatus = "open"
-	TaskStatusDone TaskStatus = "done"
+	// TaskStatusDone is a legacy alias for backward-compatible references.
+	TaskStatusDone = TaskDone
 )
 
 // StateTask is one mutable state entry for a task.
@@ -65,6 +73,8 @@ type StateTask struct {
 	Description string     `json:"description,omitempty"`
 	Criteria    string     `json:"criteria,omitempty"`
 	Status      TaskStatus `json:"status"`
+	Attempt     int        `json:"attempt,omitempty"`
+	Feedback    string     `json:"feedback,omitempty"`
 }
 
 // State stores mutable progress for one plan file.
@@ -78,18 +88,35 @@ type State struct {
 
 // DoneCount returns how many tasks are completed.
 func (s State) DoneCount() int {
-	done := 0
+	n := 0
 	for _, task := range s.Tasks {
-		if task.Status == TaskStatusDone {
-			done++
+		if task.Status == TaskDone {
+			n++
 		}
 	}
-	return done
+	return n
 }
 
-// OpenCount returns how many tasks are still open.
+// FailedCount returns how many tasks exhausted retries.
+func (s State) FailedCount() int {
+	n := 0
+	for _, task := range s.Tasks {
+		if task.Status == TaskFailed {
+			n++
+		}
+	}
+	return n
+}
+
+// ActiveCount returns how many tasks are not in a terminal state.
+func (s State) ActiveCount() int {
+	return len(s.Tasks) - s.DoneCount() - s.FailedCount()
+}
+
+// OpenCount returns how many tasks are still open (not done and not failed).
+// Kept for backward compatibility; equivalent to ActiveCount.
 func (s State) OpenCount() int {
-	return len(s.Tasks) - s.DoneCount()
+	return s.ActiveCount()
 }
 
 // RunnerOptions controls loop execution behavior.

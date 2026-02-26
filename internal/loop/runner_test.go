@@ -226,8 +226,11 @@ func TestRunnerKeepsTaskOpenWhenMergeFails(t *testing.T) {
 	if readErr != nil {
 		t.Fatalf("read state: %v", readErr)
 	}
-	if got := state.Tasks[0].Status; got != TaskStatusOpen {
-		t.Fatalf("expected task to remain open after merge conflict, got %s", got)
+	// After a merge conflict, the task stays in executing (the commit failed
+	// before transition to done). On next load, crash recovery would reset
+	// it to pending.
+	if got := state.Tasks[0].Status; got != TaskExecuting {
+		t.Fatalf("expected task to remain executing after merge conflict, got %s", got)
 	}
 }
 

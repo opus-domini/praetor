@@ -64,10 +64,20 @@ func (r *Runner) applyTaskOutcome(ctx context.Context, run *activeRun, selected 
 
 	case taskOutcomeRetry:
 		run.stats.TasksRejected++
-		nextRetry, err := run.transitions.RetryTask(selected.signature, outcome.feedback)
-		if err != nil {
+		task := &run.state.Tasks[selected.index]
+		task.Attempt++
+		task.Feedback = outcome.feedback
+
+		// Check if retries are exhausted.
+		nextStatus := TaskPending
+		if task.Attempt >= run.options.MaxRetries {
+			nextStatus = TaskFailed
+		}
+
+		if err := run.transitions.TransitionTask(&run.state, selected.index, nextStatus, run.planFile); err != nil {
 			return false, err
 		}
+
 		if outcome.rollback {
 			run.isolation.RollbackTask(context.WithoutCancel(ctx), runID, run.render)
 		}
@@ -83,7 +93,7 @@ func (r *Runner) applyTaskOutcome(ctx context.Context, run *activeRun, selected 
 		}
 
 		renderArgs := append([]any{}, outcome.renderArgs...)
-		renderArgs = append(renderArgs, nextRetry, run.options.MaxRetries)
+		renderArgs = append(renderArgs, task.Attempt, run.options.MaxRetries)
 		renderMsg := fmt.Sprintf(outcome.renderFormat, renderArgs...)
 		switch outcome.renderLevel {
 		case "warn":

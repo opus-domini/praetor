@@ -6,7 +6,7 @@ import "fmt"
 func NextRunnableTask(state State) (int, StateTask, bool) {
 	done := doneSet(state)
 	for idx, task := range state.Tasks {
-		if task.Status != TaskStatusOpen {
+		if task.Status != TaskPending {
 			continue
 		}
 		if dependenciesDone(task, done) {
@@ -21,7 +21,7 @@ func RunnableTasks(state State) []StateTask {
 	done := doneSet(state)
 	tasks := make([]StateTask, 0)
 	for _, task := range state.Tasks {
-		if task.Status != TaskStatusOpen {
+		if task.Status != TaskPending {
 			continue
 		}
 		if dependenciesDone(task, done) {
@@ -43,7 +43,7 @@ func BlockedTasksReport(state State, limit int) []string {
 		if len(report) >= limit {
 			break
 		}
-		if task.Status != TaskStatusOpen {
+		if task.Status != TaskPending {
 			continue
 		}
 
@@ -64,7 +64,7 @@ func BlockedTasksReport(state State, limit int) []string {
 func doneSet(state State) map[string]struct{} {
 	done := make(map[string]struct{}, len(state.Tasks))
 	for _, task := range state.Tasks {
-		if task.Status != TaskStatusDone {
+		if task.Status != TaskDone {
 			continue
 		}
 		done[task.ID] = struct{}{}
