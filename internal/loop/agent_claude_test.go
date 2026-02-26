@@ -22,6 +22,8 @@ func TestClaudeAgentBuildCommand(t *testing.T) {
 		"claude", "-p",
 		"--dangerously-skip-permissions",
 		"--no-session-persistence",
+		"--verbose",
+		"--output-format", "stream-json",
 	}
 	for _, want := range expected {
 		found := false
@@ -67,15 +69,16 @@ func TestClaudeAgentBuildCommandWithModel(t *testing.T) {
 	}
 }
 
-func TestClaudeAgentBuildCommandVerbose(t *testing.T) {
+func TestClaudeAgentBuildCommandAlwaysVerbose(t *testing.T) {
 	t.Parallel()
 
 	agent := &claudeAgent{}
+
+	// --verbose is always present (required by --output-format stream-json).
 	spec, err := agent.BuildCommand(AgentRequest{
 		Agent:   AgentClaude,
 		Prompt:  "test",
 		Workdir: "/tmp",
-		Verbose: true,
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -89,7 +92,7 @@ func TestClaudeAgentBuildCommandVerbose(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Fatalf("expected --verbose in args, got %v", spec.Args)
+		t.Fatalf("expected --verbose in args (required by stream-json), got %v", spec.Args)
 	}
 }
 
@@ -127,16 +130,91 @@ func TestClaudeAgentBuildCommandWithSystemPrompt(t *testing.T) {
 func TestClaudeAgentParseOutput(t *testing.T) {
 	t.Parallel()
 
+	tests := []struct {
+		name       string
+		stdout     string
+		wantOutput string
+		wantCost   float64
+	}{
+		{
+			name:       "stream-json with result event",
+			stdout:     `{"type":"system","subtype":"init"}` + "\n" + `{"type":"assistant","message":{"content":[{"type":"text","text":"hello world"}]}}` + "\n" + `{"type":"result","subtype":"success","result":"hello world","cost_usd":0.05}`,
+			wantOutput: "hello world",
+			wantCost:   0.05,
+		},
+		{
+			name:       "result event with empty result falls back to assistant text",
+			stdout:     `{"type":"assistant","message":{"content":[{"type":"text","text":"fallback text"}]}}` + "\n" + `{"type":"result","subtype":"success","result":"","cost_usd":0.02}`,
+			wantOutput: "fallback text",
+			wantCost:   0.02,
+		},
+		{
+			name:       "no result event collects assistant text",
+			stdout:     `{"type":"system","subtype":"init"}` + "\n" + `{"type":"assistant","message":{"content":[{"type":"text","text":"only assistant"}]}}`,
+			wantOutput: "only assistant",
+			wantCost:   0,
+		},
+		{
+			name:       "plain text fallback (not stream-json)",
+			stdout:     "  the review result  ",
+			wantOutput: "the review result",
+			wantCost:   0,
+		},
+		{
+			name:       "empty output",
+			stdout:     "",
+			wantOutput: "",
+			wantCost:   0,
+		},
+		{
+			name:       "multiple assistant events joined",
+			stdout:     `{"type":"assistant","message":{"content":[{"type":"text","text":"part one"}]}}` + "\n" + `{"type":"assistant","message":{"content":[{"type":"text","text":"part two"}]}}` + "\n" + `{"type":"result","subtype":"success","result":"","cost_usd":0.01}`,
+			wantOutput: "part one\npart two",
+			wantCost:   0.01,
+		},
+		{
+			name:       "last result event wins",
+			stdout:     `{"type":"result","result":"first","cost_usd":0.01}` + "\n" + `{"type":"result","result":"second","cost_usd":0.03}`,
+			wantOutput: "second",
+			wantCost:   0.03,
+		},
+		{
+			name:       "skips non-text content blocks",
+			stdout:     `{"type":"assistant","message":{"content":[{"type":"tool_use","text":""},{"type":"text","text":"real text"}]}}`,
+			wantOutput: "real text",
+			wantCost:   0,
+		},
+		{
+			name:       "skips blank lines in stream",
+			stdout:     "\n\n" + `{"type":"result","result":"ok","cost_usd":0.01}` + "\n\n",
+			wantOutput: "ok",
+			wantCost:   0.01,
+		},
+	}
+
 	agent := &claudeAgent{}
-	output, cost, err := agent.ParseOutput("  the review result  ")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			output, cost, err := agent.ParseOutput(tt.stdout)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if output != tt.wantOutput {
+				t.Fatalf("output = %q, want %q", output, tt.wantOutput)
+			}
+			if cost != tt.wantCost {
+				t.Fatalf("cost = %f, want %f", cost, tt.wantCost)
+			}
+		})
 	}
-	if output != "the review result" {
-		t.Fatalf("expected trimmed output, got %q", output)
-	}
-	if cost != 0 {
-		t.Fatalf("expected zero cost, got %f", cost)
+}
+
+func TestClaudeAgentString(t *testing.T) {
+	t.Parallel()
+	agent := &claudeAgent{}
+	if s := agent.String(); s == "" {
+		t.Fatal("expected non-empty string")
 	}
 }
 

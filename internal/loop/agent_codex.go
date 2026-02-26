@@ -40,25 +40,56 @@ func (a *codexAgent) BuildCommand(req AgentRequest) (CommandSpec, error) {
 	}, nil
 }
 
+// codexStreamEvent is one JSONL event from codex exec --json.
+type codexStreamEvent struct {
+	Type string `json:"type"`
+	Item struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	} `json:"item,omitempty"`
+	Usage struct {
+		InputTokens       int `json:"input_tokens"`
+		CachedInputTokens int `json:"cached_input_tokens"`
+		OutputTokens      int `json:"output_tokens"`
+	} `json:"usage,omitempty"`
+}
+
 func (a *codexAgent) ParseOutput(stdout string) (string, float64, error) {
 	stdout = strings.TrimSpace(stdout)
-	if !strings.HasPrefix(stdout, "{") {
-		return stdout, 0, nil
+	if stdout == "" {
+		return "", 0, nil
 	}
 
-	var parsed struct {
-		Result       string  `json:"result"`
-		TotalCostUSD float64 `json:"total_cost_usd"`
-	}
-	if err := json.Unmarshal([]byte(stdout), &parsed); err != nil {
-		return stdout, 0, nil //nolint:nilerr // invalid JSON is not an error — return raw output
+	// --json output is JSONL: one JSON object per line.
+	// Collect all agent_message texts and return them joined.
+	var parts []string
+	isJSONL := false
+	for _, line := range strings.Split(stdout, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		var event codexStreamEvent
+		if json.Unmarshal([]byte(line), &event) != nil {
+			continue
+		}
+		if event.Type == "" {
+			continue
+		}
+		isJSONL = true
+		if event.Type == "item.completed" && event.Item.Type == "agent_message" {
+			if text := strings.TrimSpace(event.Item.Text); text != "" {
+				parts = append(parts, text)
+			}
+		}
 	}
 
-	output := stdout
-	if parsed.Result != "" {
-		output = parsed.Result
+	if isJSONL && len(parts) > 0 {
+		return strings.Join(parts, "\n"), 0, nil
 	}
-	return output, parsed.TotalCostUSD, nil
+
+	// Not JSONL — return raw.
+	return stdout, 0, nil
 }
 
 func (a *codexAgent) String() string { return fmt.Sprintf("codexAgent(%s)", AgentCodex) }

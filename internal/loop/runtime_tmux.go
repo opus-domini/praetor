@@ -111,7 +111,10 @@ func (r *tmuxRunner) Run(ctx context.Context, spec CommandSpec, runDir, prefix s
 	}
 
 	windowName := tmuxWindowName(spec.WindowHint, prefix)
-	createWindow := exec.Command("tmux", "new-window", "-d", "-P", "-F", "#{window_id}", "-t", r.sessionName+":", "-n", windowName, "bash", wrapperFile)
+	createWindow := exec.Command("tmux", "new-window", "-d", "-P", "-F", "#{window_id}",
+		"-t", r.sessionName+":", "-n", windowName,
+		"-e", "REMAIN_ON_EXIT=on", // pre-set so tmux hook can pick it up
+		"bash", wrapperFile)
 	windowOut, err := createWindow.CombinedOutput()
 	if err != nil {
 		return ProcessResult{}, fmt.Errorf("create tmux window: %w: %s", err, strings.TrimSpace(string(windowOut)))
@@ -119,7 +122,8 @@ func (r *tmuxRunner) Run(ctx context.Context, spec CommandSpec, runDir, prefix s
 	windowID := strings.TrimSpace(string(windowOut))
 
 	// Keep pane visible after the script exits so users can inspect output.
-	_ = exec.Command("tmux", "set-option", "-t", windowID, "remain-on-exit", "on").Run()
+	// Set immediately after creation — minimal race window.
+	_ = exec.Command("tmux", "set-option", "-w", "-t", windowID, "remain-on-exit", "on").Run()
 	// Focus this window so users attaching to the session see live output.
 	_ = exec.Command("tmux", "select-window", "-t", windowID).Run()
 
@@ -210,10 +214,29 @@ func buildTmuxWrapperScript(spec CommandSpec, stdinFile, stdoutFile, stderrFile,
 		dir = "."
 	}
 
+	// Build a short banner showing the binary and key flags (not the prompt).
+	banner := spec.Args[0]
+	for _, arg := range spec.Args[1:] {
+		if strings.HasPrefix(arg, "-") {
+			banner += " " + arg
+		} else if len(arg) < 40 {
+			banner += " " + arg
+		}
+	}
+	if len(banner) > 120 {
+		banner = banner[:120] + "..."
+	}
+
 	return fmt.Sprintf(`#!/usr/bin/env bash
 _exit=1
 trap 'printf "%%s" "$_exit" > %s; tmux wait-for -S %s' EXIT
 set -euo pipefail
+
+# Allow nested agent invocations from within Claude Code sessions.
+unset CLAUDECODE
+
+printf '\033[1;34m▸ %%s\033[0m\n' %s
+printf '\033[2m  dir: %%s\033[0m\n\n' %s
 
 %scd %s
 
@@ -221,6 +244,7 @@ set -euo pipefail
   2> >(tee %s >&2) | tee %s
 _exit="${PIPESTATUS[0]}"
 `, shellQuote(exitFile), shellQuote(channel),
+		shellQuote(banner), shellQuote(dir),
 		envLines,
 		shellQuote(dir),
 		cmdLine, stdinClause,

@@ -53,6 +53,7 @@ func TestBuildTmuxWrapperScriptContainsCommand(t *testing.T) {
 		"'--json'",
 		"'--sandbox'",
 		"'workspace-write'",
+		"codex exec --json --sandbox workspace-write", // banner
 	}
 	for _, needle := range expected {
 		if !strings.Contains(script, needle) {

@@ -99,48 +99,92 @@ func TestCodexAgentBuildCommandWithSystemPrompt(t *testing.T) {
 	}
 }
 
-func TestCodexAgentParseOutputJSON(t *testing.T) {
+func TestCodexAgentParseOutput(t *testing.T) {
 	t.Parallel()
 
+	tests := []struct {
+		name       string
+		stdout     string
+		wantOutput string
+		wantCost   float64
+	}{
+		{
+			name: "JSONL with agent_message",
+			stdout: `{"type":"thread.started","thread_id":"abc123"}` + "\n" +
+				`{"type":"turn.started"}` + "\n" +
+				`{"type":"item.completed","item":{"id":"item_0","type":"reasoning","text":"thinking..."}}` + "\n" +
+				`{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"Hello!"}}` + "\n" +
+				`{"type":"turn.completed","usage":{"input_tokens":100,"output_tokens":10}}`,
+			wantOutput: "Hello!",
+			wantCost:   0,
+		},
+		{
+			name: "multiple agent_message events joined",
+			stdout: `{"type":"item.completed","item":{"type":"agent_message","text":"Part one."}}` + "\n" +
+				`{"type":"item.completed","item":{"type":"agent_message","text":"Part two."}}`,
+			wantOutput: "Part one.\nPart two.",
+			wantCost:   0,
+		},
+		{
+			name:       "plain text fallback",
+			stdout:     "just plain text output",
+			wantOutput: "just plain text output",
+			wantCost:   0,
+		},
+		{
+			name:       "empty output",
+			stdout:     "",
+			wantOutput: "",
+			wantCost:   0,
+		},
+		{
+			name:       "invalid JSON fallback",
+			stdout:     "{invalid json",
+			wantOutput: "{invalid json",
+			wantCost:   0,
+		},
+	}
+
 	agent := &codexAgent{}
-	output, cost, err := agent.ParseOutput(`{"result":"all done","total_cost_usd":0.42}`)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if output != "all done" {
-		t.Fatalf("expected output='all done', got %q", output)
-	}
-	if cost != 0.42 {
-		t.Fatalf("expected cost=0.42, got %f", cost)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			output, cost, err := agent.ParseOutput(tt.stdout)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if output != tt.wantOutput {
+				t.Fatalf("output = %q, want %q", output, tt.wantOutput)
+			}
+			if cost != tt.wantCost {
+				t.Fatalf("cost = %f, want %f", cost, tt.wantCost)
+			}
+		})
 	}
 }
 
-func TestCodexAgentParseOutputPlainText(t *testing.T) {
+func TestCodexAgentString(t *testing.T) {
 	t.Parallel()
-
 	agent := &codexAgent{}
-	output, cost, err := agent.ParseOutput("just plain text output")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if output != "just plain text output" {
-		t.Fatalf("expected plain text pass-through, got %q", output)
-	}
-	if cost != 0 {
-		t.Fatalf("expected zero cost, got %f", cost)
+	if s := agent.String(); s == "" {
+		t.Fatal("expected non-empty string")
 	}
 }
 
-func TestCodexAgentParseOutputInvalidJSON(t *testing.T) {
+func TestCodexAgentParseOutputJSONLNoMessages(t *testing.T) {
 	t.Parallel()
 
+	// Valid JSONL but no agent_message events — returns raw stdout.
 	agent := &codexAgent{}
-	output, cost, err := agent.ParseOutput("{invalid json")
+	stdout := `{"type":"thread.started","thread_id":"abc123"}` + "\n" +
+		`{"type":"turn.started"}` + "\n" +
+		`{"type":"turn.completed","usage":{"input_tokens":100,"output_tokens":10}}`
+	output, cost, err := agent.ParseOutput(stdout)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if output != "{invalid json" {
-		t.Fatalf("expected raw output on invalid JSON, got %q", output)
+	if output != stdout {
+		t.Fatalf("expected raw stdout when no agent messages, got %q", output)
 	}
 	if cost != 0 {
 		t.Fatalf("expected zero cost, got %f", cost)

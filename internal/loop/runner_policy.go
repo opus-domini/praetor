@@ -175,7 +175,9 @@ func (p *IsolationPolicy) Cleanup() {
 	}
 }
 
-// PruneOrphans cleans up worktree metadata from previous crashes.
+// PruneOrphans cleans up stale worktrees and branches from previous crashes.
+// It removes any praetor/* branches and their associated worktrees that were
+// left behind when a process was killed before Cleanup could run.
 func (p *IsolationPolicy) PruneOrphans(ctx context.Context) error {
 	if p.mode == IsolationOff {
 		return nil
@@ -183,9 +185,38 @@ func (p *IsolationPolicy) PruneOrphans(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+
+	// Phase 1: remove orphaned worktree directories under .praetor/worktrees/.
+	worktreeRoot := filepath.Join(p.mainDir, ".praetor", "worktrees")
+	if entries, err := os.ReadDir(worktreeRoot); err == nil {
+		for _, entry := range entries {
+			if !entry.IsDir() {
+				continue
+			}
+			wt := filepath.Join(worktreeRoot, entry.Name())
+			_ = exec.CommandContext(ctx, "git", "-C", p.mainDir, "worktree", "remove", "--force", wt).Run()
+		}
+	}
+
+	// Phase 2: prune git's internal worktree metadata.
 	if out, err := exec.CommandContext(ctx, "git", "-C", p.mainDir, "worktree", "prune").CombinedOutput(); err != nil {
 		return fmt.Errorf("git worktree prune: %w: %s", err, strings.TrimSpace(string(out)))
 	}
+
+	// Phase 3: delete stale praetor/* branches.
+	branchCmd := exec.CommandContext(ctx, "git", "-C", p.mainDir, "branch", "--list", "praetor/*")
+	branchOut, err := branchCmd.Output()
+	if err != nil {
+		return nil //nolint:nilerr // no praetor branches or git error — not fatal
+	}
+	for _, line := range strings.Split(string(branchOut), "\n") {
+		branch := strings.TrimSpace(line)
+		if branch == "" {
+			continue
+		}
+		_ = exec.CommandContext(ctx, "git", "-C", p.mainDir, "branch", "-D", branch).Run()
+	}
+
 	return nil
 }
 

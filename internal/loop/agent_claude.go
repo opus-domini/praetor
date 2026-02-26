@@ -1,6 +1,7 @@
 package loop
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 )
@@ -17,12 +18,11 @@ func (a *claudeAgent) BuildCommand(req AgentRequest) (CommandSpec, error) {
 	args := []string{bin, "-p",
 		"--dangerously-skip-permissions",
 		"--no-session-persistence",
+		"--verbose",
+		"--output-format", "stream-json",
 	}
 	if model := strings.TrimSpace(req.Model); model != "" {
 		args = append(args, "--model", model)
-	}
-	if req.Verbose {
-		args = append(args, "--verbose")
 	}
 	if sp := strings.TrimSpace(req.SystemPrompt); sp != "" {
 		args = append(args, "--append-system-prompt", sp)
@@ -35,8 +35,86 @@ func (a *claudeAgent) BuildCommand(req AgentRequest) (CommandSpec, error) {
 	}, nil
 }
 
+// claudeStreamEvent is one NDJSON event from --output-format stream-json.
+type claudeStreamEvent struct {
+	Type    string  `json:"type"`
+	Subtype string  `json:"subtype,omitempty"`
+	Result  string  `json:"result,omitempty"`
+	CostUSD float64 `json:"cost_usd,omitempty"`
+}
+
 func (a *claudeAgent) ParseOutput(stdout string) (string, float64, error) {
-	return strings.TrimSpace(stdout), 0, nil // Claude cost comes from SDK, not CLI stdout
+	stdout = strings.TrimSpace(stdout)
+	if stdout == "" {
+		return "", 0, nil
+	}
+
+	// stream-json output is NDJSON: one JSON object per line.
+	// Find the last "result" event which contains the final output and cost.
+	var lastResult *claudeStreamEvent
+	for _, line := range strings.Split(stdout, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		var event claudeStreamEvent
+		if json.Unmarshal([]byte(line), &event) != nil {
+			continue
+		}
+		if event.Type == "result" {
+			e := event
+			lastResult = &e
+		}
+	}
+
+	if lastResult != nil {
+		output := strings.TrimSpace(lastResult.Result)
+		if output == "" {
+			// No result text — fall back to collecting all assistant text events.
+			output = collectAssistantText(stdout)
+		}
+		return output, lastResult.CostUSD, nil
+	}
+
+	// No result event found — try to collect assistant text from stream events.
+	if text := collectAssistantText(stdout); text != "" {
+		return text, 0, nil
+	}
+
+	// Not stream-json at all — return raw.
+	return stdout, 0, nil
+}
+
+// collectAssistantText extracts text from assistant message events in stream-json output.
+func collectAssistantText(stdout string) string {
+	var parts []string
+	for _, line := range strings.Split(stdout, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		var event struct {
+			Type    string `json:"type"`
+			Message struct {
+				Content []struct {
+					Type string `json:"type"`
+					Text string `json:"text"`
+				} `json:"content"`
+			} `json:"message"`
+		}
+		if json.Unmarshal([]byte(line), &event) != nil {
+			continue
+		}
+		if event.Type != "assistant" {
+			continue
+		}
+		for _, c := range event.Message.Content {
+			if c.Type == "text" && strings.TrimSpace(c.Text) != "" {
+				parts = append(parts, strings.TrimSpace(c.Text))
+			}
+		}
+	}
+	return strings.Join(parts, "\n")
 }
 
 func (a *claudeAgent) String() string { return fmt.Sprintf("claudeAgent(%s)", AgentClaude) }
