@@ -49,8 +49,10 @@ Status:   in progress
   [x] TASK-002: Add tests
   [x] TASK-003: Update docs
   [ ] TASK-004: Integration tests
-  [ ] TASK-005: Final review
+  [!] TASK-005: Final review (failed, attempt 3)
 ```
+
+Status markers: `[x]` done, `[ ]` pending, `[>]` executing/reviewing, `[!]` failed.
 
 ### List all tracked plans
 
@@ -64,7 +66,7 @@ praetor plan list
 praetor plan reset docs/plans/my-plan.json
 ```
 
-Removes state, lock, retry counters, and feedback files for the plan. Does not delete the plan file itself.
+Removes state, lock, and legacy retry/feedback files for the plan. Does not delete the plan file itself.
 
 ## Plan format
 
@@ -148,43 +150,112 @@ All mutable state is stored under `~/.praetor/projects/<project-hash>/`:
 │       ├── reviewer.*               # Same structure for reviewer
 │       ├── post-hook.stdout         # Post-task hook stdout (if used)
 │       └── post-hook.stderr         # Post-task hook stderr (if used)
-├── retries/        # Retry counters per task signature (.count)
-├── feedback/       # Reviewer feedback per task signature (.txt)
+├── retries/        # Legacy retry counters (migrated into state file on load)
+├── feedback/       # Legacy feedback files (migrated into state file on load)
 ├── costs/          # Cost tracking ledger (tracking.tsv)
 └── checkpoints/    # Audit log (history.tsv) and current state (.state)
 ```
 
 The project hash is derived from the git repository root path (SHA-256), ensuring state isolation between projects.
 
-### Task lifecycle
+### Task state machine
+
+Each task follows an explicit finite state machine with five states and validated transitions. The design adapts Rob Pike's function-as-state pattern for persistence: each state maps to a step function that does its work and returns the next `TaskStatus` to persist.
+
+#### States
+
+| Status | Description | Terminal |
+|--------|-------------|----------|
+| `pending` | Ready to execute (or awaiting retry). | no |
+| `executing` | Executor agent is running. | no |
+| `reviewing` | Reviewer agent is evaluating the result. | no |
+| `done` | Task completed and merged successfully. | yes |
+| `failed` | All retry attempts exhausted. | yes |
+
+#### State diagram
 
 ```
-open ──► executor ──► post-task hook ──► reviewer ──► done
-              │              │                │
-              ▼              ▼                ▼
-         fail/crash     hook failed     review rejected
-              │              │                │
-              └──────────────┴────────────────┘
-                             │
-                        retry (with feedback)
-                             │
-                     ┌───────┴───────┐
-                     ▼               ▼
-               retry limit      next attempt
-               reached          (back to executor)
-                     │
-                     ▼
-                   stuck
+┌───────────┐
+│  pending   │◀─────────────────────────────────┐
+└─────┬──────┘                                  │
+      │ stepExecute                             │
+      ▼                                         │
+┌───────────┐   crash/FAIL     ┌─────────┐     │
+│ executing  │────────────────▶│  guard   │─────┘  attempt < max
+└─────┬──────┘                 │retry ok? │
+      │ PASS                   └────┬─────┘
+      ▼                             │ attempt >= max
+┌───────────┐   reject             ▼
+│ reviewing  │──────────┐    ┌──────────┐
+└─────┬──────┘          │    │  failed   │ (terminal)
+      │ approve         │    └──────────┘
+      ▼                 │
+┌───────────┐           │
+│   done     │           │
+└───────────┘           │
+      ▲                 │
+      └─────────────────┘
+        (retry → pending)
 ```
+
+Tasks with `reviewer = none` skip the `reviewing` state: `executing` transitions directly to `done` on success.
+
+#### Transition table
+
+Every state change is validated against a declarative transition table. Invalid transitions return an error immediately.
+
+```go
+var validTransitions = map[TaskStatus][]TaskStatus{
+    TaskPending:   {TaskExecuting, TaskFailed},
+    TaskExecuting: {TaskReviewing, TaskDone, TaskPending, TaskFailed},
+    TaskReviewing: {TaskDone, TaskPending, TaskFailed},
+    TaskDone:      {},  // terminal
+    TaskFailed:    {},  // terminal
+}
+```
+
+#### Step functions
+
+| Step | Trigger | Outcomes |
+|------|---------|----------|
+| **stepExecute** | Task is `pending` | `executing` → run executor → PASS: `reviewing` (or `done` if no reviewer) / FAIL: `pending` (retry) / crash: `pending` (retry) |
+| **stepReview** | Task is `reviewing` | Run reviewer → PASS: `done` / FAIL: `pending` (retry) / crash: `pending` (retry) |
+| **retryGuard** | Before each step | If `attempt >= maxRetries`: `pending` → `failed` |
+
+#### Crash recovery
+
+On state file load, transient states are reset for crash safety:
+
+- `executing` → `pending` (executor was interrupted)
+- `reviewing` → `pending` (reviewer was interrupted)
+
+This is safe because no partial work is committed to the main branch until a task reaches `done`.
+
+#### Legacy migration
+
+State files using the old `"open"` status are transparently migrated to `"pending"` on load. Retry counts from external files (`retries/*.count`) are absorbed into `StateTask.Attempt`. After migration, the state file is the single source of truth.
+
+#### StateTask fields
+
+```go
+type StateTask struct {
+    // ... plan fields (ID, Title, DependsOn, etc.) ...
+    Status   TaskStatus `json:"status"`              // current state
+    Attempt  int        `json:"attempt,omitempty"`    // retry count (0 = never tried)
+    Feedback string     `json:"feedback,omitempty"`   // last failure feedback
+}
+```
+
+`Attempt` and `Feedback` are embedded in the state file — no external retry/feedback files are needed in the hot path.
 
 ### Dependency resolution
 
 Tasks are selected in order. A task is runnable when:
 
-1. Its status is `open`.
+1. Its status is `pending`.
 2. All tasks in its `depends_on` list have status `done`.
 
-The runner picks the first runnable task. If no task is runnable and open tasks remain, the plan is blocked.
+The runner picks the first runnable task. If no task is runnable and active (non-terminal) tasks remain, the plan is blocked.
 
 ### Locking
 
@@ -192,14 +263,14 @@ Each plan run acquires a PID-based lock file. If the lock holder process is stil
 
 ### Retry mechanism
 
-Each task has a retry counter identified by a SHA-256 signature of its key (ID or index+title). On failure:
+Each task carries its retry state in `StateTask.Attempt` and `StateTask.Feedback`. On failure:
 
-1. Retry counter increments.
-2. Feedback from the reviewer (or hook, or crash message) is persisted.
+1. `Attempt` increments and `Feedback` stores the failure reason (crash message, reviewer rejection, hook output).
+2. The task transitions back to `pending` via a validated state transition.
 3. On the next attempt, the feedback is injected into the executor prompt with emphatic formatting.
-4. When retry count reaches `--max-retries`, the task is stuck and the run stops.
+4. Before each step, a retry guard checks `Attempt >= maxRetries`. If exhausted, the task transitions to `failed` (terminal).
 
-Retry counters and feedback are cleared when a task completes successfully. They persist across process restarts.
+`Attempt` and `Feedback` are cleared when a task completes successfully. They persist across process restarts as part of the state file.
 
 ## Safety mechanisms
 
