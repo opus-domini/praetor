@@ -20,22 +20,21 @@ Built-in providers:
 cmd/praetor/                      CLI entrypoint
 internal/
 ├── agents/                       Central polymorphic Agent interface + adapters (CLI/REST)
-├── cli/                          Cobra command wiring (`plan`, `exec`)
+├── app/                          Bootstrap, dependency wiring, root resolution
+├── cli/                          Cobra command wiring + terminal renderer
 ├── config/                       Config loader (`config.toml`, global + per-project)
 ├── domain/                       Pure domain types (Plan, Task, State, Agent, transitions, graph)
-├── loop/                         Plan runtime (FSM runner, retries, review gates, cognitive agents)
 ├── orchestration/
 │   ├── fsm/                      Generic functional state machine (stateFn pattern)
-│   └── pipeline/                 Plan/Execute/Review phase sequencing rules
-├── orchestrator/                 Legacy single-prompt provider engine
-├── paths/                        XDG and legacy path resolution
+│   └── pipeline/                 Plan/Execute/Review runner, cognitive agents, prompts, runtime composition
 ├── providers/                    Provider catalog and SDK ports
-│   ├── claude/                   Claude CLI adapter
-│   └── codex/                    Codex CLI adapter
+│   ├── claude/                   Claude CLI adapter + AgentSpec
+│   └── codex/                    Codex CLI adapter + AgentSpec
 ├── runtime/
 │   ├── process/                  Non-interactive subprocess execution
-│   └── pty/                      Interactive pseudo-terminal sessions (start/read/write/close)
-├── state/                        Project-local transactional snapshots and root resolvers
+│   ├── pty/                      Interactive pseudo-terminal sessions (start/read/write/close)
+│   └── tmux/                     Tmux-based runner with session management
+├── state/                        Snapshots, checkpoints, locks, XDG paths, migration
 └── workspace/                    Git root resolution and `praetor.{yaml,yml,md}` loading
 ```
 
@@ -50,9 +49,11 @@ Key contents:
 - **Types:** `Agent`, `Plan`, `Task`, `TaskStatus`, `StateTask`, `State`, `RunnerOptions`,
   `AgentRequest`, `AgentResult`, `CommandSpec`, `ProcessResult`, `CostEntry`, `CheckpointEntry`,
   `PlanStatus`, `ExecutorResult`, `ReviewDecision`.
+- **Interfaces:** `AgentSpec`, `ProcessRunner`, `SessionManager`, `AgentRuntime`, `RenderSink`.
 - **Transitions:** `ValidTransitions`, `Transition()`, `IsTerminal()`, `NormalizeStatus()`.
 - **Graph:** `NextRunnableTask()`, `RunnableTasks()`, `BlockedTasksReport()`.
 - **Parsing:** `ParseExecutorResult()`, `ParseReviewDecision()`.
+- **Plan helpers:** `LoadPlan()`, `ValidatePlan()`, `NewPlanFile()`, `PlanChecksum()`.
 
 ## Execution flow
 
@@ -92,12 +93,17 @@ Rob Pike's lexer pattern, generalized with Go generics.
 
 ### Pipeline (`internal/orchestration/pipeline`)
 
-Defines the Plan/Execute/Review/Gate phase sequence and valid transitions between
-phases. Used by the cognitive loop to enforce correct phase ordering.
+Contains the full Plan/Execute/Review orchestration engine:
+
+- **Phase rules:** Plan/Execute/Review/Gate sequence and valid transitions.
+- **Runner:** Dependency-aware plan executor with retries, review gates, and isolation.
+- **Cognitive agents:** Polymorphic `CognitiveAgent` interface for Plan/Execute/Review.
+- **Prompts:** System and task prompt builders for executor, reviewer, and planner.
+- **Runtime composition:** `composedRuntime` (tmux) and `BuildAgentRuntime` factory.
 
 ## Runtime model
 
-`loop.Runner` chooses runtime by mode:
+`pipeline.Runner` chooses runtime by mode:
 
 - `tmux`: classic composed runtime (`codex`/`claude`) with visible tmux windows.
 - `direct` / `pty`: central `agents.Agent` registry runtime (supports CLI + REST backends).

@@ -6,7 +6,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/opus-domini/praetor/internal/loop"
+	"github.com/opus-domini/praetor/internal/domain"
+	localstate "github.com/opus-domini/praetor/internal/state"
 	"github.com/spf13/cobra"
 )
 
@@ -50,7 +51,7 @@ func newPlanCreateCmd() *cobra.Command {
 				return fmt.Errorf("resolve base directory: %w", err)
 			}
 
-			path, err := loop.NewPlanFile(args[0], time.Now(), absRoot)
+			path, err := domain.NewPlanFile(args[0], time.Now(), absRoot)
 			if err != nil {
 				return err
 			}
@@ -83,7 +84,7 @@ func newPlanStatusCmd() *cobra.Command {
 				return err
 			}
 
-			store := loop.NewStore(resolvedStateRoot, "")
+			store := localstate.NewStore(resolvedStateRoot, "")
 			status, err := store.Status(absPlan)
 			if err != nil {
 				return err
@@ -111,7 +112,7 @@ func newPlanListCmd() *cobra.Command {
 				return err
 			}
 
-			store := loop.NewStore(resolvedStateRoot, "")
+			store := localstate.NewStore(resolvedStateRoot, "")
 			statuses, err := store.ListPlanStatuses()
 			if err != nil {
 				return err
@@ -166,7 +167,7 @@ func newPlanResetCmd() *cobra.Command {
 				return fmt.Errorf("resolve plan path: %w", err)
 			}
 
-			plan, err := loop.LoadPlan(absPlan)
+			plan, err := domain.LoadPlan(absPlan)
 			if err != nil {
 				return err
 			}
@@ -176,7 +177,7 @@ func newPlanResetCmd() *cobra.Command {
 				return err
 			}
 
-			store := loop.NewStore(resolvedStateRoot, "")
+			store := localstate.NewStore(resolvedStateRoot, "")
 			running, pid := store.IsPlanRunning(absPlan)
 			if running && !force {
 				return fmt.Errorf("plan is currently running (pid=%d); use --force to reset anyway", pid)
@@ -212,7 +213,7 @@ Original files are preserved as a safety net.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cmd.SilenceUsage = true
-			return loop.MigrateLegacyState(cmd.OutOrStdout(), dryRun)
+			return localstate.MigrateLegacyState(cmd.OutOrStdout(), dryRun)
 		},
 	}
 
@@ -221,14 +222,14 @@ Original files are preserved as a safety net.`,
 }
 
 func resolveStateRoot(explicitRoot, projectDir string) (string, error) {
-	root, err := loop.ResolveStateRoot(explicitRoot, projectDir)
+	root, err := localstate.ResolveStateRoot(explicitRoot, projectDir)
 	if err != nil {
 		return "", err
 	}
 	return root, nil
 }
 
-func printPlanStatus(cmd *cobra.Command, status loop.PlanStatus) error {
+func printPlanStatus(cmd *cobra.Command, status domain.PlanStatus) error {
 	if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Plan:     %s\n", status.PlanFile); err != nil {
 		return err
 	}
@@ -283,13 +284,13 @@ func printPlanStatus(cmd *cobra.Command, status loop.PlanStatus) error {
 	return nil
 }
 
-func taskStatusMark(status loop.TaskStatus) string {
+func taskStatusMark(status domain.TaskStatus) string {
 	switch status {
-	case loop.TaskDone:
+	case domain.TaskDone:
 		return "x"
-	case loop.TaskFailed:
+	case domain.TaskFailed:
 		return "!"
-	case loop.TaskExecuting, loop.TaskReviewing:
+	case domain.TaskExecuting, domain.TaskReviewing:
 		return ">"
 	default:
 		return " "

@@ -134,20 +134,21 @@ internal/
 
 ## Fase 7 — Limpeza final
 
-- [ ] **T19. Deletar stubs de delegação do loop**
-  - `types.go`, `transition.go`, `graph.go`, `parse.go`, `project.go`
-  - São apenas aliases/delegações para `domain/`; consumidores passam a importar direto
+- [x] **T19. Deletar stubs de delegação do loop**
+  - Todos os stubs (types.go, transition.go, graph.go, parse.go, project.go, etc.) removidos com o diretório
 
-- [ ] **T20. Deletar `internal/loop/`**
-  - Diretório deve estar vazio após T01–T19
-  - Confirmar zero referências residuais
+- [x] **T20. Deletar `internal/loop/`**
+  - Diretório removido integralmente — zero referências residuais
+  - Build e testes passam limpo sem loop
 
-- [ ] **T21. Atualizar `internal/cli/` para novos imports**
-  - Substituir todos os `loop.X` por imports dos pacotes destino
-  - `domain.`, `state.`, `pipeline.`, `app.`, `cli.Renderer`
+- [x] **T21. Atualizar `internal/cli/` para novos imports**
+  - `cli/run.go`: `loop` → `domain`, `pipeline`, `workspace`
+  - `cli/plan.go`: `loop` → `domain`, `state`
 
-- [ ] **T22. Atualizar `docs/architecture.md`**
-  - Refletir estrutura final sem `loop/`, `orchestrator/`, `paths/`
+- [x] **T22. Atualizar `docs/architecture.md`**
+  - Package tree atualizado: removidos `loop/`, `orchestrator/`, `paths/`; adicionados `app/`, `runtime/tmux/`
+  - Descrições de `pipeline/`, `domain/`, `providers/` atualizadas
+  - `loop.Runner` → `pipeline.Runner`
 
 - [ ] **T23. Absorver `internal/config/` em `internal/app/`** *(opcional)*
   - Config loading é parte do bootstrap de wiring

@@ -9,7 +9,9 @@ import (
 	"time"
 
 	"github.com/opus-domini/praetor/internal/config"
-	"github.com/opus-domini/praetor/internal/loop"
+	"github.com/opus-domini/praetor/internal/domain"
+	"github.com/opus-domini/praetor/internal/orchestration/pipeline"
+	"github.com/opus-domini/praetor/internal/workspace"
 	"github.com/spf13/cobra"
 )
 
@@ -62,7 +64,7 @@ isolation protects the main branch from partial changes.`,
 					return fmt.Errorf("resolve workdir path: %w", err)
 				}
 			}
-			projectRoot, err := loop.ResolveProjectRoot(absWorkdir)
+			projectRoot, err := workspace.ResolveProjectRoot(absWorkdir)
 			if err != nil {
 				return err
 			}
@@ -134,14 +136,14 @@ isolation protects the main branch from partial changes.`,
 				return errors.New("timeout cannot be negative")
 			}
 
-			runner := loop.NewRunner(nil)
-			runnerOptions := loop.RunnerOptions{
+			runner := pipeline.NewRunner(nil)
+			runnerOptions := domain.RunnerOptions{
 				StateRoot:       resolvedStateRoot,
 				Workdir:         absWorkdir,
-				RunnerMode:      loop.RunnerMode(strings.ToLower(strings.TrimSpace(runnerMode))),
-				DefaultExecutor: loop.Agent(executor),
-				DefaultReviewer: loop.Agent(reviewer),
-				PlannerAgent:    loop.Agent(planner),
+				RunnerMode:      domain.RunnerMode(strings.ToLower(strings.TrimSpace(runnerMode))),
+				DefaultExecutor: domain.Agent(executor),
+				DefaultReviewer: domain.Agent(reviewer),
+				PlannerAgent:    domain.Agent(planner),
 				Objective:       strings.TrimSpace(objective),
 				MaxRetries:      maxRetries,
 				MaxIterations:   maxIterations,
@@ -154,7 +156,7 @@ isolation protects the main branch from partial changes.`,
 				OllamaModel:     ollamaModel,
 				TMUXSession:     tmuxSession,
 				NoColor:         noColor,
-				Isolation:       loop.IsolationMode(strings.ToLower(strings.TrimSpace(isolation))),
+				Isolation:       domain.IsolationMode(strings.ToLower(strings.TrimSpace(isolation))),
 				PostTaskHook:    postTaskHook,
 			}
 
@@ -176,9 +178,9 @@ isolation protects the main branch from partial changes.`,
 		},
 	}
 
-	cmd.Flags().StringVar(&executor, "executor", string(loop.AgentCodex), "Default executor agent: codex, claude, gemini, or ollama")
-	cmd.Flags().StringVar(&reviewer, "reviewer", string(loop.AgentClaude), "Default reviewer agent: codex, claude, gemini, ollama, or none")
-	cmd.Flags().StringVar(&planner, "planner", string(loop.AgentClaude), "Planner agent when --objective is provided: codex, claude, gemini, or ollama")
+	cmd.Flags().StringVar(&executor, "executor", string(domain.AgentCodex), "Default executor agent: codex, claude, gemini, or ollama")
+	cmd.Flags().StringVar(&reviewer, "reviewer", string(domain.AgentClaude), "Default reviewer agent: codex, claude, gemini, ollama, or none")
+	cmd.Flags().StringVar(&planner, "planner", string(domain.AgentClaude), "Planner agent when --objective is provided: codex, claude, gemini, or ollama")
 	cmd.Flags().StringVar(&objective, "objective", "", "Objective text for macro-planning before execution")
 	cmd.Flags().IntVar(&maxRetries, "max-retries", 3, "Maximum retries per task (must be > 0)")
 	cmd.Flags().IntVar(&maxIterations, "max-iterations", 0, "Maximum loop iterations (0 = unlimited)")
@@ -190,11 +192,11 @@ isolation protects the main branch from partial changes.`,
 	cmd.Flags().StringVar(&ollamaURL, "ollama-url", "http://127.0.0.1:11434", "Ollama base URL for REST requests")
 	cmd.Flags().StringVar(&ollamaModel, "ollama-model", "llama3", "Default Ollama model for planner/executor/reviewer when agent=ollama")
 	cmd.Flags().StringVar(&tmuxSession, "tmux-session", "", "tmux session name (default: praetor-<project-hash>)")
-	cmd.Flags().StringVar(&runnerMode, "runner", string(loop.RunnerTMUX), "Runner mode: tmux, pty, or direct")
+	cmd.Flags().StringVar(&runnerMode, "runner", string(domain.RunnerTMUX), "Runner mode: tmux, pty, or direct")
 	cmd.Flags().StringVar(&workdir, "workdir", ".", "Working directory for agents")
 	cmd.Flags().StringVar(&stateRoot, "state-root", "", "State root directory (default: $XDG_STATE_HOME/praetor/projects/<hash>)")
 	cmd.Flags().BoolVar(&noColor, "no-color", false, "Disable colored output")
-	cmd.Flags().StringVar(&isolation, "isolation", string(loop.IsolationWorktree), "Isolation mode: worktree or off")
+	cmd.Flags().StringVar(&isolation, "isolation", string(domain.IsolationWorktree), "Isolation mode: worktree or off")
 	cmd.Flags().StringVar(&postTaskHook, "hook", "", "Script to run after executor, before reviewer")
 	cmd.Flags().DurationVar(&timeout, "timeout", 0, "Run timeout (e.g. 30m, 2h)")
 	return cmd
