@@ -17,13 +17,18 @@ import (
 type Config struct {
 	Executor      string
 	Reviewer      string
+	Planner       string
 	MaxRetries    *int
 	MaxIterations *int
+	Runner        string
 	Isolation     string
 	NoReview      *bool
 	NoColor       *bool
 	CodexBin      string
 	ClaudeBin     string
+	GeminiBin     string
+	OllamaURL     string
+	OllamaModel   string
 	Hook          string
 	Timeout       string
 }
@@ -110,6 +115,9 @@ func configFromMap(section string, m map[string]string) (Config, error) {
 	if v, ok := m["reviewer"]; ok {
 		cfg.Reviewer = strings.TrimSpace(v)
 	}
+	if v, ok := m["planner"]; ok {
+		cfg.Planner = strings.TrimSpace(v)
+	}
 	if v, ok := m["max-retries"]; ok {
 		value, err := strconv.Atoi(strings.TrimSpace(v))
 		if err != nil {
@@ -129,6 +137,9 @@ func configFromMap(section string, m map[string]string) (Config, error) {
 			return Config{}, fmt.Errorf("section %q key %q: cannot be negative", section, "max-iterations")
 		}
 		cfg.MaxIterations = &value
+	}
+	if v, ok := m["runner"]; ok {
+		cfg.Runner = strings.TrimSpace(v)
 	}
 	if v, ok := m["isolation"]; ok {
 		cfg.Isolation = strings.TrimSpace(v)
@@ -152,6 +163,15 @@ func configFromMap(section string, m map[string]string) (Config, error) {
 	}
 	if v, ok := m["claude-bin"]; ok {
 		cfg.ClaudeBin = strings.TrimSpace(v)
+	}
+	if v, ok := m["gemini-bin"]; ok {
+		cfg.GeminiBin = strings.TrimSpace(v)
+	}
+	if v, ok := m["ollama-url"]; ok {
+		cfg.OllamaURL = strings.TrimSpace(v)
+	}
+	if v, ok := m["ollama-model"]; ok {
+		cfg.OllamaModel = strings.TrimSpace(v)
 	}
 	if v, ok := m["hook"]; ok {
 		cfg.Hook = strings.TrimSpace(v)
@@ -180,11 +200,17 @@ func mergeConfig(global, project Config) Config {
 	if project.Reviewer != "" {
 		merged.Reviewer = project.Reviewer
 	}
+	if project.Planner != "" {
+		merged.Planner = project.Planner
+	}
 	if project.MaxRetries != nil {
 		merged.MaxRetries = project.MaxRetries
 	}
 	if project.MaxIterations != nil {
 		merged.MaxIterations = project.MaxIterations
+	}
+	if project.Runner != "" {
+		merged.Runner = project.Runner
 	}
 	if project.Isolation != "" {
 		merged.Isolation = project.Isolation
@@ -200,6 +226,15 @@ func mergeConfig(global, project Config) Config {
 	}
 	if project.ClaudeBin != "" {
 		merged.ClaudeBin = project.ClaudeBin
+	}
+	if project.GeminiBin != "" {
+		merged.GeminiBin = project.GeminiBin
+	}
+	if project.OllamaURL != "" {
+		merged.OllamaURL = project.OllamaURL
+	}
+	if project.OllamaModel != "" {
+		merged.OllamaModel = project.OllamaModel
 	}
 	if project.Hook != "" {
 		merged.Hook = project.Hook

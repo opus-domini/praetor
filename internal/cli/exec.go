@@ -9,24 +9,25 @@ import (
 	"strings"
 	"time"
 
-	"github.com/opus-domini/praetor/internal/orchestrator"
-	"github.com/opus-domini/praetor/internal/providers/claude"
-	"github.com/opus-domini/praetor/internal/providers/codex"
+	"github.com/opus-domini/praetor/internal/agents"
 	"github.com/spf13/cobra"
 )
 
 func newExecCmd() *cobra.Command {
 	var provider string
+	var model string
+	var ollamaURL string
 	var timeout time.Duration
 
 	cmd := &cobra.Command{
 		Use:   "exec [prompt]",
-		Short: "Run a single prompt on a provider",
-		Long: `Run a single prompt on a provider and print the response.
+		Short: "Run a single prompt on an agent",
+		Long: `Run a single prompt on a configured agent and print the response.
 
 Pass the prompt as an argument or pipe it via stdin.`,
 		Example: `  praetor exec "Explain this error"
   praetor exec --provider claude "Refactor this function"
+  praetor exec --provider ollama --model llama3.1 "Summarize this module"
   echo "Reply with OK" | praetor exec`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -45,15 +46,14 @@ Pass the prompt as an argument or pipe it via stdin.`,
 				return err
 			}
 
-			providerID := orchestrator.ProviderID(strings.ToLower(strings.TrimSpace(provider)))
-			p, err := buildProvider(providerID)
-			if err != nil {
-				return err
-			}
-
-			registry := orchestrator.NewRegistry()
-			if err := registry.Register(p); err != nil {
-				return err
+			registry := agents.NewDefaultRegistry(agents.DefaultOptions{
+				OllamaURL:   ollamaURL,
+				OllamaModel: model,
+			})
+			agentID := agents.Normalize(provider)
+			agent, ok := registry.Get(agentID)
+			if !ok {
+				return fmt.Errorf("unknown provider %q (supported: codex, claude, gemini, ollama)", provider)
 			}
 
 			ctx := cmd.Context()
@@ -63,34 +63,25 @@ Pass the prompt as an argument or pipe it via stdin.`,
 				defer cancel()
 			}
 
-			engine := orchestrator.New(registry)
-			result, err := engine.Run(ctx, orchestrator.Request{
-				Provider: providerID,
-				Prompt:   resolvedPrompt,
+			response, err := agent.Execute(ctx, agents.ExecuteRequest{
+				Prompt:  resolvedPrompt,
+				Model:   strings.TrimSpace(model),
+				Workdir: ".",
 			})
 			if err != nil {
 				return err
 			}
 
-			_, err = fmt.Fprintln(cmd.OutOrStdout(), result.Response)
+			_, err = fmt.Fprintln(cmd.OutOrStdout(), response.Output)
 			return err
 		},
 	}
 
-	cmd.Flags().StringVar(&provider, "provider", string(orchestrator.ProviderCodex), "Provider: codex or claude")
+	cmd.Flags().StringVar(&provider, "provider", string(agents.Codex), "Provider: codex, claude, gemini or ollama")
+	cmd.Flags().StringVar(&model, "model", "", "Model name (provider-specific)")
+	cmd.Flags().StringVar(&ollamaURL, "ollama-url", "http://127.0.0.1:11434", "Ollama base URL when --provider ollama")
 	cmd.Flags().DurationVar(&timeout, "timeout", 0, "Timeout (e.g. 30s, 5m)")
 	return cmd
-}
-
-func buildProvider(id orchestrator.ProviderID) (orchestrator.Provider, error) {
-	switch id {
-	case orchestrator.ProviderClaude:
-		return claude.NewProvider(claude.Options{}), nil
-	case orchestrator.ProviderCodex:
-		return codex.NewProvider(codex.CodexOptions{})
-	default:
-		return nil, fmt.Errorf("unknown provider %q (supported: claude, codex)", id)
-	}
 }
 
 func readPrompt(flagPrompt string, in io.Reader, interactive bool) (string, error) {

@@ -60,6 +60,10 @@ func (r *Runner) applyTaskOutcome(ctx context.Context, run *activeRun, selected 
 		}); err != nil {
 			return false, err
 		}
+		_ = run.appendSnapshotEvent("task_canceled", selected.task.ID, outcome.message)
+		if err := run.persistSnapshot("task_canceled", outcome.message); err != nil {
+			return false, err
+		}
 		return false, outcome.cancelErr
 
 	case taskOutcomeRetry:
@@ -91,6 +95,10 @@ func (r *Runner) applyTaskOutcome(ctx context.Context, run *activeRun, selected 
 		}); err != nil {
 			return false, err
 		}
+		_ = run.appendSnapshotEvent(outcome.status, selected.task.ID, outcome.message)
+		if err := run.persistSnapshot("task_retry", outcome.message); err != nil {
+			return false, err
+		}
 
 		renderArgs := append([]any{}, outcome.renderArgs...)
 		renderArgs = append(renderArgs, task.Attempt, run.options.MaxRetries)
@@ -113,6 +121,10 @@ func (r *Runner) applyTaskOutcome(ctx context.Context, run *activeRun, selected 
 		}
 		run.stats.TasksDone++
 		run.stats.Iterations++
+		_ = run.appendSnapshotEvent("task_completed", selected.task.ID, outcome.message)
+		if err := run.persistSnapshot("task_completed", outcome.message); err != nil {
+			return false, err
+		}
 		run.render.Success(fmt.Sprintf(outcome.renderFormat, outcome.renderArgs...))
 		return false, nil
 	}

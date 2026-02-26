@@ -8,13 +8,18 @@ import (
 var allowedKeys = map[string]struct{}{
 	"executor":       {},
 	"reviewer":       {},
+	"planner":        {},
 	"max-retries":    {},
 	"max-iterations": {},
+	"runner":         {},
 	"isolation":      {},
 	"no-review":      {},
 	"no-color":       {},
 	"codex-bin":      {},
 	"claude-bin":     {},
+	"gemini-bin":     {},
+	"ollama-url":     {},
+	"ollama-model":   {},
 	"hook":           {},
 	"timeout":        {},
 }

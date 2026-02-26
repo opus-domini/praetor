@@ -13,17 +13,23 @@ type Agent string
 const (
 	AgentClaude Agent = Agent(providers.Claude)
 	AgentCodex  Agent = Agent(providers.Codex)
+	AgentGemini Agent = "gemini"
+	AgentOllama Agent = "ollama"
 	AgentNone   Agent = "none"
 )
 
 var validExecutors = map[Agent]struct{}{
 	AgentClaude: {},
 	AgentCodex:  {},
+	AgentGemini: {},
+	AgentOllama: {},
 }
 
 var validReviewers = map[Agent]struct{}{
 	AgentClaude: {},
 	AgentCodex:  {},
+	AgentGemini: {},
+	AgentOllama: {},
 	AgentNone:   {},
 }
 
@@ -124,20 +130,35 @@ type RunnerOptions struct {
 	StateRoot       string
 	CacheRoot       string
 	Workdir         string
+	RunnerMode      RunnerMode
 	DefaultExecutor Agent
 	DefaultReviewer Agent
+	PlannerAgent    Agent
+	Objective       string
 	MaxRetries      int
 	MaxIterations   int
 	SkipReview      bool
 	Force           bool
 	CodexBin        string
 	ClaudeBin       string
+	GeminiBin       string
+	OllamaURL       string
+	OllamaModel     string
 	TMUXSession     string
 	Verbose         bool
 	NoColor         bool
 	Isolation       IsolationMode
 	PostTaskHook    string
 }
+
+// RunnerMode controls how external agent commands are executed.
+type RunnerMode string
+
+const (
+	RunnerTMUX   RunnerMode = "tmux"
+	RunnerPTY    RunnerMode = "pty"
+	RunnerDirect RunnerMode = "direct"
+)
 
 // IsolationMode controls how tasks are isolated from the main working tree.
 type IsolationMode string
