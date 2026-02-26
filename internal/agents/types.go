@@ -50,6 +50,7 @@ type PlanRequest struct {
 type PlanResponse struct {
 	Manifest  json.RawMessage
 	Output    string
+	Model     string
 	CostUSD   float64
 	DurationS float64
 	Strategy  string
@@ -69,6 +70,7 @@ type ExecuteRequest struct {
 // ExecuteResponse is the standardized execution result.
 type ExecuteResponse struct {
 	Output    string
+	Model     string
 	CostUSD   float64
 	DurationS float64
 	Strategy  string

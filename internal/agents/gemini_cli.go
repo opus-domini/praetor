@@ -8,8 +8,9 @@ import (
 	"time"
 )
 
-// GeminiCLI is a CLI-backed Agent implementation.
-// It assumes a `gemini -p` style prompt API.
+// GeminiCLI is a CLI-backed Agent implementation using the `gemini` CLI.
+// Execute uses `gemini -p <prompt>` (one-shot, no PTY).
+// Plan and Review use `gemini -p` with stdin + PTY (streaming).
 type GeminiCLI struct {
 	Binary string
 	Runner CommandRunner
@@ -52,11 +53,35 @@ func (a *GeminiCLI) Plan(ctx context.Context, req PlanRequest) (PlanResponse, er
 }
 
 func (a *GeminiCLI) Execute(ctx context.Context, req ExecuteRequest) (ExecuteResponse, error) {
-	resp, err := a.run(ctx, req.Workdir, req.Model, combinePrompt(req.SystemPrompt, req.Prompt), req.RunDir, req.OutputPrefix, req.TaskLabel)
-	if err != nil {
-		return ExecuteResponse{}, err
+	start := time.Now()
+	model := strings.TrimSpace(req.Model)
+
+	args := []string{a.Binary, "-p"}
+	if model != "" {
+		args = append(args, "--model", model)
 	}
-	return ExecuteResponse{Output: resp.Output, DurationS: resp.DurationS, Strategy: resp.Strategy}, nil
+	args = append(args, strings.TrimSpace(combinePrompt(req.SystemPrompt, req.Prompt)))
+
+	result, err := a.Runner.Run(ctx, CommandSpec{
+		Args:         args,
+		Dir:          strings.TrimSpace(req.Workdir),
+		UsePTY:       false,
+		RunDir:       strings.TrimSpace(req.RunDir),
+		OutputPrefix: strings.TrimSpace(req.OutputPrefix),
+		WindowHint:   strings.TrimSpace(req.TaskLabel),
+	})
+	if err != nil {
+		return ExecuteResponse{DurationS: time.Since(start).Seconds()}, err
+	}
+	if result.ExitCode != 0 {
+		return ExecuteResponse{DurationS: time.Since(start).Seconds()}, fmt.Errorf("gemini exit code %d: %s", result.ExitCode, tailText(result.Stderr, 20))
+	}
+	return ExecuteResponse{
+		Output:    strings.TrimSpace(result.Stdout),
+		Model:     model,
+		DurationS: time.Since(start).Seconds(),
+		Strategy:  result.Strategy,
+	}, nil
 }
 
 func (a *GeminiCLI) Review(ctx context.Context, req ReviewRequest) (ReviewResponse, error) {
@@ -89,5 +114,5 @@ func (a *GeminiCLI) run(ctx context.Context, workdir, model, prompt, runDir, out
 	if result.ExitCode != 0 {
 		return PlanResponse{DurationS: time.Since(start).Seconds()}, fmt.Errorf("gemini exit code %d: %s", result.ExitCode, tailText(result.Stderr, 20))
 	}
-	return PlanResponse{Output: strings.TrimSpace(result.Stdout), DurationS: time.Since(start).Seconds(), Strategy: result.Strategy}, nil
+	return PlanResponse{Output: strings.TrimSpace(result.Stdout), Model: model, DurationS: time.Since(start).Seconds(), Strategy: result.Strategy}, nil
 }

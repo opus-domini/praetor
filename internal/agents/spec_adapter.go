@@ -79,6 +79,7 @@ func (a *SpecAdapter) Execute(ctx context.Context, req ExecuteRequest) (ExecuteR
 	}
 	return ExecuteResponse{
 		Output:    strings.TrimSpace(result.Output),
+		Model:     strings.TrimSpace(req.Model),
 		CostUSD:   result.CostUSD,
 		DurationS: time.Since(start).Seconds(),
 		Strategy:  string(result.Strategy),

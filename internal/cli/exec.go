@@ -18,6 +18,7 @@ func newExecCmd() *cobra.Command {
 	var model string
 	var ollamaURL string
 	var timeout time.Duration
+	var quiet bool
 
 	cmd := &cobra.Command{
 		Use:   "exec [prompt]",
@@ -28,6 +29,7 @@ Pass the prompt as an argument or pipe it via stdin.`,
 		Example: `  praetor exec "Explain this error"
   praetor exec --provider claude "Refactor this function"
   praetor exec --provider ollama --model llama3.1 "Summarize this module"
+  praetor exec -q "Explain this error"
   echo "Reply with OK" | praetor exec`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -72,8 +74,17 @@ Pass the prompt as an argument or pipe it via stdin.`,
 				return err
 			}
 
-			_, err = fmt.Fprintln(cmd.OutOrStdout(), response.Output)
-			return err
+			stdout := cmd.OutOrStdout()
+			_, err = fmt.Fprintln(stdout, response.Output)
+			if err != nil {
+				return err
+			}
+
+			if !quiet {
+				r := NewRenderer(stdout, false)
+				r.Dim(formatExecMeta(provider, response.Model, response.DurationS, response.CostUSD))
+			}
+			return nil
 		},
 	}
 
@@ -81,7 +92,21 @@ Pass the prompt as an argument or pipe it via stdin.`,
 	cmd.Flags().StringVar(&model, "model", "", "Model name (provider-specific)")
 	cmd.Flags().StringVar(&ollamaURL, "ollama-url", "http://127.0.0.1:11434", "Ollama base URL when --provider ollama")
 	cmd.Flags().DurationVar(&timeout, "timeout", 0, "Timeout (e.g. 30s, 5m)")
+	cmd.Flags().BoolVarP(&quiet, "quiet", "q", false, "Print only the agent output (no metadata)")
 	return cmd
+}
+
+func formatExecMeta(provider, model string, durationS, costUSD float64) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "provider=%s", provider)
+	if model != "" {
+		fmt.Fprintf(&b, " model=%s", model)
+	}
+	fmt.Fprintf(&b, " duration=%.1fs", durationS)
+	if costUSD > 0 {
+		fmt.Fprintf(&b, " cost=$%.4f", costUSD)
+	}
+	return b.String()
 }
 
 func readPrompt(flagPrompt string, in io.Reader, interactive bool) (string, error) {

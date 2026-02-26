@@ -9,7 +9,9 @@ import (
 	"time"
 )
 
-// ClaudeCLI is a CLI-backed Agent implementation using `claude -p --output-format stream-json`.
+// ClaudeCLI is a CLI-backed Agent implementation using the `claude` CLI.
+// Execute uses `claude -p --output-format json` (one-shot, no PTY).
+// Plan and Review use `claude -p --output-format stream-json` (streaming, PTY).
 type ClaudeCLI struct {
 	Binary string
 	Runner CommandRunner
@@ -61,15 +63,42 @@ func (a *ClaudeCLI) Plan(ctx context.Context, req PlanRequest) (PlanResponse, er
 }
 
 func (a *ClaudeCLI) Execute(ctx context.Context, req ExecuteRequest) (ExecuteResponse, error) {
-	resp, err := a.run(ctx, req.Workdir, req.Model, req.SystemPrompt, req.Prompt, req.RunDir, req.OutputPrefix, req.TaskLabel)
+	start := time.Now()
+	model := strings.TrimSpace(req.Model)
+
+	args := []string{a.Binary, "-p", "--output-format", "json"}
+	if model != "" {
+		args = append(args, "--model", model)
+	}
+	if sp := strings.TrimSpace(req.SystemPrompt); sp != "" {
+		args = append(args, "--append-system-prompt", sp)
+	}
+	args = append(args, strings.TrimSpace(req.Prompt))
+
+	result, err := a.Runner.Run(ctx, CommandSpec{
+		Args:         args,
+		Dir:          strings.TrimSpace(req.Workdir),
+		UsePTY:       false,
+		RunDir:       strings.TrimSpace(req.RunDir),
+		OutputPrefix: strings.TrimSpace(req.OutputPrefix),
+		WindowHint:   strings.TrimSpace(req.TaskLabel),
+	})
 	if err != nil {
-		return ExecuteResponse{}, err
+		return ExecuteResponse{DurationS: time.Since(start).Seconds()}, err
+	}
+	if result.ExitCode != 0 {
+		return ExecuteResponse{DurationS: time.Since(start).Seconds()}, fmt.Errorf("claude exit code %d: %s", result.ExitCode, tailText(result.Stderr, 20))
+	}
+	parsed := parseClaudeOutput(result.Stdout)
+	if parsed.Model != "" {
+		model = parsed.Model
 	}
 	return ExecuteResponse{
-		Output:    resp.Output,
-		CostUSD:   resp.CostUSD,
-		DurationS: resp.DurationS,
-		Strategy:  resp.Strategy,
+		Output:    parsed.Output,
+		Model:     model,
+		CostUSD:   parsed.CostUSD,
+		DurationS: time.Since(start).Seconds(),
+		Strategy:  result.Strategy,
 	}, nil
 }
 
@@ -119,40 +148,73 @@ func (a *ClaudeCLI) run(ctx context.Context, workdir, model, systemPrompt, promp
 	if result.ExitCode != 0 {
 		return PlanResponse{DurationS: time.Since(start).Seconds()}, fmt.Errorf("claude exit code %d: %s", result.ExitCode, tailText(result.Stderr, 20))
 	}
-	output, cost := parseClaudeOutput(result.Stdout)
+	output, cost := parseStreamOutput(result.Stdout)
 	return PlanResponse{
 		Output:    output,
+		Model:     model,
 		CostUSD:   cost,
 		DurationS: time.Since(start).Seconds(),
 		Strategy:  result.Strategy,
 	}, nil
 }
 
-type claudeStreamEvent struct {
-	Type    string  `json:"type"`
-	Result  string  `json:"result,omitempty"`
-	CostUSD float64 `json:"cost_usd,omitempty"`
-	Message struct {
-		Content []struct {
-			Type string `json:"type"`
-			Text string `json:"text"`
-		} `json:"content"`
-	} `json:"message"`
+// parseClaudeOutput parses the single JSON object from `claude -p --output-format json`.
+func parseClaudeOutput(stdout string) claudeParsed {
+	stdout = strings.TrimSpace(stdout)
+	if stdout == "" {
+		return claudeParsed{}
+	}
+	var resp struct {
+		Result  string  `json:"result"`
+		Model   string  `json:"model"`
+		CostUSD float64 `json:"cost_usd"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &resp); err != nil {
+		return claudeParsed{Output: stdout}
+	}
+	output := strings.TrimSpace(resp.Result)
+	if output == "" {
+		output = stdout
+	}
+	return claudeParsed{
+		Output:  output,
+		Model:   strings.TrimSpace(resp.Model),
+		CostUSD: resp.CostUSD,
+	}
 }
 
-func parseClaudeOutput(stdout string) (string, float64) {
+type claudeParsed struct {
+	Output  string
+	Model   string
+	CostUSD float64
+}
+
+// parseStreamOutput parses JSONL from `claude -p --output-format stream-json`.
+// Used by run() for the plan pipeline.
+func parseStreamOutput(stdout string) (string, float64) {
 	stdout = strings.TrimSpace(stdout)
 	if stdout == "" {
 		return "", 0
 	}
-	var lastResult *claudeStreamEvent
+	type streamEvent struct {
+		Type    string  `json:"type"`
+		Result  string  `json:"result,omitempty"`
+		CostUSD float64 `json:"cost_usd,omitempty"`
+		Message struct {
+			Content []struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			} `json:"content"`
+		} `json:"message"`
+	}
+	var lastResult *streamEvent
 	var assistantText []string
 	for _, line := range strings.Split(stdout, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
 		}
-		event := claudeStreamEvent{}
+		event := streamEvent{}
 		if json.Unmarshal([]byte(line), &event) != nil {
 			continue
 		}

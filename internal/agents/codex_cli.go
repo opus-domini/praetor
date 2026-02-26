@@ -66,6 +66,7 @@ func (a *CodexCLI) Execute(ctx context.Context, req ExecuteRequest) (ExecuteResp
 	}
 	return ExecuteResponse{
 		Output:    resp.Output,
+		Model:     resp.Model,
 		CostUSD:   resp.CostUSD,
 		DurationS: resp.DurationS,
 		Strategy:  resp.Strategy,
@@ -118,28 +119,39 @@ func (a *CodexCLI) run(ctx context.Context, workdir, model, prompt, runDir, outp
 		return PlanResponse{DurationS: time.Since(start).Seconds()}, fmt.Errorf("codex exit code %d: %s", result.ExitCode, tailText(result.Stderr, 20))
 	}
 
-	output := parseCodexOutput(result.Stdout)
+	parsed := parseCodexOutput(result.Stdout)
+	if parsed.Model != "" {
+		model = parsed.Model
+	}
 	return PlanResponse{
-		Output:    output,
+		Output:    parsed.Output,
+		Model:     model,
 		DurationS: time.Since(start).Seconds(),
 		Strategy:  result.Strategy,
 	}, nil
 }
 
 type codexStreamEvent struct {
-	Type string `json:"type"`
-	Item struct {
+	Type  string `json:"type"`
+	Model string `json:"model,omitempty"`
+	Item  struct {
 		Type string `json:"type"`
 		Text string `json:"text"`
 	} `json:"item,omitempty"`
 }
 
-func parseCodexOutput(stdout string) string {
+type codexParsed struct {
+	Output string
+	Model  string
+}
+
+func parseCodexOutput(stdout string) codexParsed {
 	stdout = strings.TrimSpace(stdout)
 	if stdout == "" {
-		return ""
+		return codexParsed{}
 	}
 	var parts []string
+	var model string
 	isJSONL := false
 	for _, line := range strings.Split(stdout, "\n") {
 		line = strings.TrimSpace(line)
@@ -154,6 +166,9 @@ func parseCodexOutput(stdout string) string {
 			continue
 		}
 		isJSONL = true
+		if event.Model != "" {
+			model = event.Model
+		}
 		if event.Type == "item.completed" && event.Item.Type == "agent_message" {
 			if text := strings.TrimSpace(event.Item.Text); text != "" {
 				parts = append(parts, text)
@@ -161,9 +176,9 @@ func parseCodexOutput(stdout string) string {
 		}
 	}
 	if isJSONL && len(parts) > 0 {
-		return strings.Join(parts, "\n")
+		return codexParsed{Output: strings.Join(parts, "\n"), Model: model}
 	}
-	return stdout
+	return codexParsed{Output: stdout, Model: model}
 }
 
 func tailText(input string, maxLines int) string {
