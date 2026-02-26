@@ -69,6 +69,7 @@ Pass the prompt as an argument or pipe it via stdin.`,
 				Prompt:  resolvedPrompt,
 				Model:   strings.TrimSpace(model),
 				Workdir: ".",
+				OneShot: true,
 			})
 			if err != nil {
 				return err

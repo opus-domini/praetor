@@ -63,6 +63,23 @@ func (a *ClaudeCLI) Plan(ctx context.Context, req PlanRequest) (PlanResponse, er
 }
 
 func (a *ClaudeCLI) Execute(ctx context.Context, req ExecuteRequest) (ExecuteResponse, error) {
+	if req.OneShot {
+		return a.executeOneShot(ctx, req)
+	}
+	resp, err := a.run(ctx, req.Workdir, req.Model, req.SystemPrompt, req.Prompt, req.RunDir, req.OutputPrefix, req.TaskLabel)
+	if err != nil {
+		return ExecuteResponse{}, err
+	}
+	return ExecuteResponse{
+		Output:    resp.Output,
+		Model:     resp.Model,
+		CostUSD:   resp.CostUSD,
+		DurationS: resp.DurationS,
+		Strategy:  resp.Strategy,
+	}, nil
+}
+
+func (a *ClaudeCLI) executeOneShot(ctx context.Context, req ExecuteRequest) (ExecuteResponse, error) {
 	start := time.Now()
 	model := strings.TrimSpace(req.Model)
 

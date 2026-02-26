@@ -65,6 +65,7 @@ type ExecuteRequest struct {
 	RunDir       string
 	OutputPrefix string
 	TaskLabel    string
+	OneShot      bool // true = one-shot terminal (praetor exec); false = streaming/PTY (plan pipeline)
 }
 
 // ExecuteResponse is the standardized execution result.
