@@ -165,7 +165,8 @@ isolation protects the main branch from partial changes.`,
 				defer cancel()
 			}
 
-			stats, err := runner.Run(ctx, cmd.OutOrStdout(), absPlan, runnerOptions)
+			render := NewRenderer(cmd.OutOrStdout(), noColor)
+			stats, err := runner.Run(ctx, render, absPlan, runnerOptions)
 			if err != nil {
 				return err
 			}

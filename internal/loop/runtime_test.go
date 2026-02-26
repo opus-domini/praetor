@@ -1,41 +1,9 @@
 package loop
 
 import (
-	"context"
 	"strings"
 	"testing"
 )
-
-func TestComposedRuntimeUnsupportedAgent(t *testing.T) {
-	t.Parallel()
-
-	rt := newComposedRuntime(defaultAgents(), &directRunner{})
-	_, err := rt.Run(context.Background(), AgentRequest{
-		Agent:  Agent("unknown-agent"),
-		Prompt: "test",
-	})
-	if err == nil {
-		t.Fatal("expected unsupported agent error")
-	}
-	if !strings.Contains(err.Error(), "unsupported agent") {
-		t.Fatalf("unexpected error: %v", err)
-	}
-}
-
-func TestComposedRuntimeSessionManagerDelegation(t *testing.T) {
-	t.Parallel()
-
-	// directRunner does not implement SessionManager.
-	rt := newComposedRuntime(defaultAgents(), &directRunner{})
-	if err := rt.EnsureSession(); err != nil {
-		t.Fatalf("expected no error from non-session runner: %v", err)
-	}
-	if name := rt.SessionName(); name != "" {
-		t.Fatalf("expected empty session name from non-session runner, got %q", name)
-	}
-	// Cleanup should be a no-op.
-	rt.Cleanup()
-}
 
 func TestBuildTmuxWrapperScriptContainsCommand(t *testing.T) {
 	t.Parallel()

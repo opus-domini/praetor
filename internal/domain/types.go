@@ -275,6 +275,20 @@ type CheckpointEntry struct {
 	Message   string
 }
 
+// RenderSink is the interface for structured terminal output.
+// It decouples the orchestration pipeline from the concrete renderer implementation.
+type RenderSink interface {
+	Header(title string)
+	KV(label, value string)
+	Task(progress, label, title string)
+	Phase(phase, agent, detail string)
+	Info(message string)
+	Success(message string)
+	Warn(message string)
+	Error(message string)
+	Summary(done, rejected, iterations int, totalCostUSD float64, totalDuration time.Duration)
+}
+
 // PlanStatus describes execution status of a plan.
 type PlanStatus struct {
 	PlanFile  string

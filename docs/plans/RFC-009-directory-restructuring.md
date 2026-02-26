@@ -78,24 +78,27 @@ internal/
   - `LoadPlan`, `ValidatePlan`, `NewPlanFile` adicionados a `domain/plan.go`
   - `loop/plan.go` reduzido a delegações
 
-- [ ] **T08. Mover tipos cognitivos para `internal/orchestration/pipeline/`**
-  - `loop/cognitive_agent.go`: `CognitiveAgent`, `PlanRequest`, `ExecuteRequest`, `ReviewRequest`
-  - Inclui `NewCognitiveAgent` e implementação `runtimeCognitiveAgent`
+- [x] **T08. Mover tipos cognitivos para `internal/orchestration/pipeline/`**
+  - Criado `pipeline/cognitive.go` com `CognitiveAgent`, `PlanRequest`, `ExecuteRequest`, `ReviewRequest`, `NewCognitiveAgent`, `ExtractJSONObject`
+  - `loop/cognitive_agent.go` reduzido a aliases e delegação
 
-- [ ] **T09. Mover prompts para `internal/orchestration/pipeline/`**
-  - `loop/prompts.go`: builders de system prompts (executor, reviewer, planner)
-  - Regras de prompt pertencem ao pipeline cognitivo
+- [x] **T09. Mover prompts para `internal/orchestration/pipeline/`**
+  - Criado `pipeline/prompts.go` com `BuildExecutorSystemPrompt`, `BuildExecutorTaskPrompt`, `BuildReviewerSystemPrompt`, `BuildReviewerTaskPrompt`, `TruncateOutput`
+  - `loop/prompts.go` reduzido a delegações
 
 ## Fase 4 — Extrair runner e policies do loop
 
-- [ ] **T10. Mover runner para `internal/orchestration/pipeline/`**
-  - `loop/runner.go`, `loop/runner_outcome.go`, `loop/runner_policy.go`
-  - ~1200 linhas — motor central do pipeline Plan/Execute/Review
-  - Maior tarefa da migração; requer atenção a dependências circulares
+- [x] **T10. Mover runner para `internal/orchestration/pipeline/`**
+  - Criados `pipeline/runner.go`, `pipeline/runner_outcome.go`, `pipeline/runner_policy.go`
+  - ~1200 linhas movidas com todas as referências atualizadas para `domain.`, `localstate.`, `workspace.`
+  - Testes movidos para `pipeline/runner_test.go` e `pipeline/runtime_composed_test.go`
+  - `loop/runner.go` reduzido a alias `Runner = pipeline.Runner`
 
-- [ ] **T11. Mover output/renderer para `internal/cli/`**
-  - `loop/output.go`: `Renderer`, `NewRenderer`, métodos de formatação
-  - Renderização de terminal pertence à camada de apresentação
+- [x] **T11. Mover output/renderer para `internal/cli/`**
+  - Criada interface `domain.RenderSink` desacoplando pipeline do renderer concreto
+  - Criado `cli/render.go` com `Renderer` implementando `domain.RenderSink`
+  - `loop/output.go` reduzido a alias `RenderSink = domain.RenderSink`
+  - `Runner.Run` alterado para aceitar `domain.RenderSink` em vez de `io.Writer`
 
 ## Fase 5 — Extrair runtimes do loop
 
@@ -111,11 +114,13 @@ internal/
   - Criado `runtime/tmux/runner.go` com `Runner` + `NewRunner()` + `SessionManager`
   - `loop/runtime_tmux.go` reduzido a wrapper com delegates
 
-- [ ] **T15. Mover runtime composition para `internal/orchestration/pipeline/`**
-  - `loop/runtime.go`: `composedRuntime`, `defaultAgents()` — montagem de runtime por modo
+- [x] **T15. Mover runtime composition para `internal/orchestration/pipeline/`**
+  - Criado `pipeline/runtime_composed.go` com `composedRuntime`, `defaultAgents()`, `BuildAgentRuntime`
+  - `loop/runtime.go` esvaziado (sem chamadores restantes no loop)
 
-- [ ] **T16. Mover runtime_agents bridge para `internal/agents/`**
-  - `loop/runtime_agents.go`: `registryRuntime` faz ponte entre `agents.Registry` e `AgentRuntime`
+- [x] **T16. Mover runtime_agents bridge para `internal/agents/`**
+  - Criado `agents/loop_runtime.go` com `RegistryRuntime`, `NewRegistryRuntime`
+  - `loop/runtime_agents.go` esvaziado (sem chamadores restantes no loop)
 
 ## Fase 6 — Extrair agent specs para providers
 
