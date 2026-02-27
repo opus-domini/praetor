@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 
+	"github.com/opus-domini/praetor/internal/cli/branding"
 	localstate "github.com/opus-domini/praetor/internal/state"
 	"github.com/spf13/cobra"
 )
@@ -17,9 +18,7 @@ func NewRootCmd() *cobra.Command {
 	root := &cobra.Command{
 		Use:   "praetor",
 		Short: "Lead. Delegate. Dominate.",
-		Long: fmt.Sprintf(`Praetor orchestrates AI agents through a single command surface.
-
-Home: %s  (override: $PRAETOR_HOME)`, homePath),
+		Long:  fmt.Sprintf("%s\nPraetor orchestrates AI agents through a single command surface.\n\nHome: %s  (override: $PRAETOR_HOME)", branding.ASCIILogo, homePath),
 		// Print help instead of a cryptic "unknown command" error.
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return cmd.Help()
