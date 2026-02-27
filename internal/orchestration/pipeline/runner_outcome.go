@@ -35,6 +35,7 @@ type taskOutcome struct {
 	feedback     string
 	metrics      []domain.CostEntry
 	rollback     bool
+	forceFailed  bool
 	renderLevel  string
 	renderFormat string
 	renderArgs   []any
@@ -71,13 +72,18 @@ func (r *Runner) applyTaskOutcome(ctx context.Context, run *activeRun, selected 
 	case taskOutcomeRetry:
 		run.stats.TasksRejected++
 		task := &run.state.Tasks[selected.index]
-		task.Attempt++
 		task.Feedback = outcome.feedback
 
 		// Check if retries are exhausted.
 		nextStatus := domain.TaskPending
-		if task.Attempt >= run.options.MaxRetries {
+		if outcome.forceFailed {
 			nextStatus = domain.TaskFailed
+			task.Attempt = run.options.MaxRetries
+		} else {
+			task.Attempt++
+			if task.Attempt >= run.options.MaxRetries {
+				nextStatus = domain.TaskFailed
+			}
 		}
 
 		if err := run.transitions.TransitionTask(&run.state, selected.index, nextStatus); err != nil {

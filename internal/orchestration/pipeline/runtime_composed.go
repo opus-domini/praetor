@@ -46,13 +46,21 @@ type RuntimeDeps struct {
 }
 
 // defaultLogger sends log entries to the standard logger.
-type defaultLogger struct{}
+type defaultLogger struct {
+	verbose bool
+}
 
-func (defaultLogger) Log(entry middleware.LogEntry) {
+func (l defaultLogger) Log(entry middleware.LogEntry) {
+	if entry.Status == "ok" && !l.verbose {
+		return
+	}
 	if entry.Error != "" {
 		log.Printf("[%s] agent=%s role=%s status=%s error=%q duration=%.1fs cost=$%.4f",
 			entry.Timestamp, entry.Agent, entry.Role, entry.Status, entry.Error, entry.DurationS, entry.CostUSD)
+		return
 	}
+	log.Printf("[%s] agent=%s role=%s status=%s duration=%.1fs cost=$%.4f",
+		entry.Timestamp, entry.Agent, entry.Role, entry.Status, entry.DurationS, entry.CostUSD)
 }
 
 // BuildAgentRuntime creates the unified agents runtime for all runner modes,
@@ -75,7 +83,7 @@ func BuildAgentRuntimeWithDeps(opts domain.RunnerOptions, deps RuntimeDeps) (dom
 	var rt domain.AgentRuntime = registry
 	policy := buildFallbackPolicy(opts)
 	if !policy.IsEmpty() {
-		rt = agentruntime.NewFallbackRuntime(registry, policy)
+		rt = agentruntime.NewFallbackRuntime(registry, policy, deps.EventSink)
 	}
 
 	// Phase 3+4: Middleware chain (logging + metrics)
@@ -85,7 +93,7 @@ func BuildAgentRuntimeWithDeps(opts domain.RunnerOptions, deps RuntimeDeps) (dom
 	}
 	logger := deps.Logger
 	if logger == nil {
-		logger = defaultLogger{}
+		logger = defaultLogger{verbose: opts.Verbose}
 	}
 	counters := deps.Counters
 	if counters == nil {

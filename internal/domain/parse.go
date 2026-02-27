@@ -1,6 +1,9 @@
 package domain
 
-import "strings"
+import (
+	"regexp"
+	"strings"
+)
 
 // ExecutorResult is the parsed final result from executor output.
 type ExecutorResult string
@@ -69,4 +72,48 @@ func ParseReviewDecision(output string) ReviewDecision {
 	}
 
 	return ReviewDecision{Pass: false, Reason: "reviewer output was empty"}
+}
+
+// GateResult is one parsed gate evidence line from executor output.
+type GateResult struct {
+	Name   string
+	Status string
+	Detail string
+}
+
+var gateLinePattern = regexp.MustCompile(`^-\s*([A-Za-z0-9_.-]+):\s*(PASS|FAIL)(.*)$`)
+
+// ParseGateEvidence parses a GATES block from executor output.
+func ParseGateEvidence(output string) map[string]GateResult {
+	results := make(map[string]GateResult)
+	lines := strings.Split(output, "\n")
+	inBlock := false
+
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.EqualFold(trimmed, "GATES:") {
+			inBlock = true
+			continue
+		}
+		if !inBlock {
+			continue
+		}
+		if trimmed == "" {
+			break
+		}
+		match := gateLinePattern.FindStringSubmatch(trimmed)
+		if len(match) != 4 {
+			if strings.HasPrefix(trimmed, "-") {
+				continue
+			}
+			break
+		}
+		name := strings.ToLower(strings.TrimSpace(match[1]))
+		results[name] = GateResult{
+			Name:   name,
+			Status: strings.ToUpper(strings.TrimSpace(match[2])),
+			Detail: strings.TrimSpace(match[3]),
+		}
+	}
+	return results
 }

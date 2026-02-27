@@ -81,7 +81,6 @@ func TestMissingArgsShowsUsageAndError(t *testing.T) {
 		wantUsage string // expected in stdout (usage)
 		wantError string // expected in stderr (error message)
 	}{
-		{"plan create", []string{"plan", "create"}, "create <slug>", "Error:"},
 		{"plan status", []string{"plan", "status"}, "status <slug>", "Error:"},
 		{"plan reset", []string{"plan", "reset"}, "reset <slug>", "Error:"},
 		{"plan resume", []string{"plan", "resume"}, "resume <slug>", "Error:"},
@@ -103,7 +102,7 @@ func TestMissingArgsShowsUsageAndError(t *testing.T) {
 			}
 
 			usageOutput := stdout.String()
-			if !bytes.Contains([]byte(usageOutput), []byte(tt.wantUsage)) {
+			if tt.wantUsage != "" && !bytes.Contains([]byte(usageOutput), []byte(tt.wantUsage)) {
 				t.Errorf("expected stdout to contain usage %q, got:\n%s", tt.wantUsage, usageOutput)
 			}
 

@@ -53,21 +53,76 @@ func NormalizeAgent(agent Agent) Agent {
 
 // Plan describes an immutable execution plan.
 type Plan struct {
-	Schema string `json:"$schema,omitempty"`
-	Title  string `json:"title,omitempty"`
-	Tasks  []Task `json:"tasks"`
+	SchemaVersion int          `json:"schema_version"`
+	Name          string       `json:"name"`
+	Summary       string       `json:"summary,omitempty"`
+	Meta          PlanMeta     `json:"meta,omitempty"`
+	Settings      PlanSettings `json:"settings"`
+	Quality       PlanQuality  `json:"quality,omitempty"`
+	Tasks         []Task       `json:"tasks"`
+}
+
+type PlanMeta struct {
+	Source    string        `json:"source,omitempty"`
+	CreatedAt string        `json:"created_at,omitempty"`
+	CreatedBy string        `json:"created_by,omitempty"`
+	Generator PlanGenerator `json:"generator,omitempty"`
+}
+
+type PlanGenerator struct {
+	Name       string `json:"name,omitempty"`
+	Version    string `json:"version,omitempty"`
+	PromptHash string `json:"prompt_hash,omitempty"`
+}
+
+type PlanSettings struct {
+	Agents          PlanAgents      `json:"agents"`
+	ExecutionPolicy ExecutionPolicy `json:"execution_policy,omitempty"`
+}
+
+type PlanAgents struct {
+	Planner  PlanAgentConfig `json:"planner,omitempty"`
+	Executor PlanAgentConfig `json:"executor"`
+	Reviewer PlanAgentConfig `json:"reviewer"`
+}
+
+type PlanAgentConfig struct {
+	Agent Agent  `json:"agent"`
+	Model string `json:"model,omitempty"`
+}
+
+type ExecutionPolicy struct {
+	MaxTotalIterations int          `json:"max_total_iterations,omitempty"`
+	MaxRetriesPerTask  int          `json:"max_retries_per_task,omitempty"`
+	Timeout            string       `json:"timeout,omitempty"`
+	Budget             BudgetPolicy `json:"budget,omitempty"`
+	StallDetection     StallPolicy  `json:"stall_detection,omitempty"`
+}
+
+type BudgetPolicy struct {
+	Execute int `json:"execute,omitempty"`
+	Review  int `json:"review,omitempty"`
+}
+
+type StallPolicy struct {
+	Enabled   bool    `json:"enabled,omitempty"`
+	Window    int     `json:"window,omitempty"`
+	Threshold float64 `json:"threshold,omitempty"`
+}
+
+type PlanQuality struct {
+	EvidenceFormat string   `json:"evidence_format,omitempty"`
+	Required       []string `json:"required,omitempty"`
+	Optional       []string `json:"optional,omitempty"`
 }
 
 // Task is one plan task definition.
 type Task struct {
-	ID          string   `json:"id,omitempty"`
+	ID          string   `json:"id"`
 	Title       string   `json:"title"`
 	DependsOn   []string `json:"depends_on,omitempty"`
-	Executor    Agent    `json:"executor,omitempty"`
-	Reviewer    Agent    `json:"reviewer,omitempty"`
-	Model       string   `json:"model,omitempty"`
 	Description string   `json:"description,omitempty"`
-	Criteria    string   `json:"criteria,omitempty"`
+	Acceptance  []string `json:"acceptance"`
 }
 
 // TaskStatus tracks mutable execution status for a task.
@@ -86,11 +141,8 @@ type StateTask struct {
 	ID          string     `json:"id"`
 	Title       string     `json:"title"`
 	DependsOn   []string   `json:"depends_on,omitempty"`
-	Executor    Agent      `json:"executor,omitempty"`
-	Reviewer    Agent      `json:"reviewer,omitempty"`
-	Model       string     `json:"model,omitempty"`
 	Description string     `json:"description,omitempty"`
-	Criteria    string     `json:"criteria,omitempty"`
+	Acceptance  []string   `json:"acceptance,omitempty"`
 	Status      TaskStatus `json:"status"`
 	Attempt     int        `json:"attempt,omitempty"`
 	Feedback    string     `json:"feedback,omitempty"`
@@ -102,6 +154,7 @@ type State struct {
 	PlanChecksum string      `json:"plan_checksum"`
 	CreatedAt    string      `json:"created_at"`
 	UpdatedAt    string      `json:"updated_at"`
+	Outcome      RunOutcome  `json:"outcome,omitempty"`
 	Tasks        []StateTask `json:"tasks"`
 }
 
@@ -139,12 +192,35 @@ type RunnerOptions struct {
 	RunnerMode          RunnerMode
 	DefaultExecutor     Agent
 	DefaultReviewer     Agent
+	ExecutorModel       string
+	ReviewerModel       string
 	PlannerAgent        Agent
+	PlannerModel        string
 	Objective           string
 	MaxRetries          int
 	MaxIterations       int
 	MaxTransitions      int
 	KeepLastRuns        int
+	Timeout             time.Duration
+	BudgetExecute       int
+	BudgetReview        int
+	StallDetection      bool
+	StallWindow         int
+	StallThreshold      float64
+	PlannerAgentSet     bool
+	PlannerModelSet     bool
+	ExecutorAgentSet    bool
+	ExecutorModelSet    bool
+	ReviewerAgentSet    bool
+	ReviewerModelSet    bool
+	MaxRetriesSet       bool
+	MaxIterationsSet    bool
+	TimeoutSet          bool
+	BudgetExecuteSet    bool
+	BudgetReviewSet     bool
+	StallDetectionSet   bool
+	StallWindowSet      bool
+	StallThresholdSet   bool
 	SkipReview          bool
 	Force               bool
 	CodexBin            string
@@ -189,12 +265,22 @@ const (
 type RunnerStats struct {
 	PlanSlug      string
 	StateFile     string
+	Outcome       RunOutcome
 	Iterations    int
 	TasksDone     int
 	TasksRejected int
 	TotalCostUSD  float64
 	TotalDuration time.Duration
 }
+
+type RunOutcome string
+
+const (
+	RunSuccess  RunOutcome = "success"
+	RunPartial  RunOutcome = "partial"
+	RunFailed   RunOutcome = "failed"
+	RunCanceled RunOutcome = "canceled"
+)
 
 // AgentRequest is one execution request for an agent runtime.
 type AgentRequest struct {
@@ -322,6 +408,7 @@ type PlanStatus struct {
 	PlanSlug  string
 	StateFile string
 	UpdatedAt string
+	Outcome   RunOutcome
 	Done      int
 	Failed    int
 	Active    int

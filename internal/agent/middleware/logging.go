@@ -30,6 +30,18 @@ func Logging(logger Logger, sink EventSink) Middleware {
 	return func(next domain.AgentRuntime) domain.AgentRuntime {
 		return runtimeFunc(func(ctx context.Context, req domain.AgentRequest) (domain.AgentResult, error) {
 			start := time.Now()
+			if sink != nil {
+				sink.Emit(ExecutionEvent{
+					SchemaVersion: 1,
+					Timestamp:     start.UTC().Format(time.RFC3339),
+					Type:          EventAgentStart,
+					EventType:     string(EventAgentStart),
+					Agent:         string(req.Agent),
+					TaskID:        req.TaskLabel,
+					Phase:         req.Role,
+					Role:          req.Role,
+				})
+			}
 			result, err := next.Run(ctx, req)
 			duration := time.Since(start).Seconds()
 
@@ -56,14 +68,18 @@ func Logging(logger Logger, sink EventSink) Middleware {
 
 			if sink != nil {
 				sink.Emit(ExecutionEvent{
-					Timestamp: entry.Timestamp,
-					Type:      eventType,
-					Agent:     entry.Agent,
-					Role:      entry.Role,
-					Strategy:  entry.Strategy,
-					Error:     entry.Error,
-					DurationS: entry.DurationS,
-					CostUSD:   entry.CostUSD,
+					SchemaVersion: 1,
+					Timestamp:     entry.Timestamp,
+					Type:          eventType,
+					EventType:     string(eventType),
+					Agent:         entry.Agent,
+					TaskID:        req.TaskLabel,
+					Phase:         req.Role,
+					Role:          entry.Role,
+					Strategy:      entry.Strategy,
+					Error:         entry.Error,
+					DurationS:     entry.DurationS,
+					CostUSD:       entry.CostUSD,
 				})
 			}
 

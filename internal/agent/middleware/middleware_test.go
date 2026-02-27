@@ -121,12 +121,15 @@ func TestLoggingMiddlewareSuccess(t *testing.T) {
 		t.Fatalf("expected no error, got %q", entry.Error)
 	}
 
-	if collector.Len() != 1 {
-		t.Fatalf("expected 1 event, got %d", collector.Len())
+	if collector.Len() != 2 {
+		t.Fatalf("expected 2 events, got %d", collector.Len())
 	}
-	ev := collector.Events[0]
+	if collector.Events[0].Type != EventAgentStart {
+		t.Fatalf("expected first event type agent_start, got %q", collector.Events[0].Type)
+	}
+	ev := collector.Events[1]
 	if ev.Type != EventAgentComplete {
-		t.Fatalf("expected event type agent_complete, got %q", ev.Type)
+		t.Fatalf("expected second event type agent_complete, got %q", ev.Type)
 	}
 }
 
@@ -149,8 +152,14 @@ func TestLoggingMiddlewareError(t *testing.T) {
 		t.Fatal("expected error message")
 	}
 
-	if collector.Events[0].Type != EventAgentError {
-		t.Fatalf("expected event type agent_error, got %q", collector.Events[0].Type)
+	if len(collector.Events) != 2 {
+		t.Fatalf("expected 2 events, got %d", len(collector.Events))
+	}
+	if collector.Events[0].Type != EventAgentStart {
+		t.Fatalf("expected first event type agent_start, got %q", collector.Events[0].Type)
+	}
+	if collector.Events[1].Type != EventAgentError {
+		t.Fatalf("expected second event type agent_error, got %q", collector.Events[1].Type)
 	}
 }
 
@@ -235,7 +244,7 @@ func TestFullChain(t *testing.T) {
 	if totalCalls != 1 {
 		t.Fatal("expected 1 metric count")
 	}
-	if collector.Len() != 1 {
-		t.Fatal("expected 1 event")
+	if collector.Len() != 2 {
+		t.Fatal("expected 2 events")
 	}
 }

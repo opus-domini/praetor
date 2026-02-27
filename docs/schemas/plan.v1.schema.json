@@ -1,0 +1,174 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://opus-domini.github.io/praetor/schemas/plan.v1.schema.json",
+  "title": "Praetor Plan v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "name", "settings", "tasks"],
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "summary": {
+      "type": "string"
+    },
+    "meta": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "source": {
+          "type": "string",
+          "enum": ["manual", "agent"]
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "created_by": {
+          "type": "string"
+        },
+        "generator": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "name": {"type": "string"},
+            "version": {"type": "string"},
+            "prompt_hash": {"type": "string"}
+          }
+        }
+      }
+    },
+    "settings": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["agents"],
+      "properties": {
+        "agents": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["executor", "reviewer"],
+          "properties": {
+            "planner": {"$ref": "#/$defs/agentConfigPlanner"},
+            "executor": {"$ref": "#/$defs/agentConfigExecutor"},
+            "reviewer": {"$ref": "#/$defs/agentConfigReviewer"}
+          }
+        },
+        "execution_policy": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "max_total_iterations": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "max_retries_per_task": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "timeout": {
+              "type": "string"
+            },
+            "budget": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "execute": {"type": "integer", "minimum": 1},
+                "review": {"type": "integer", "minimum": 1}
+              }
+            },
+            "stall_detection": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "enabled": {"type": "boolean"},
+                "window": {"type": "integer", "minimum": 2},
+                "threshold": {"type": "number", "minimum": 0, "maximum": 1}
+              }
+            }
+          }
+        }
+      }
+    },
+    "quality": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "evidence_format": {"type": "string"},
+        "required": {
+          "type": "array",
+          "items": {"type": "string"}
+        },
+        "optional": {
+          "type": "array",
+          "items": {"type": "string"}
+        }
+      }
+    },
+    "tasks": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "title", "acceptance"],
+        "properties": {
+          "id": {"type": "string", "minLength": 1},
+          "title": {"type": "string", "minLength": 1},
+          "description": {"type": "string"},
+          "depends_on": {
+            "type": "array",
+            "items": {"type": "string", "minLength": 1}
+          },
+          "acceptance": {
+            "type": "array",
+            "minItems": 1,
+            "items": {"type": "string", "minLength": 1}
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "agentConfigExecutor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["agent"],
+      "properties": {
+        "agent": {
+          "type": "string",
+          "enum": ["claude", "codex", "copilot", "gemini", "kimi", "opencode", "openrouter", "ollama"]
+        },
+        "model": {"type": "string"}
+      }
+    },
+    "agentConfigPlanner": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["agent"],
+      "properties": {
+        "agent": {
+          "type": "string",
+          "enum": ["claude", "codex", "copilot", "gemini", "kimi", "opencode", "openrouter", "ollama"]
+        },
+        "model": {"type": "string"}
+      }
+    },
+    "agentConfigReviewer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["agent"],
+      "properties": {
+        "agent": {
+          "type": "string",
+          "enum": ["claude", "codex", "copilot", "gemini", "kimi", "opencode", "openrouter", "ollama", "none"]
+        },
+        "model": {"type": "string"}
+      }
+    }
+  }
+}

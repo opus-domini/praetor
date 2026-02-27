@@ -68,11 +68,11 @@ make build
 ### Create and run a plan
 
 ```bash
-# Create a plan skeleton
-praetor plan create my-feature
+# Create a plan from a brief (agent-assisted by default)
+praetor plan create "Implement JWT auth with tests and docs"
 
 # Run plan (default runner: tmux)
-praetor plan run my-feature
+praetor plan run implement-jwt-auth-with-tests-and-docs
 ```
 
 ### Run with direct mode (no tmux)
@@ -107,12 +107,13 @@ praetor exec --provider ollama --model llama3.1 "Explain this module"
 - `praetor plan run <slug>` — execute orchestration pipeline.
 - `praetor plan status <slug>` — inspect state/progress.
 - `praetor plan list` — list tracked plans for current project.
-- `praetor plan create <slug>` — create a new plan from a template.
+- `praetor plan create [brief]` — create a plan from text/markdown input.
 - `praetor plan edit <slug>` — open a plan in `$EDITOR`.
 - `praetor plan show <slug>` — print plan JSON to stdout.
 - `praetor plan path <slug>` — print the absolute plan file path.
 - `praetor plan reset <slug>` — clear runtime state for one plan.
 - `praetor plan resume <slug>` — restore latest valid local snapshot.
+- `praetor plan diagnose <slug>` — inspect structured diagnostics (`events.jsonl`, `performance.jsonl`).
 - `praetor exec [prompt]` — run a single prompt against one provider.
 
 ## Configuration and State

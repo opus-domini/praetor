@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/opus-domini/praetor/internal/agent"
+	"github.com/opus-domini/praetor/internal/agent/middleware"
 	"github.com/opus-domini/praetor/internal/domain"
 )
 
@@ -166,5 +167,28 @@ func TestFallbackRuntimeAuthFallback(t *testing.T) {
 	}
 	if result.Output != "auth-fallback-ok" {
 		t.Fatalf("expected auth fallback output, got %q", result.Output)
+	}
+}
+
+func TestFallbackRuntimeEmitsFallbackEvent(t *testing.T) {
+	t.Parallel()
+	primary := &fakeAgent{id: agent.Claude, execErr: fmt.Errorf("connection refused")}
+	fallback := &fakeAgent{id: agent.Ollama, execOut: "ok"}
+	inner := newTestRegistryRuntime(primary, fallback)
+	collector := &middleware.CollectorSink{}
+	rt := NewFallbackRuntime(inner, agent.FallbackPolicy{OnTransient: agent.Ollama}, collector)
+
+	if _, err := rt.Run(context.Background(), domain.AgentRequest{Agent: "claude", Role: "execute", TaskLabel: "TASK-001"}); err != nil {
+		t.Fatalf("expected fallback success, got %v", err)
+	}
+	if collector.Len() == 0 {
+		t.Fatal("expected fallback event emission")
+	}
+	last := collector.Events[len(collector.Events)-1]
+	if last.Type != middleware.EventAgentFallback {
+		t.Fatalf("expected agent_fallback event, got %q", last.Type)
+	}
+	if last.TaskID != "TASK-001" {
+		t.Fatalf("expected task id propagation, got %q", last.TaskID)
 	}
 }

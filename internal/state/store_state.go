@@ -92,11 +92,8 @@ func mergeState(slug, checksum string, previous domain.State, plan domain.Plan) 
 		if strings.HasPrefix(task.ID, "auto-") {
 			statusByAutoFingerprint[domain.AutoTaskFingerprint(
 				task.Title,
-				task.Executor,
-				task.Reviewer,
-				task.Model,
 				task.Description,
-				task.Criteria,
+				task.Acceptance,
 				task.DependsOn,
 			)] = task.Status
 		}
@@ -108,6 +105,7 @@ func mergeState(slug, checksum string, previous domain.State, plan domain.Plan) 
 		PlanChecksum: checksum,
 		CreatedAt:    previous.CreatedAt,
 		UpdatedAt:    now,
+		Outcome:      previous.Outcome,
 		Tasks:        domain.StateTasksFromPlan(plan),
 	}
 	if merged.CreatedAt == "" {
@@ -122,11 +120,8 @@ func mergeState(slug, checksum string, previous domain.State, plan domain.Plan) 
 		if strings.HasPrefix(task.ID, "auto-") {
 			if status, ok := statusByAutoFingerprint[domain.AutoTaskFingerprint(
 				task.Title,
-				task.Executor,
-				task.Reviewer,
-				task.Model,
 				task.Description,
-				task.Criteria,
+				task.Acceptance,
 				task.DependsOn,
 			)]; ok {
 				merged.Tasks[i].Status = status

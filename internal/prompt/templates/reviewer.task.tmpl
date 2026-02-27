@@ -7,8 +7,8 @@ TASK
 
 PLAN
   File: {{ .PlanFile }}
-{{- if .PlanTitle }}
-  Title: {{ .PlanTitle }}
+{{- if .PlanName }}
+  Title: {{ .PlanName }}
 {{- end }}
 {{- if .PlanProgress }}
   Progress: {{ .PlanProgress }}
@@ -21,10 +21,10 @@ WORKDIR
 DESCRIPTION
 {{ .TaskDescription }}
 {{- end }}
-{{- if .TaskCriteria }}
+{{- if .TaskAcceptance }}
 
 ACCEPTANCE CRITERIA
-{{ .TaskCriteria }}
+{{ .TaskAcceptance }}
 {{- end }}
 
 EXECUTOR OUTPUT (last 300 lines)

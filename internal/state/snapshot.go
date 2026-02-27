@@ -27,6 +27,7 @@ type Snapshot struct {
 	ManifestTruncated bool            `json:"manifest_truncated,omitempty"`
 	Phase             string          `json:"phase"`
 	Message           string          `json:"message"`
+	Outcome           string          `json:"outcome,omitempty"`
 	Iteration         int             `json:"iteration"`
 	Timestamp         string          `json:"timestamp"`
 	State             json.RawMessage `json:"state"`

@@ -33,7 +33,17 @@ func TestPlanResumeRestoresLatestSnapshot(t *testing.T) {
 	}
 
 	slug := "test-plan"
-	plan := domain.Plan{Tasks: []domain.Task{{ID: "TASK-001", Title: "Task 1", Executor: domain.AgentCodex, Reviewer: domain.AgentNone}}}
+	plan := domain.Plan{
+		SchemaVersion: 1,
+		Name:          "test plan",
+		Settings: domain.PlanSettings{
+			Agents: domain.PlanAgents{
+				Executor: domain.PlanAgentConfig{Agent: domain.AgentCodex},
+				Reviewer: domain.PlanAgentConfig{Agent: domain.AgentNone},
+			},
+		},
+		Tasks: []domain.Task{{ID: "TASK-001", Title: "Task 1", Acceptance: []string{"task completes"}}},
+	}
 	writePlanJSON(t, store.PlanFile(slug), plan)
 
 	checksum, err := domain.PlanChecksum(store.PlanFile(slug))

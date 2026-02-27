@@ -122,17 +122,14 @@ func (r *Runner) Run(ctx context.Context, spec domain.CommandSpec, runDir, prefi
 	windowName := WindowName(spec.WindowHint, prefix)
 	createWindow := exec.Command("tmux", "new-window", "-d", "-P", "-F", "#{window_id}",
 		"-t", r.sessionName+":", "-n", windowName,
-		"-e", "REMAIN_ON_EXIT=on", // pre-set so tmux hook can pick it up
 		"bash", wrapperFile)
 	windowOut, err := createWindow.CombinedOutput()
 	if err != nil {
 		return domain.ProcessResult{}, fmt.Errorf("create tmux window: %w: %s", err, strings.TrimSpace(string(windowOut)))
 	}
 	windowID := strings.TrimSpace(string(windowOut))
+	defer KillWindow(windowID)
 
-	// Keep pane visible after the script exits so users can inspect output.
-	// Set immediately after creation — minimal race window.
-	_ = exec.Command("tmux", "set-option", "-w", "-t", windowID, "remain-on-exit", "on").Run()
 	// Focus this window so users attaching to the session see live output.
 	_ = exec.Command("tmux", "select-window", "-t", windowID).Run()
 

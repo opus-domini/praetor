@@ -7,31 +7,9 @@ import (
 	"github.com/opus-domini/praetor/internal/domain"
 )
 
-func TestRouterTaskLevelExecutor(t *testing.T) {
-	t.Parallel()
-	task := domain.StateTask{Executor: "gemini"}
-	got, err := resolveExecutorWithRouting(task, domain.AgentCodex, []agent.ID{agent.Claude, agent.Codex})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if got != domain.AgentGemini {
-		t.Fatalf("expected task-level executor gemini, got %q", got)
-	}
-}
-
-func TestRouterTaskLevelInvalid(t *testing.T) {
-	t.Parallel()
-	task := domain.StateTask{Executor: "nonexistent"}
-	_, err := resolveExecutorWithRouting(task, domain.AgentCodex, nil)
-	if err == nil {
-		t.Fatal("expected error for invalid task executor")
-	}
-}
-
 func TestRouterDefaultExecutorAvailable(t *testing.T) {
 	t.Parallel()
-	task := domain.StateTask{}
-	got, err := resolveExecutorWithRouting(task, domain.AgentCodex, []agent.ID{agent.Codex, agent.Claude})
+	got, err := resolveExecutorWithRouting(domain.AgentCodex, []agent.ID{agent.Codex, agent.Claude})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -42,8 +20,7 @@ func TestRouterDefaultExecutorAvailable(t *testing.T) {
 
 func TestRouterDefaultExecutorUnavailableFallsToAvailable(t *testing.T) {
 	t.Parallel()
-	task := domain.StateTask{}
-	got, err := resolveExecutorWithRouting(task, domain.AgentCodex, []agent.ID{agent.Claude, agent.Ollama})
+	got, err := resolveExecutorWithRouting(domain.AgentCodex, []agent.ID{agent.Claude, agent.Ollama})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -55,8 +32,7 @@ func TestRouterDefaultExecutorUnavailableFallsToAvailable(t *testing.T) {
 
 func TestRouterPrefersCLIOverREST(t *testing.T) {
 	t.Parallel()
-	task := domain.StateTask{}
-	got, err := resolveExecutorWithRouting(task, "unavailable", []agent.ID{agent.Ollama, agent.Claude})
+	got, err := resolveExecutorWithRouting("unavailable", []agent.ID{agent.Ollama, agent.Claude})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -67,8 +43,7 @@ func TestRouterPrefersCLIOverREST(t *testing.T) {
 
 func TestRouterOnlyRESTAvailable(t *testing.T) {
 	t.Parallel()
-	task := domain.StateTask{}
-	got, err := resolveExecutorWithRouting(task, "unavailable", []agent.ID{agent.Ollama})
+	got, err := resolveExecutorWithRouting("unavailable", []agent.ID{agent.Ollama})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -79,8 +54,7 @@ func TestRouterOnlyRESTAvailable(t *testing.T) {
 
 func TestRouterNoAvailableAgents(t *testing.T) {
 	t.Parallel()
-	task := domain.StateTask{}
-	_, err := resolveExecutorWithRouting(task, "unavailable", []agent.ID{})
+	_, err := resolveExecutorWithRouting("unavailable", []agent.ID{})
 	if err == nil {
 		t.Fatal("expected error when no available agents and default unavailable")
 	}
@@ -88,22 +62,12 @@ func TestRouterNoAvailableAgents(t *testing.T) {
 
 func TestRouterNoAvailabilityDataFallsToResolveExecutor(t *testing.T) {
 	t.Parallel()
-	task := domain.StateTask{}
-	got, err := resolveExecutorWithRouting(task, domain.AgentCodex, nil)
+	got, err := resolveExecutorWithRouting(domain.AgentCodex, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if got != domain.AgentCodex {
 		t.Fatalf("expected fallback to resolveExecutor with codex, got %q", got)
-	}
-}
-
-func TestRouterTaskExecutorNone(t *testing.T) {
-	t.Parallel()
-	task := domain.StateTask{Executor: "none"}
-	_, err := resolveExecutorWithRouting(task, domain.AgentCodex, []agent.ID{agent.Codex})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
 	}
 }
 

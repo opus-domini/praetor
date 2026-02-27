@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/opus-domini/praetor/internal/agent/middleware"
 	"github.com/opus-domini/praetor/internal/domain"
 	"github.com/opus-domini/praetor/internal/orchestration/fsm"
 )
@@ -56,9 +57,16 @@ func iterationStateSelectTask(ctx context.Context, machine *iterationMachine) (i
 	index, task, ok := domain.NextRunnableTask(run.state)
 	if !ok {
 		if run.state.ActiveCount() == 0 {
-			_ = run.appendSnapshotEvent("completed", "", "all tasks completed")
-			_ = run.persistSnapshot("completed", "all tasks completed")
-			run.render.Success("All tasks completed")
+			if run.state.FailedCount() > 0 {
+				message := fmt.Sprintf("run completed with %d failed task(s)", run.state.FailedCount())
+				_ = run.appendSnapshotEvent("completed_partial", "", message)
+				_ = run.persistSnapshot("completed_partial", message)
+				run.render.Warn(message)
+			} else {
+				_ = run.appendSnapshotEvent("completed", "", "all tasks completed")
+				_ = run.persistSnapshot("completed", "all tasks completed")
+				run.render.Success("All tasks completed")
+			}
 			machine.stop = true
 			return nil, nil
 		}
@@ -94,11 +102,11 @@ func iterationStateSelectTask(ctx context.Context, machine *iterationMachine) (i
 		return nil, fmt.Errorf("plan is blocked by dependencies:\n- %s", strings.Join(report, "\n- "))
 	}
 
-	executor, err := resolveExecutorWithRouting(task, run.options.DefaultExecutor, run.availableAgents)
+	executor, err := resolveExecutorWithRouting(run.options.DefaultExecutor, run.availableAgents)
 	if err != nil {
 		return nil, fmt.Errorf("task %s: %w", task.ID, err)
 	}
-	reviewer, err := resolveReviewer(task, run.options.DefaultReviewer, run.options.SkipReview)
+	reviewer, err := resolveReviewer(run.options.DefaultReviewer, run.options.SkipReview)
 	if err != nil {
 		return nil, fmt.Errorf("task %s: %w", task.ID, err)
 	}
@@ -162,7 +170,21 @@ func iterationStateExecuteTask(ctx context.Context, machine *iterationMachine) (
 	runDir := filepath.Join(run.store.LogsDir(), machine.runID)
 
 	executorSystemPrompt := BuildExecutorSystemPrompt(run.promptEngine, run.projectContext)
-	executorTaskPrompt := BuildExecutorTaskPrompt(run.promptEngine, run.slug, selected.index, selected.task, selected.feedback, selected.retries, run.plan.Title, selected.progress, machine.taskWorkdir)
+	feedback := selected.feedback
+	truncatedSections := make([]string, 0)
+	if run.budgetManager != nil && strings.TrimSpace(feedback) != "" {
+		promptWithoutFeedback := BuildExecutorTaskPrompt(run.promptEngine, run.slug, selected.index, selected.task, "", selected.retries, run.plan.Name, selected.progress, machine.taskWorkdir, run.plan.Quality.Required, run.plan.Quality.EvidenceFormat)
+		adjustedFeedback, truncated := run.budgetManager.TruncateExecuteFeedback(promptWithoutFeedback, feedback)
+		feedback = adjustedFeedback
+		truncatedSections = append(truncatedSections, truncated...)
+	}
+	executorTaskPrompt := BuildExecutorTaskPrompt(run.promptEngine, run.slug, selected.index, selected.task, feedback, selected.retries, run.plan.Name, selected.progress, machine.taskWorkdir, run.plan.Quality.Required, run.plan.Quality.EvidenceFormat)
+	if err := run.appendPerformanceEntry(promptPhaseExecute, executorTaskPrompt, truncatedSections); err != nil {
+		run.render.Warn(fmt.Sprintf("failed to write performance metric: %v", err))
+	}
+	if run.options.Verbose && run.budgetManager != nil {
+		run.render.Info(fmt.Sprintf("execute budget: %d/%d chars", len(executorTaskPrompt), run.budgetManager.Budget(promptPhaseExecute)))
+	}
 	_ = writeText(filepath.Join(runDir, "executor.system.txt"), executorSystemPrompt)
 	_ = writeText(filepath.Join(runDir, "executor.prompt.txt"), executorTaskPrompt)
 
@@ -171,7 +193,7 @@ func iterationStateExecuteTask(ctx context.Context, machine *iterationMachine) (
 		Agent:            selected.executor,
 		Prompt:           executorTaskPrompt,
 		SystemPrompt:     executorSystemPrompt,
-		Model:            selected.task.Model,
+		Model:            strings.TrimSpace(run.options.ExecutorModel),
 		Workdir:          machine.taskWorkdir,
 		RunDir:           runDir,
 		OutputPrefix:     "executor",
@@ -220,6 +242,10 @@ func iterationStateExecuteTask(ctx context.Context, machine *iterationMachine) (
 				CostUSD:   execResult.CostUSD,
 			}},
 		})
+		return iterationStateApplyOutcome, nil
+	}
+	if stalledOutcome, stalled := evaluateStallOutcome(run, selected, promptPhaseExecute, machine.executorOutput); stalled {
+		machine.setOutcome(stalledOutcome)
 		return iterationStateApplyOutcome, nil
 	}
 
@@ -312,10 +338,26 @@ func iterationStateReviewTask(ctx context.Context, machine *iterationMachine) (i
 	run := machine.run
 	selected := machine.selected
 	runDir := filepath.Join(run.store.LogsDir(), machine.runID)
-	gitDiff := CaptureGitDiff(machine.taskWorkdir, 500)
+	gitDiff := CaptureGitDiff(machine.taskWorkdir, 0)
+	executorOutputForPrompt := machine.executorOutput
+	gitDiffForPrompt := gitDiff
+	truncatedSections := make([]string, 0)
+	if run.budgetManager != nil {
+		overhead := BuildReviewerTaskPrompt(run.promptEngine, run.slug, selected.task, "", machine.taskWorkdir, run.plan.Name, selected.progress, "")
+		execOut, diff, truncated := run.budgetManager.TruncateReviewSections(overhead, executorOutputForPrompt, gitDiffForPrompt)
+		executorOutputForPrompt = execOut
+		gitDiffForPrompt = diff
+		truncatedSections = append(truncatedSections, truncated...)
+	}
 
 	reviewerSystemPrompt := BuildReviewerSystemPrompt(run.promptEngine, run.projectContext)
-	reviewerTaskPrompt := BuildReviewerTaskPrompt(run.promptEngine, run.slug, selected.task, machine.executorOutput, machine.taskWorkdir, run.plan.Title, selected.progress, gitDiff)
+	reviewerTaskPrompt := BuildReviewerTaskPrompt(run.promptEngine, run.slug, selected.task, executorOutputForPrompt, machine.taskWorkdir, run.plan.Name, selected.progress, gitDiffForPrompt)
+	if err := run.appendPerformanceEntry(promptPhaseReview, reviewerTaskPrompt, truncatedSections); err != nil {
+		run.render.Warn(fmt.Sprintf("failed to write performance metric: %v", err))
+	}
+	if run.options.Verbose && run.budgetManager != nil {
+		run.render.Info(fmt.Sprintf("review budget: %d/%d chars", len(reviewerTaskPrompt), run.budgetManager.Budget(promptPhaseReview)))
+	}
 	_ = writeText(filepath.Join(runDir, "reviewer.system.txt"), reviewerSystemPrompt)
 	_ = writeText(filepath.Join(runDir, "reviewer.prompt.txt"), reviewerTaskPrompt)
 
@@ -324,7 +366,7 @@ func iterationStateReviewTask(ctx context.Context, machine *iterationMachine) (i
 		Agent:            selected.reviewer,
 		Prompt:           reviewerTaskPrompt,
 		SystemPrompt:     reviewerSystemPrompt,
-		Model:            selected.task.Model,
+		Model:            strings.TrimSpace(run.options.ReviewerModel),
 		Workdir:          machine.taskWorkdir,
 		RunDir:           runDir,
 		OutputPrefix:     "reviewer",
@@ -387,6 +429,23 @@ func iterationStateReviewTask(ctx context.Context, machine *iterationMachine) (i
 		CostUSD:   reviewResult.CostUSD,
 	}); err != nil {
 		return nil, fmt.Errorf("write reviewer metric: %w", err)
+	}
+	if stalledOutcome, stalled := evaluateStallOutcome(run, selected, promptPhaseReview, reviewerOutput); stalled {
+		machine.setOutcome(stalledOutcome)
+		return iterationStateApplyOutcome, nil
+	}
+	if gateReason, blocked := enforceRequiredGates(run, selected.task.ID, machine.executorOutput); blocked {
+		machine.setOutcome(taskOutcome{
+			kind:         taskOutcomeRetry,
+			status:       "review_rejected",
+			message:      gateReason,
+			feedback:     gateReason,
+			rollback:     true,
+			renderLevel:  "warn",
+			renderFormat: "Review rejected: %s (retry %d/%d)",
+			renderArgs:   []any{gateReason},
+		})
+		return iterationStateApplyOutcome, nil
 	}
 
 	decision := domain.ParseReviewDecision(reviewerOutput)
@@ -472,5 +531,195 @@ func logRuntimeStrategy(run *activeRun, taskID, signature, runID, role string, s
 		Signature: signature,
 		RunID:     runID,
 		Message:   msg,
+	})
+}
+
+func evaluateStallOutcome(run *activeRun, selected taskSelection, phase, output string) (taskOutcome, bool) {
+	if run == nil || run.stallDetector == nil || !run.options.StallDetection {
+		return taskOutcome{}, false
+	}
+	stalled, similarity := run.stallDetector.Observe(selected.task.ID, phase, output)
+	if !stalled {
+		return taskOutcome{}, false
+	}
+
+	key := selected.task.ID + ":" + phase
+	level := run.stallEscalations[key] + 1
+	run.stallEscalations[key] = level
+	action := "mark_failed"
+
+	if level == 1 {
+		if fallbackAgent, ok := stallFallbackAgent(run, phase); ok {
+			action = "fallback"
+			switch phase {
+			case promptPhaseExecute:
+				run.options.DefaultExecutor = fallbackAgent
+			case promptPhaseReview:
+				run.options.DefaultReviewer = fallbackAgent
+			}
+			emitTaskStalledEvent(run, selected.task.ID, phase, similarity, action)
+			return taskOutcome{
+				kind:         taskOutcomeRetry,
+				status:       "stalled_retry",
+				message:      fmt.Sprintf("task stalled (similarity %.2f): switched to fallback agent %s", similarity, fallbackAgent),
+				feedback:     "Stall detected: output repeated across attempts. Regenerate with a different strategy.",
+				rollback:     true,
+				renderLevel:  "warn",
+				renderFormat: "Task stalled (retry %d/%d)",
+			}, true
+		}
+	}
+
+	if level <= 2 && run.budgetManager != nil {
+		action = "budget_reduced"
+		switch phase {
+		case promptPhaseExecute:
+			run.budgetManager.executeChars = maxInt(run.budgetManager.executeChars/2, 1000)
+		default:
+			run.budgetManager.reviewChars = maxInt(run.budgetManager.reviewChars/2, 1000)
+		}
+		emitTaskStalledEvent(run, selected.task.ID, phase, similarity, action)
+		return taskOutcome{
+			kind:         taskOutcomeRetry,
+			status:       "stalled_retry",
+			message:      fmt.Sprintf("task stalled (similarity %.2f): reduced context budget", similarity),
+			feedback:     "Stall detected: output repeated across attempts. Focus only on unresolved issues.",
+			rollback:     true,
+			renderLevel:  "warn",
+			renderFormat: "Task stalled (retry %d/%d)",
+		}, true
+	}
+
+	emitTaskStalledEvent(run, selected.task.ID, phase, similarity, action)
+	return taskOutcome{
+		kind:         taskOutcomeRetry,
+		status:       "stalled",
+		message:      fmt.Sprintf("task marked failed due to stall (similarity %.2f)", similarity),
+		feedback:     "Task failed: repeated outputs detected (stalled).",
+		rollback:     true,
+		forceFailed:  true,
+		renderLevel:  "error",
+		renderFormat: "Task stalled and failed (retry %d/%d)",
+	}, true
+}
+
+func stallFallbackAgent(run *activeRun, phase string) (domain.Agent, bool) {
+	if run == nil {
+		return "", false
+	}
+	fallback := domain.NormalizeAgent(run.options.FallbackAgent)
+	if fallback == "" || fallback == domain.AgentNone {
+		return "", false
+	}
+	if phase == promptPhaseExecute {
+		if _, ok := domain.ValidExecutors[fallback]; ok {
+			return fallback, true
+		}
+		return "", false
+	}
+	if _, ok := domain.ValidReviewers[fallback]; ok {
+		return fallback, true
+	}
+	return "", false
+}
+
+func emitTaskStalledEvent(run *activeRun, taskID, phase string, similarity float64, action string) {
+	if run == nil || run.eventSink == nil {
+		return
+	}
+	run.eventSink.Emit(middleware.ExecutionEvent{
+		SchemaVersion: 1,
+		Timestamp:     time.Now().UTC().Format(time.RFC3339),
+		Type:          middleware.EventTaskStalled,
+		EventType:     string(middleware.EventTaskStalled),
+		RunID:         run.runID,
+		TaskID:        strings.TrimSpace(taskID),
+		Phase:         strings.TrimSpace(phase),
+		Similarity:    similarity,
+		WindowSize:    run.options.StallWindow,
+		Action:        strings.TrimSpace(action),
+		Data: map[string]any{
+			"task_id":     strings.TrimSpace(taskID),
+			"phase":       strings.TrimSpace(phase),
+			"similarity":  similarity,
+			"window_size": run.options.StallWindow,
+			"action":      strings.TrimSpace(action),
+		},
+	})
+}
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+func enforceRequiredGates(run *activeRun, taskID, executorOutput string) (string, bool) {
+	if run == nil || len(run.plan.Quality.Required) == 0 {
+		return "", false
+	}
+	evidence := domain.ParseGateEvidence(executorOutput)
+
+	for _, gate := range run.plan.Quality.Required {
+		name := strings.ToLower(strings.TrimSpace(gate))
+		if name == "" {
+			continue
+		}
+		result, ok := evidence[name]
+		if !ok {
+			reason := fmt.Sprintf("missing gate: %s", name)
+			emitGateResultEvent(run, taskID, name, "FAIL", reason, true)
+			return reason, true
+		}
+		if strings.ToUpper(strings.TrimSpace(result.Status)) != "PASS" {
+			reason := fmt.Sprintf("gate failed: %s", name)
+			emitGateResultEvent(run, taskID, name, "FAIL", strings.TrimSpace(result.Detail), true)
+			return reason, true
+		}
+		emitGateResultEvent(run, taskID, name, "PASS", strings.TrimSpace(result.Detail), true)
+	}
+
+	for _, gate := range run.plan.Quality.Optional {
+		name := strings.ToLower(strings.TrimSpace(gate))
+		if name == "" {
+			continue
+		}
+		result, ok := evidence[name]
+		if !ok {
+			emitGateResultEvent(run, taskID, name, "MISSING", "optional gate not reported", false)
+			continue
+		}
+		status := strings.ToUpper(strings.TrimSpace(result.Status))
+		if status == "" {
+			status = "UNKNOWN"
+		}
+		emitGateResultEvent(run, taskID, name, status, strings.TrimSpace(result.Detail), false)
+	}
+
+	return "", false
+}
+
+func emitGateResultEvent(run *activeRun, taskID, gateName, status, detail string, required bool) {
+	if run == nil || run.eventSink == nil {
+		return
+	}
+	run.eventSink.Emit(middleware.ExecutionEvent{
+		SchemaVersion: 1,
+		Timestamp:     time.Now().UTC().Format(time.RFC3339),
+		Type:          middleware.EventGateResult,
+		EventType:     string(middleware.EventGateResult),
+		RunID:         run.runID,
+		TaskID:        strings.TrimSpace(taskID),
+		Phase:         promptPhaseReview,
+		Action:        strings.TrimSpace(status),
+		Message:       strings.TrimSpace(detail),
+		Data: map[string]any{
+			"task_id":  strings.TrimSpace(taskID),
+			"gate":     strings.TrimSpace(gateName),
+			"status":   strings.TrimSpace(status),
+			"detail":   strings.TrimSpace(detail),
+			"required": required,
+		},
 	})
 }

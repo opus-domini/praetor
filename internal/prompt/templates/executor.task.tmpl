@@ -19,8 +19,8 @@ TASK
 
 PLAN
   File: {{ .PlanFile }}
-{{- if .PlanTitle }}
-  Title: {{ .PlanTitle }}
+{{- if .PlanName }}
+  Title: {{ .PlanName }}
 {{- end }}
 {{- if .PlanProgress }}
   Progress: {{ .PlanProgress }}
@@ -33,8 +33,20 @@ WORKDIR
 DESCRIPTION
 {{ .TaskDescription }}
 {{- end }}
-{{- if .TaskCriteria }}
+{{- if .TaskAcceptance }}
 
 ACCEPTANCE CRITERIA
-{{ .TaskCriteria }}
+{{ .TaskAcceptance }}
+{{- end }}
+{{- if .GatesRequired }}
+
+QUALITY GATES (required)
+{{- range .GatesRequired }}
+- {{ . }}
+{{- end }}
+
+Emit evidence using format {{ if .EvidenceFormat }}{{ .EvidenceFormat }}{{ else }}gates_v1{{ end }}:
+GATES:
+- tests: PASS (details)
+- lint: PASS (details)
 {{- end }}

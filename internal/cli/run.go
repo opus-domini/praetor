@@ -19,6 +19,9 @@ func newRunCmd() *cobra.Command {
 	var executor string
 	var reviewer string
 	var planner string
+	var executorModel string
+	var reviewerModel string
+	var plannerModel string
 	var objective string
 	var maxRetries int
 	var maxIterations int
@@ -46,6 +49,11 @@ func newRunCmd() *cobra.Command {
 	var fallbackOnTransient string
 	var fallbackOnAuth string
 	var timeout time.Duration
+	var budgetExecute int
+	var budgetReview int
+	var stallEnabled bool
+	var stallWindow int
+	var stallThreshold float64
 
 	cmd := &cobra.Command{
 		Use:   "run <slug>",
@@ -177,12 +185,35 @@ isolation protects the main branch from partial changes.`,
 				RunnerMode:          domain.RunnerMode(strings.ToLower(strings.TrimSpace(runnerMode))),
 				DefaultExecutor:     domain.Agent(executor),
 				DefaultReviewer:     domain.Agent(reviewer),
+				ExecutorModel:       executorModel,
+				ReviewerModel:       reviewerModel,
 				PlannerAgent:        domain.Agent(planner),
+				PlannerModel:        plannerModel,
 				Objective:           strings.TrimSpace(objective),
 				MaxRetries:          maxRetries,
 				MaxIterations:       maxIterations,
 				MaxTransitions:      maxTransitions,
 				KeepLastRuns:        keepLastRuns,
+				Timeout:             timeout,
+				BudgetExecute:       budgetExecute,
+				BudgetReview:        budgetReview,
+				StallDetection:      stallEnabled,
+				StallWindow:         stallWindow,
+				StallThreshold:      stallThreshold,
+				PlannerAgentSet:     f.Changed("planner"),
+				PlannerModelSet:     f.Changed("planner-model"),
+				ExecutorAgentSet:    f.Changed("executor"),
+				ExecutorModelSet:    f.Changed("executor-model"),
+				ReviewerAgentSet:    f.Changed("reviewer"),
+				ReviewerModelSet:    f.Changed("reviewer-model"),
+				MaxRetriesSet:       f.Changed("max-retries"),
+				MaxIterationsSet:    f.Changed("max-iterations"),
+				TimeoutSet:          f.Changed("timeout"),
+				BudgetExecuteSet:    f.Changed("budget-execute"),
+				BudgetReviewSet:     f.Changed("budget-review"),
+				StallDetectionSet:   f.Changed("stall-enabled"),
+				StallWindowSet:      f.Changed("stall-window"),
+				StallThresholdSet:   f.Changed("stall-threshold"),
 				SkipReview:          noReview,
 				Force:               force,
 				CodexBin:            codexBin,
@@ -215,17 +246,26 @@ isolation protects the main branch from partial changes.`,
 			render := NewRenderer(cmd.OutOrStdout(), noColor)
 			stats, err := runner.Run(ctx, render, slug, runnerOptions)
 			if err != nil {
-				return err
+				return newExitError(exitCodeForOutcome(stats.Outcome), err)
 			}
 
 			_, err = fmt.Fprintf(cmd.OutOrStdout(), "State saved at: %s\n", stats.StateFile)
-			return err
+			if err != nil {
+				return err
+			}
+			if code := exitCodeForOutcome(stats.Outcome); code != 0 {
+				return newExitError(code, fmt.Errorf("run outcome: %s", stats.Outcome))
+			}
+			return nil
 		},
 	}
 
 	cmd.Flags().StringVar(&executor, "executor", string(domain.AgentCodex), "Default executor agent: claude, codex, copilot, gemini, kimi, opencode, openrouter, or ollama")
 	cmd.Flags().StringVar(&reviewer, "reviewer", string(domain.AgentClaude), "Default reviewer agent: claude, codex, copilot, gemini, kimi, opencode, openrouter, ollama, or none")
 	cmd.Flags().StringVar(&planner, "planner", string(domain.AgentClaude), "Planner agent when --objective is provided: claude, codex, copilot, gemini, kimi, opencode, openrouter, or ollama")
+	cmd.Flags().StringVar(&executorModel, "executor-model", "", "Model override for executor agent")
+	cmd.Flags().StringVar(&reviewerModel, "reviewer-model", "", "Model override for reviewer agent")
+	cmd.Flags().StringVar(&plannerModel, "planner-model", "", "Model override for planner agent")
 	cmd.Flags().StringVar(&objective, "objective", "", "Objective text for macro-planning before execution")
 	cmd.Flags().IntVar(&maxRetries, "max-retries", 3, "Maximum retries per task (must be > 0)")
 	cmd.Flags().IntVar(&maxIterations, "max-iterations", 0, "Maximum loop iterations (0 = unlimited)")
@@ -254,5 +294,10 @@ isolation protects the main branch from partial changes.`,
 	cmd.Flags().StringVar(&fallbackOnTransient, "fallback-on-transient", "", "Global fallback agent for transient errors")
 	cmd.Flags().StringVar(&fallbackOnAuth, "fallback-on-auth", "", "Global fallback agent for auth errors")
 	cmd.Flags().DurationVar(&timeout, "timeout", 0, "Run timeout (e.g. 30m, 2h)")
+	cmd.Flags().IntVar(&budgetExecute, "budget-execute", 0, "Context budget for executor prompt (chars)")
+	cmd.Flags().IntVar(&budgetReview, "budget-review", 0, "Context budget for reviewer prompt (chars)")
+	cmd.Flags().BoolVar(&stallEnabled, "stall-enabled", false, "Enable stall detection")
+	cmd.Flags().IntVar(&stallWindow, "stall-window", 0, "Stall detection sliding window size")
+	cmd.Flags().Float64Var(&stallThreshold, "stall-threshold", 0, "Stall detection similarity threshold (0..1)")
 	return cmd
 }

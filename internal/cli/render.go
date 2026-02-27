@@ -94,24 +94,10 @@ func detectColor(out io.Writer, noColor bool) bool {
 	if strings.TrimSpace(os.Getenv("TERM")) == "dumb" {
 		return false
 	}
-
-	type fileDescriptor interface {
-		Fd() uintptr
-	}
-	f, ok := out.(fileDescriptor)
-	if !ok {
-		return false
-	}
-	return isTerminalFD(f.Fd())
-}
-
-func isTerminalFD(fd uintptr) bool {
-	file := os.NewFile(fd, "/dev/fd")
-	if file == nil {
-		return false
-	}
-	if info, err := file.Stat(); err == nil && (info.Mode()&os.ModeCharDevice) != 0 {
+	switch out {
+	case os.Stdout, os.Stderr:
 		return true
+	default:
+		return false
 	}
-	return false
 }

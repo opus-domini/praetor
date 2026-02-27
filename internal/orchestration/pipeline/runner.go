@@ -59,6 +59,10 @@ type activeRun struct {
 	eventSink         middleware.EventSink
 	availableAgents   []agent.ID
 	promptEngine      *prompt.Engine
+	budgetManager     *ContextBudgetManager
+	performancePath   string
+	stallDetector     *StallDetector
+	stallEscalations  map[string]int
 }
 
 // Run executes a plan slug until completion, blockage, or retry exhaustion.
@@ -77,11 +81,21 @@ func (r *Runner) Run(ctx context.Context, render domain.RenderSink, slug string,
 	}()
 
 	if run.state.ActiveCount() == 0 {
+		run.stats.Outcome = determineRunOutcome(run.state, nil)
+		run.state.Outcome = run.stats.Outcome
+		_ = run.store.WriteState(run.slug, run.state)
 		run.render.Success(fmt.Sprintf("All tasks already completed: %s", run.slug))
 		return run.stats, nil
 	}
 
 	if err := r.runLoop(ctx, &run); err != nil {
+		run.stats.TotalCostUSD = run.totalCost
+		run.stats.TotalDuration = time.Since(run.loopStart)
+		run.stats.Outcome = determineRunOutcome(run.state, err)
+		run.state.Outcome = run.stats.Outcome
+		_ = run.store.WriteState(run.slug, run.state)
+		_ = run.appendSnapshotEvent("failed", "", err.Error())
+		_ = run.persistSnapshot("failed", err.Error())
 		return run.stats, err
 	}
 	return run.stats, nil
@@ -162,9 +176,25 @@ func (r *Runner) bootstrapRun(ctx context.Context, render domain.RenderSink, slu
 	}
 	run.availableAgents = availableAgents
 
+	// Phase 4+: runtime diagnostics sink shared by middleware and runner lifecycle.
+	var eventSink middleware.EventSink = middleware.NopSink{}
+	runRoot := filepath.Join(store.RuntimeDir(), run.runID)
+	if err := os.MkdirAll(runRoot, 0o755); err != nil {
+		return run, localstate.RunLock{}, cleanupRuntime, fmt.Errorf("create runtime directory: %w", err)
+	}
+	eventsPath := filepath.Join(runRoot, "events.jsonl")
+	if jsonlSink, sinkErr := middleware.NewJSONLSink(eventsPath); sinkErr == nil {
+		eventSink = jsonlSink
+	} else {
+		render.Warn(fmt.Sprintf("failed to create event sink: %v", sinkErr))
+	}
+	run.eventSink = eventSink
+
 	runtime := r.runtime
 	if runtime == nil {
-		builtRuntime, buildErr := BuildAgentRuntime(normalized)
+		builtRuntime, buildErr := BuildAgentRuntimeWithDeps(normalized, RuntimeDeps{
+			EventSink: eventSink,
+		})
 		if buildErr != nil {
 			return run, localstate.RunLock{}, cleanupRuntime, buildErr
 		}
@@ -177,6 +207,13 @@ func (r *Runner) bootstrapRun(ctx context.Context, render domain.RenderSink, slu
 			return run, localstate.RunLock{}, cleanupRuntime, err
 		}
 		cleanupRuntime = sm.Cleanup
+	}
+	if closer, ok := eventSink.(interface{ Close() error }); ok {
+		previousCleanup := cleanupRuntime
+		cleanupRuntime = func() {
+			previousCleanup()
+			_ = closer.Close()
+		}
 	}
 
 	if ctxErr := ctx.Err(); ctxErr != nil {
@@ -194,11 +231,16 @@ func (r *Runner) bootstrapRun(ctx context.Context, render domain.RenderSink, slu
 			Objective:      normalized.Objective,
 			ProjectContext: run.projectContext,
 			Workdir:        projectRoot,
+			Model:          normalized.PlannerModel,
 			CodexBin:       normalized.CodexBin,
 			ClaudeBin:      normalized.ClaudeBin,
 		})
 		if planErr != nil {
 			return run, localstate.RunLock{}, cleanupRuntime, fmt.Errorf("planner failed: %w", planErr)
+		}
+		planned = enrichGeneratedPlan(planned, normalized)
+		if err := domain.ValidatePlan(planned); err != nil {
+			return run, localstate.RunLock{}, cleanupRuntime, fmt.Errorf("planner generated invalid plan: %w", err)
 		}
 		if err := writeGeneratedPlanFile(planFile, planned); err != nil {
 			return run, localstate.RunLock{}, cleanupRuntime, err
@@ -213,8 +255,12 @@ func (r *Runner) bootstrapRun(ctx context.Context, render domain.RenderSink, slu
 		return run, localstate.RunLock{}, cleanupRuntime, err
 	}
 	run.plan = plan
+	run.options, err = mergeRunnerOptionsWithPlan(run.options, plan)
+	if err != nil {
+		return run, localstate.RunLock{}, cleanupRuntime, err
+	}
 
-	if err := validateRequiredBinaries(normalized, plan); err != nil {
+	if err := validateRequiredBinaries(run.options, plan); err != nil {
 		return run, localstate.RunLock{}, cleanupRuntime, err
 	}
 
@@ -244,6 +290,14 @@ func (r *Runner) bootstrapRun(ctx context.Context, render domain.RenderSink, slu
 		}
 		render.Warn(fmt.Sprintf("Recovered state from local snapshot: %s", path))
 	}
+	if run.state.ActiveCount() > 0 {
+		if run.state.Outcome != "" {
+			run.state.Outcome = ""
+			if err := store.WriteState(slug, run.state); err != nil {
+				return run, lock, cleanupRuntime, err
+			}
+		}
+	}
 
 	stats := domain.RunnerStats{
 		PlanSlug:  slug,
@@ -259,18 +313,18 @@ func (r *Runner) bootstrapRun(ctx context.Context, render domain.RenderSink, slu
 		return run, lock, cleanupRuntime, err
 	}
 	run.snapshot = snapshotStore
-
-	// Phase 4: Event sink — JSONL file alongside snapshot data
-	var eventSink middleware.EventSink = middleware.NopSink{}
-	eventsPath := filepath.Join(snapshotStore.RootDir(), "events.jsonl")
-	if jsonlSink, sinkErr := middleware.NewJSONLSink(eventsPath); sinkErr == nil {
-		eventSink = jsonlSink
-	} else {
-		render.Warn(fmt.Sprintf("failed to create event sink: %v", sinkErr))
+	run.budgetManager = NewContextBudgetManager(run.options.BudgetExecute, run.options.BudgetReview)
+	diagnosticsDir := filepath.Join(snapshotStore.RootDir(), "diagnostics")
+	if err := os.MkdirAll(diagnosticsDir, 0o755); err != nil {
+		return run, lock, cleanupRuntime, err
 	}
-	run.eventSink = eventSink
+	run.performancePath = filepath.Join(diagnosticsDir, "performance.jsonl")
+	if run.options.StallDetection {
+		run.stallDetector = NewStallDetector(run.options.StallWindow, run.options.StallThreshold)
+		run.stallEscalations = make(map[string]int)
+	}
 
-	stuck, err := store.DetectStuckTasks(slug, run.state, normalized.MaxRetries)
+	stuck, err := store.DetectStuckTasks(slug, run.state, run.options.MaxRetries)
 	if err != nil {
 		return run, lock, cleanupRuntime, err
 	}
@@ -285,8 +339,25 @@ func (r *Runner) bootstrapRun(ctx context.Context, render domain.RenderSink, slu
 	}
 
 	render.Header("Praetor Loop")
-	if planTitle := strings.TrimSpace(plan.Title); planTitle != "" {
-		render.KV("Plan:", planTitle)
+	if planName := strings.TrimSpace(plan.Name); planName != "" {
+		render.KV("Plan:", planName)
+	}
+	if planSummary := strings.TrimSpace(plan.Summary); planSummary != "" {
+		render.KV("Summary:", planSummary)
+	}
+	render.KV("Executor:", formatAgentWithModel(run.options.DefaultExecutor, run.options.ExecutorModel))
+	if run.options.SkipReview {
+		render.KV("Reviewer:", "none (disabled)")
+	} else {
+		render.KV("Reviewer:", formatAgentWithModel(run.options.DefaultReviewer, run.options.ReviewerModel))
+	}
+	render.KV("Planner:", formatAgentWithModel(run.options.PlannerAgent, run.options.PlannerModel))
+	render.KV("Retries:", fmt.Sprintf("%d per task", run.options.MaxRetries))
+	render.KV("Budget:", fmt.Sprintf("execute=%d review=%d", run.options.BudgetExecute, run.options.BudgetReview))
+	if run.options.StallDetection {
+		render.KV("Stall:", fmt.Sprintf("on (window=%d threshold=%.2f)", run.options.StallWindow, run.options.StallThreshold))
+	} else {
+		render.KV("Stall:", "off")
 	}
 	render.KV("Slug:", slug)
 	render.KV("State:", stats.StateFile)
@@ -311,6 +382,18 @@ func (r *Runner) bootstrapRun(ctx context.Context, render domain.RenderSink, slu
 	}
 	_ = run.appendSnapshotEvent("bootstrap", "", "run initialized")
 	return run, lock, cleanupRuntime, nil
+}
+
+func formatAgentWithModel(agent domain.Agent, model string) string {
+	normalized := strings.TrimSpace(string(domain.NormalizeAgent(agent)))
+	if normalized == "" {
+		normalized = "-"
+	}
+	modelName := strings.TrimSpace(model)
+	if modelName == "" {
+		modelName = "default"
+	}
+	return fmt.Sprintf("%s (model=%s)", normalized, modelName)
 }
 
 func (r *Runner) runLoop(ctx context.Context, run *activeRun) error {
@@ -399,12 +482,36 @@ func runnerStateFinalize(_ context.Context, _ *Runner, run *activeRun) (runnerSt
 	}
 	run.stats.TotalCostUSD = run.totalCost
 	run.stats.TotalDuration = time.Since(run.loopStart)
+	run.stats.Outcome = determineRunOutcome(run.state, nil)
+	if strings.Contains(run.stopReason, "max iterations reached") {
+		run.stats.Outcome = domain.RunFailed
+	}
+	run.state.Outcome = run.stats.Outcome
+	if err := run.store.WriteState(run.slug, run.state); err != nil {
+		return nil, err
+	}
 	if err := run.persistSnapshot("finalize", "run finalized"); err != nil {
 		return nil, err
 	}
 	_ = run.appendSnapshotEvent("finalized", "", "run finalized")
 	run.render.Summary(run.stats.TasksDone, run.stats.TasksRejected, run.stats.Iterations, run.stats.TotalCostUSD, run.stats.TotalDuration)
 	return nil, nil
+}
+
+func determineRunOutcome(state domain.State, runErr error) domain.RunOutcome {
+	if runErr != nil {
+		if errors.Is(runErr, context.Canceled) || errors.Is(runErr, context.DeadlineExceeded) {
+			return domain.RunCanceled
+		}
+		return domain.RunFailed
+	}
+	if state.ActiveCount() == 0 {
+		if state.FailedCount() > 0 {
+			return domain.RunPartial
+		}
+		return domain.RunSuccess
+	}
+	return domain.RunFailed
 }
 
 func (r *Runner) runIteration(ctx context.Context, run *activeRun) (bool, error) {
@@ -447,6 +554,9 @@ func normalizeRunnerOptions(options domain.RunnerOptions) (domain.RunnerOptions,
 	if normalized.KeepLastRuns < 0 {
 		return domain.RunnerOptions{}, errors.New("keep-last-runs cannot be negative")
 	}
+	if normalized.Timeout < 0 {
+		return domain.RunnerOptions{}, errors.New("timeout cannot be negative")
+	}
 	switch normalized.Isolation {
 	case domain.IsolationWorktree, domain.IsolationOff:
 	case "":
@@ -486,6 +596,9 @@ func normalizeRunnerOptions(options domain.RunnerOptions) (domain.RunnerOptions,
 		return domain.RunnerOptions{}, fmt.Errorf("invalid planner agent %q", normalized.PlannerAgent)
 	}
 	normalized.Objective = strings.TrimSpace(normalized.Objective)
+	normalized.ExecutorModel = strings.TrimSpace(normalized.ExecutorModel)
+	normalized.ReviewerModel = strings.TrimSpace(normalized.ReviewerModel)
+	normalized.PlannerModel = strings.TrimSpace(normalized.PlannerModel)
 
 	if strings.TrimSpace(normalized.CodexBin) == "" {
 		normalized.CodexBin = "codex"
@@ -520,6 +633,21 @@ func normalizeRunnerOptions(options domain.RunnerOptions) (domain.RunnerOptions,
 	if strings.TrimSpace(normalized.OllamaModel) == "" {
 		normalized.OllamaModel = "llama3"
 	}
+	if normalized.BudgetExecute <= 0 {
+		normalized.BudgetExecute = 120000
+	}
+	if normalized.BudgetReview <= 0 {
+		normalized.BudgetReview = 80000
+	}
+	if normalized.StallWindow <= 0 {
+		normalized.StallWindow = 3
+	}
+	if normalized.StallThreshold <= 0 {
+		normalized.StallThreshold = 0.67
+	}
+	if normalized.StallThreshold > 1 {
+		return domain.RunnerOptions{}, errors.New("stall threshold must be <= 1")
+	}
 	if normalized.RunnerMode == domain.RunnerTMUX {
 		if !isTMUXCompatibleAgent(normalized.DefaultExecutor) {
 			return domain.RunnerOptions{}, fmt.Errorf("runner mode %q does not support executor %q", normalized.RunnerMode, normalized.DefaultExecutor)
@@ -545,19 +673,84 @@ func normalizeRunnerOptions(options domain.RunnerOptions) (domain.RunnerOptions,
 	return normalized, nil
 }
 
+func mergeRunnerOptionsWithPlan(options domain.RunnerOptions, plan domain.Plan) (domain.RunnerOptions, error) {
+	merged := options
+
+	if !options.ExecutorAgentSet {
+		if value := domain.NormalizeAgent(plan.Settings.Agents.Executor.Agent); value != "" {
+			merged.DefaultExecutor = value
+		}
+	}
+	if !options.ReviewerAgentSet {
+		if value := domain.NormalizeAgent(plan.Settings.Agents.Reviewer.Agent); value != "" {
+			merged.DefaultReviewer = value
+		}
+	}
+	if !options.PlannerAgentSet {
+		if value := domain.NormalizeAgent(plan.Settings.Agents.Planner.Agent); value != "" {
+			merged.PlannerAgent = value
+		}
+	}
+	if !options.ExecutorModelSet {
+		if value := strings.TrimSpace(plan.Settings.Agents.Executor.Model); value != "" {
+			merged.ExecutorModel = value
+		}
+	}
+	if !options.ReviewerModelSet {
+		if value := strings.TrimSpace(plan.Settings.Agents.Reviewer.Model); value != "" {
+			merged.ReviewerModel = value
+		}
+	}
+	if !options.PlannerModelSet {
+		if value := strings.TrimSpace(plan.Settings.Agents.Planner.Model); value != "" {
+			merged.PlannerModel = value
+		}
+	}
+
+	policy := plan.Settings.ExecutionPolicy
+	if !options.MaxRetriesSet && policy.MaxRetriesPerTask > 0 {
+		merged.MaxRetries = policy.MaxRetriesPerTask
+	}
+	if !options.MaxIterationsSet && policy.MaxTotalIterations > 0 {
+		merged.MaxIterations = policy.MaxTotalIterations
+	}
+	if !options.TimeoutSet && strings.TrimSpace(policy.Timeout) != "" {
+		timeout, err := time.ParseDuration(strings.TrimSpace(policy.Timeout))
+		if err != nil {
+			return domain.RunnerOptions{}, fmt.Errorf("invalid plan timeout: %w", err)
+		}
+		merged.Timeout = timeout
+	}
+	if !options.BudgetExecuteSet && policy.Budget.Execute > 0 {
+		merged.BudgetExecute = policy.Budget.Execute
+	}
+	if !options.BudgetReviewSet && policy.Budget.Review > 0 {
+		merged.BudgetReview = policy.Budget.Review
+	}
+	if !options.StallDetectionSet {
+		merged.StallDetection = policy.StallDetection.Enabled
+	}
+	if !options.StallWindowSet && policy.StallDetection.Window > 0 {
+		merged.StallWindow = policy.StallDetection.Window
+	}
+	if !options.StallThresholdSet && policy.StallDetection.Threshold > 0 {
+		merged.StallThreshold = policy.StallDetection.Threshold
+	}
+
+	return normalizeRunnerOptions(merged)
+}
+
 func validateRequiredBinaries(opts domain.RunnerOptions, plan domain.Plan) error {
 	neededAgents := map[domain.Agent]struct{}{}
 	if opts.RunnerMode == domain.RunnerTMUX {
-		for idx, task := range plan.Tasks {
-			executor := domain.NormalizeAgent(task.Executor)
-			if executor != "" && !isTMUXCompatibleAgent(executor) {
-				return fmt.Errorf("runner mode %q does not support tasks[%d].executor=%q; use --runner direct or --runner pty", opts.RunnerMode, idx, executor)
-			}
-			if !opts.SkipReview {
-				reviewer := domain.NormalizeAgent(task.Reviewer)
-				if reviewer != "" && !isTMUXCompatibleAgent(reviewer) {
-					return fmt.Errorf("runner mode %q does not support tasks[%d].reviewer=%q; use --runner direct or --runner pty", opts.RunnerMode, idx, reviewer)
-				}
+		executor := domain.NormalizeAgent(opts.DefaultExecutor)
+		if executor != "" && !isTMUXCompatibleAgent(executor) {
+			return fmt.Errorf("runner mode %q does not support default executor %q; use --runner direct or --runner pty", opts.RunnerMode, executor)
+		}
+		if !opts.SkipReview {
+			reviewer := domain.NormalizeAgent(opts.DefaultReviewer)
+			if reviewer != "" && !isTMUXCompatibleAgent(reviewer) {
+				return fmt.Errorf("runner mode %q does not support default reviewer %q; use --runner direct or --runner pty", opts.RunnerMode, reviewer)
 			}
 		}
 	}
@@ -568,13 +761,6 @@ func validateRequiredBinaries(opts domain.RunnerOptions, plan domain.Plan) error
 	neededAgents[domain.NormalizeAgent(opts.DefaultExecutor)] = struct{}{}
 	if !opts.SkipReview {
 		neededAgents[domain.NormalizeAgent(opts.DefaultReviewer)] = struct{}{}
-	}
-
-	for _, task := range plan.Tasks {
-		neededAgents[domain.NormalizeAgent(task.Executor)] = struct{}{}
-		if !opts.SkipReview {
-			neededAgents[domain.NormalizeAgent(task.Reviewer)] = struct{}{}
-		}
 	}
 
 	neededBins := map[string]string{}
@@ -661,11 +847,8 @@ func runPostTaskHook(ctx context.Context, hookPath, workdir, runDir string) (boo
 	return false, feedback
 }
 
-func resolveExecutor(task domain.StateTask, defaultExecutor domain.Agent) (domain.Agent, error) {
-	executor := domain.NormalizeAgent(task.Executor)
-	if executor == "" {
-		executor = defaultExecutor
-	}
+func resolveExecutor(defaultExecutor domain.Agent) (domain.Agent, error) {
+	executor := domain.NormalizeAgent(defaultExecutor)
 	if executor == domain.AgentNone {
 		return "", errors.New("executor cannot be none")
 	}
@@ -675,15 +858,12 @@ func resolveExecutor(task domain.StateTask, defaultExecutor domain.Agent) (domai
 	return executor, nil
 }
 
-func resolveReviewer(task domain.StateTask, defaultReviewer domain.Agent, skipReview bool) (domain.Agent, error) {
+func resolveReviewer(defaultReviewer domain.Agent, skipReview bool) (domain.Agent, error) {
 	if skipReview {
 		return domain.AgentNone, nil
 	}
 
-	reviewer := domain.NormalizeAgent(task.Reviewer)
-	if reviewer == "" {
-		reviewer = defaultReviewer
-	}
+	reviewer := domain.NormalizeAgent(defaultReviewer)
 	if _, ok := domain.ValidReviewers[reviewer]; !ok {
 		return "", fmt.Errorf("invalid reviewer %q", reviewer)
 	}
@@ -732,6 +912,93 @@ func shortToken(value string, maxLen int) string {
 
 func writeText(path, text string) error {
 	return os.WriteFile(path, []byte(text), 0o644)
+}
+
+func enrichGeneratedPlan(plan domain.Plan, opts domain.RunnerOptions) domain.Plan {
+	if plan.SchemaVersion == 0 {
+		plan.SchemaVersion = 1
+	}
+	if strings.TrimSpace(plan.Name) == "" {
+		plan.Name = "generated plan"
+	}
+	if strings.TrimSpace(plan.Meta.Source) == "" {
+		plan.Meta.Source = "agent"
+	}
+	if strings.TrimSpace(plan.Meta.CreatedAt) == "" {
+		plan.Meta.CreatedAt = time.Now().UTC().Format(time.RFC3339)
+	}
+
+	executor := domain.NormalizeAgent(plan.Settings.Agents.Executor.Agent)
+	if executor == "" {
+		plan.Settings.Agents.Executor.Agent = domain.NormalizeAgent(opts.DefaultExecutor)
+	}
+	if strings.TrimSpace(plan.Settings.Agents.Executor.Model) == "" {
+		plan.Settings.Agents.Executor.Model = strings.TrimSpace(opts.ExecutorModel)
+	}
+
+	reviewer := domain.NormalizeAgent(plan.Settings.Agents.Reviewer.Agent)
+	if reviewer == "" {
+		plan.Settings.Agents.Reviewer.Agent = domain.NormalizeAgent(opts.DefaultReviewer)
+	}
+	if strings.TrimSpace(plan.Settings.Agents.Reviewer.Model) == "" {
+		plan.Settings.Agents.Reviewer.Model = strings.TrimSpace(opts.ReviewerModel)
+	}
+
+	planner := domain.NormalizeAgent(plan.Settings.Agents.Planner.Agent)
+	if planner == "" {
+		plan.Settings.Agents.Planner.Agent = domain.NormalizeAgent(opts.PlannerAgent)
+	}
+	if strings.TrimSpace(plan.Settings.Agents.Planner.Model) == "" {
+		plan.Settings.Agents.Planner.Model = strings.TrimSpace(opts.PlannerModel)
+	}
+
+	policy := plan.Settings.ExecutionPolicy
+	if policy.MaxRetriesPerTask <= 0 {
+		policy.MaxRetriesPerTask = opts.MaxRetries
+	}
+	if policy.MaxTotalIterations < 0 {
+		policy.MaxTotalIterations = 0
+	}
+	if strings.TrimSpace(policy.Timeout) == "" && opts.Timeout > 0 {
+		policy.Timeout = opts.Timeout.String()
+	}
+	if policy.Budget.Execute <= 0 {
+		policy.Budget.Execute = opts.BudgetExecute
+	}
+	if policy.Budget.Review <= 0 {
+		policy.Budget.Review = opts.BudgetReview
+	}
+	if policy.StallDetection.Window <= 0 {
+		policy.StallDetection.Window = opts.StallWindow
+	}
+	if policy.StallDetection.Threshold <= 0 {
+		policy.StallDetection.Threshold = opts.StallThreshold
+	}
+	if !policy.StallDetection.Enabled {
+		policy.StallDetection.Enabled = opts.StallDetection
+	}
+	plan.Settings.ExecutionPolicy = policy
+
+	for i := range plan.Tasks {
+		plan.Tasks[i].Acceptance = normalizeAcceptanceItems(plan.Tasks[i].Acceptance)
+	}
+
+	return plan
+}
+
+func normalizeAcceptanceItems(items []string) []string {
+	if len(items) == 0 {
+		return nil
+	}
+	normalized := make([]string, 0, len(items))
+	for _, item := range items {
+		item = strings.TrimSpace(item)
+		if item == "" {
+			continue
+		}
+		normalized = append(normalized, item)
+	}
+	return normalized
 }
 
 func writeGeneratedPlanFile(path string, plan domain.Plan) error {
@@ -785,6 +1052,7 @@ func (run *activeRun) persistSnapshot(phase, message string) error {
 		ManifestTruncated: run.manifestTruncated,
 		Phase:             strings.TrimSpace(phase),
 		Message:           strings.TrimSpace(message),
+		Outcome:           run.stats.Outcome,
 		Iteration:         run.stats.Iterations,
 		Timestamp:         time.Now().UTC().Format(time.RFC3339),
 		State:             run.state,

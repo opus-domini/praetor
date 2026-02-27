@@ -8,17 +8,30 @@ const (
 	EventAgentComplete EventType = "agent_complete"
 	EventAgentError    EventType = "agent_error"
 	EventAgentFallback EventType = "agent_fallback"
+	EventTaskStalled   EventType = "task_stalled"
+	EventBudgetWarning EventType = "budget_warning"
+	EventGateResult    EventType = "gate_result"
+	EventStateTransit  EventType = "state_transition"
 )
 
 // ExecutionEvent captures one observable moment during agent execution.
 type ExecutionEvent struct {
-	Timestamp string    `json:"timestamp"`
-	Type      EventType `json:"type"`
-	Agent     string    `json:"agent"`
-	Role      string    `json:"role,omitempty"`
-	Strategy  string    `json:"strategy,omitempty"`
-	Error     string    `json:"error,omitempty"`
-	Message   string    `json:"message,omitempty"`
-	DurationS float64   `json:"duration_s,omitempty"`
-	CostUSD   float64   `json:"cost_usd,omitempty"`
+	SchemaVersion int            `json:"schema_version,omitempty"`
+	Timestamp     string         `json:"timestamp"`
+	Type          EventType      `json:"type"`
+	EventType     string         `json:"event_type,omitempty"`
+	RunID         string         `json:"run_id,omitempty"`
+	TaskID        string         `json:"task_id,omitempty"`
+	Phase         string         `json:"phase,omitempty"`
+	Agent         string         `json:"agent,omitempty"`
+	Role          string         `json:"role,omitempty"`
+	Strategy      string         `json:"strategy,omitempty"`
+	Error         string         `json:"error,omitempty"`
+	Message       string         `json:"message,omitempty"`
+	DurationS     float64        `json:"duration_s,omitempty"`
+	CostUSD       float64        `json:"cost_usd,omitempty"`
+	Similarity    float64        `json:"similarity,omitempty"`
+	WindowSize    int            `json:"window_size,omitempty"`
+	Action        string         `json:"action,omitempty"`
+	Data          map[string]any `json:"data,omitempty"`
 }

@@ -2,12 +2,12 @@
 
 ## Overview
 
-`praetor` is a CLI-first orchestrator with two execution modes:
+`praetor` is a CLI-first orchestrator with two primary execution paths:
 
-- **Plan-driven execution** (`praetor plan run <slug>`) with Plan/Execute/Review phases.
-- **Single-prompt dispatch** (`praetor exec`) through a centralized multi-provider `Agent` abstraction.
+- **Plan orchestration**: `praetor plan run <slug>`
+- **Single dispatch**: `praetor exec`
 
-Built-in providers:
+Providers supported by the unified agent abstraction:
 
 - `claude` (CLI)
 - `codex` (CLI)
@@ -23,285 +23,144 @@ Built-in providers:
 ```text
 cmd/praetor/                      CLI entrypoint
 internal/
-├── agent/                        Central polymorphic Agent interface
-│   ├── adapters/                 CLI and REST adapter implementations (8 providers)
-│   ├── middleware/               Middleware pipeline (logging, metrics, event sinks)
-│   ├── runner/                   Command execution abstraction (exec, PTY, process adapter)
-│   ├── runtime/                  Registry runtime, fallback runtime, default wiring
-│   └── text/                     Prompt composition and output parsing helpers
-├── app/                          Bootstrap, dependency wiring, root resolution
-├── cli/                          Cobra command wiring + terminal renderer + doctor
-├── config/                       Config loader (`config.toml`, global + per-project)
-├── domain/                       Pure domain types (Plan, Task, State, Agent, transitions, graph)
+├── agent/                        Provider abstraction + adapters + middleware
+│   ├── adapters/                 CLI and REST implementations
+│   ├── middleware/               Logging, metrics, event sinks
+│   ├── runner/                   Command execution abstraction
+│   ├── runtime/                  Registry + fallback runtime
+│   └── text/                     Prompt/output helpers
+├── app/                          Bootstrap and dependency wiring
+├── cli/                          Cobra commands and renderer
+├── config/                       Config loading and normalization
+├── domain/                       Core types, parsing, transitions, validation
 ├── orchestration/
-│   ├── fsm/                      Generic functional state machine (stateFn pattern)
-│   └── pipeline/                 Plan/Execute/Review runner, cognitive agents, prompts, runtime composition, router
-├── prompt/                       Prompt template engine (go:embed + overlay)
-├── runtime/
-│   ├── process/                  Non-interactive subprocess execution
-│   ├── pty/                      Interactive pseudo-terminal sessions (start/read/write/close)
-│   └── tmux/                     Tmux-based runner with session management
-├── state/                        Snapshots, checkpoints, locks, XDG paths
-└── workspace/                    Git root resolution and `praetor.{yaml,yml,md}` loading
+│   ├── fsm/                      Generic state-function engine
+│   └── pipeline/                 Plan/Execute/Review loop + cognitive agents
+├── prompt/                       Template engine (embedded + overlay)
+├── runtime/                      Process, PTY, tmux execution backends
+├── state/                        Stores, locks, checkpoints, snapshots
+└── workspace/                    Project root/manifest resolution
 ```
 
-## Agent layer
+## Domain model
 
-`internal/agent` is the canonical provider abstraction. It defines the polymorphic `Agent` interface
-and all associated types (`ID`, `Transport`, `Capabilities`, request/response contracts).
+`internal/domain` is dependency-free and centralizes:
 
-Key sub-packages:
+- Plan schema v1 (`Plan`, `Task`, `PlanSettings`, `PlanQuality`, `ExecutionPolicy`)
+- Mutable run state (`State`, `StateTask`, `TaskStatus`)
+- Runtime config (`RunnerOptions`)
+- Parsing contracts (`ParseExecutorResult`, `ParseReviewDecision`, `ParseGateEvidence`)
+- Transitions/graph (`Transition`, `NextRunnableTask`, blocked-dependency reporting)
 
-- **`agent/adapters/`** — One file per provider (8 adapters: claude, codex, copilot, gemini, kimi, opencode, openrouter, ollama). Each implements `agent.Agent`.
-- **`agent/middleware/`** — Composable `Middleware` type (same pattern as `http.Handler` middleware). Includes `Logging`, `Metrics`, event types, and event sinks (`JSONLSink`, `MultiplexSink`, `NopSink`).
-- **`agent/runtime/`** — `RegistryRuntime` routes requests through the `agent.Registry`; `FallbackRuntime` wraps it with error-class-based automatic failover.
-- **`agent/catalog.go`** — Single source of truth for all agent metadata (binary names, transports, capabilities, install hints).
-- **`agent/probe.go`** — Health-check prober for CLI and REST agents (used by `praetor doctor` and intelligent routing).
+Plan loading is strict and two-pass:
 
-## Domain layer
+1. Detect known legacy fields and return migration-oriented errors.
+2. Strict decode with `DisallowUnknownFields()`.
 
-`internal/domain` is the single source of truth for all domain types. It has zero
-internal dependencies (only Go stdlib). Other packages import from domain directly.
-
-Key contents:
-
-- **Types:** `Agent`, `Plan`, `Task`, `TaskStatus`, `StateTask`, `State`, `RunnerOptions`,
-  `AgentRequest`, `AgentResult`, `CommandSpec`, `ProcessResult`, `CostEntry`, `CheckpointEntry`,
-  `PlanStatus`, `ExecutorResult`, `ReviewDecision`.
-- **Interfaces:** `AgentSpec`, `ProcessRunner`, `SessionManager`, `AgentRuntime`, `RenderSink`.
-- **Transitions:** `ValidTransitions`, `Transition()`, `IsTerminal()`, `NormalizeStatus()`.
-- **Graph:** `NextRunnableTask()`, `RunnableTasks()`, `BlockedTasksReport()`.
-- **Parsing:** `ParseExecutorResult()`, `ParseReviewDecision()`.
-- **Plan helpers:** `LoadPlan()`, `ValidatePlan()`, `NewPlanFile()`, `PlanChecksum()`.
-
-## Execution flow
+## Execution flows
 
 ### `praetor exec`
 
 1. CLI resolves provider and prompt.
-2. CLI builds the default `agent.Registry` (CLI + REST adapters).
-3. Selected `Agent` executes prompt through `Execute(...)`.
-4. Response is printed to stdout.
+2. Runtime registry resolves adapter.
+3. Agent executes.
+4. Output is written to stdout.
 
 ### `praetor plan run <slug>`
 
-1. CLI resolves plan slug, workdir, and merged config.
-2. Runner resolves git project root and reads workspace manifest (`praetor.yaml`, `praetor.yml`, fallback `praetor.md`).
-3. Runner initializes project state store and acquires run lock.
-4. Runner restores from latest local project snapshot when newer.
-5. Runner probes agent availability (CLI binary detection + REST health checks).
-6. Optional planner phase (`--objective`) generates a plan before execution.
-7. Main loop runs as FSM (`stateFn`) with explicit transitions:
-   - guard/cancellation checks
-   - task selection (with intelligent routing from available agents)
-   - execute (with automatic fallback on classified errors)
-   - review
-   - finalize
-8. Each transition persists:
-   - mutable plan state
-   - checkpoints/metrics
-   - transactional local snapshot (`<project-home>/runtime/<run-id>/snapshot.json` + journal)
-   - structured execution events (`events.jsonl`)
-9. Runner exits on completion, cancellation, blockage, or iteration cap.
+1. Resolve project root and workspace manifest.
+2. Load plan and state store.
+3. Merge runtime options with precedence (`CLI > plan.settings > resolved config file > defaults`).
+4. Build runtime stack with shared event sink.
+5. Run loop FSM:
+   - select runnable task
+   - execute
+   - review/gates
+   - apply outcome
+   - persist snapshots/events/metrics
+6. Finalize run with explicit `RunOutcome` and exit code.
 
-```mermaid
----
-config:
-  theme: dark
----
-flowchart TD
-    A[CLI: plan run] --> B[Resolve project root + manifest]
-    B --> C[Init state + lock]
-    C --> D{Snapshot recoverable?}
-    D -- yes --> E[Restore latest valid snapshot]
-    D -- no --> F[Use current state]
-    E --> G[Probe agent availability]
-    F --> G
-    G --> H{Objective provided?}
-    H -- yes --> I[Plan phase]
-    H -- no --> J[Loop FSM]
-    I --> J
-    J --> K[Select task + route executor]
-    K --> L[Execute]
-    L --> M{Error?}
-    M -- classified --> N[Fallback to alternate agent]
-    M -- no --> O{Review enabled?}
-    N --> O
-    O -- yes --> P[Review]
-    O -- no --> Q[Apply outcome]
-    P --> Q
-    Q --> R[Persist checkpoint + snapshot + events]
-    R --> S{Done/blocked/canceled?}
-    S -- no --> J
-    S -- yes --> T[Finalize + release lock]
-```
+## Runtime composition
 
-## Orchestration
-
-### FSM (`internal/orchestration/fsm`)
-
-Generic functional state machine using `StateFn[S any]` — a function that takes
-context and state, returning the next state function or nil to halt. Inspired by
-Rob Pike's lexer pattern, generalized with Go generics.
-
-### Pipeline (`internal/orchestration/pipeline`)
-
-Contains the full Plan/Execute/Review orchestration engine:
-
-- **Phase rules:** Plan/Execute/Review/Gate sequence and valid transitions.
-- **Runner:** Dependency-aware plan executor with retries, review gates, and isolation.
-- **Cognitive agents:** Polymorphic `CognitiveAgent` interface for Plan/Execute/Review.
-- **Prompts:** System and task prompt builders for executor, reviewer, and planner.
-- **Runtime composition:** layered `BuildAgentRuntime` factory that assembles `RegistryRuntime` → `FallbackRuntime` → `Logging` → `Metrics` middleware chain, preserving `SessionManager` delegation via `composedRuntime`.
-- **Router:** `resolveExecutorWithRouting()` intelligently selects an executor from available agents when the default is unreachable, preferring CLI over REST transport.
-
-## Prompt template system
-
-`internal/prompt` externalizes all system and task prompts into `text/template` files
-with embedded defaults via `go:embed` and optional per-project overrides.
-
-### Engine
-
-`prompt.Engine` loads templates in two layers:
-
-1. **Embedded defaults** — `internal/prompt/templates/*.tmpl` compiled into the binary.
-2. **Project overlay** — `.praetor/prompts/*.tmpl` in the project root. Files override defaults by matching filename.
-
-```go
-engine, _ := prompt.NewEngine(".praetor/prompts")
-result, _ := engine.Render("executor.system", prompt.ExecutorSystemData{...})
-```
-
-- `NewEngine("")` uses only embedded defaults.
-- Non-existent overlay directory is silently ignored.
-- `missingkey=error` ensures missing template variables fail loud.
-
-### Templates
-
-| Template | Purpose |
-|----------|---------|
-| `executor.system.tmpl` | System prompt for the executor agent |
-| `executor.task.tmpl` | Task prompt (retry, dependencies, description, criteria) |
-| `reviewer.system.tmpl` | System prompt for the reviewer agent |
-| `reviewer.task.tmpl` | Task prompt (executor output, git diff) |
-| `planner.system.tmpl` | System prompt for the planner (JSON schema) |
-| `planner.task.tmpl` | Task prompt for the planner (objective) |
-| `adapter.plan.tmpl` | Shared adapter Plan() prompt |
-| `adapter.plan.claude.tmpl` | Claude-specific Plan() system prompt |
-
-### Integration
-
-All `Build*Prompt()` functions in `pipeline/prompts.go` accept `*prompt.Engine` as the first parameter.
-When the engine is non-nil, templates are rendered; on any error, the original hardcoded fallback is used.
-This ensures backward compatibility — a nil engine produces identical output to the previous implementation.
-
-The `agent.PromptRenderer` interface (`Render(name, data) (string, error)`) decouples adapters
-from the prompt package, preventing import cycles.
-
-## Runtime model
-
-`pipeline.Runner` chooses mode-specific process execution strategy through one runtime contract:
-
-- `tmux`: same `agent.Agent` contract backed by tmux session/process adapter.
-- `direct`: same contract with non-PTY subprocess execution.
-- `pty`: same contract with PTY-first subprocess execution.
-
-The cognitive strategy is **Plan-and-Execute** with explicit **Review gate**:
-
-- `Plan`: macro decomposition
-- `Execute`: isolated task execution
-- `Review`: independent verification
-
-### Layered runtime
-
-The runtime is assembled as a decorator stack:
+The runtime is assembled as decorators:
 
 ```text
-RegistryRuntime          (routes by agent ID to CLI/REST adapters)
-  └── FallbackRuntime    (retries with alternate agent on classified errors)
-       └── Logging       (structured log entries + event emission)
-            └── Metrics  (thread-safe invocation counters and cost tracking)
+RegistryRuntime
+  └── FallbackRuntime
+       └── Logging middleware
+            └── Metrics middleware
 ```
 
-`FallbackRuntime` classifies errors into `transient`, `auth`, `rate_limit`, `unsupported`, or `unknown` and resolves a fallback agent via per-agent mappings or global class-based policies.
+`FallbackRuntime` uses error classification (`transient`, `auth`, `rate_limit`, `unsupported`, `unknown`) plus configured fallback mappings.
 
-## Error taxonomy
+## Prompt system
 
-`agent.ClassifyError()` pattern-matches on error strings from all 8 adapters:
+`internal/prompt` loads templates in two layers:
 
-| Class | Patterns |
-|-------|----------|
-| `transient` | connection refused, timeout, 502, 503, 504, network unreachable, eof |
-| `auth` | 401, 403, api key, unauthorized, forbidden |
-| `rate_limit` | 429, rate limit, too many requests |
-| `unsupported` | unsupported, not implemented, not supported |
-| `unknown` | everything else |
+1. Embedded defaults (`go:embed`)
+2. Optional project overlay (`.praetor/prompts/*.tmpl`)
 
-## Middleware pipeline
+Available templates:
 
-`agent/middleware.Middleware` is a function type `func(next AgentRuntime) AgentRuntime`, composed with `Chain(base, A, B)` → `A(B(base))`. Built-in middleware:
+| Template | Purpose |
+|---|---|
+| `executor.system.tmpl` | executor role/system instructions |
+| `executor.task.tmpl` | task payload, retries, acceptance, required gates |
+| `reviewer.system.tmpl` | reviewer role/system instructions |
+| `reviewer.task.tmpl` | task payload, executor output, git diff |
+| `planner.system.tmpl` | planner schema instructions (plan v1) |
+| `planner.task.tmpl` | objective/brief payload |
+| `adapter.plan.tmpl` | provider-shared planning prompt |
+| `adapter.plan.claude.tmpl` | Claude-specific planning prompt |
 
-- **Logging**: captures timestamp, agent, role, status, error, duration, cost; emits `ExecutionEvent` to an `EventSink`.
-- **Metrics**: thread-safe `Counters` keyed by `(agent, role, status)` with total cost and call count.
+## Observability and diagnostics
 
-## Observability
+Structured runtime diagnostics are persisted per run:
 
-Execution events are emitted as JSONL to `<run-dir>/events.jsonl`:
+- `runtime/<run-id>/events.jsonl`
+- `runtime/<run-id>/diagnostics/performance.jsonl`
+- `runtime/<run-id>/snapshot.json`
 
-```json
-{"timestamp":"...","type":"agent_complete","agent":"claude","role":"execute","duration_s":12.3,"cost_usd":0.05}
-```
+Emitted events include:
 
-Event types: `agent_start`, `agent_complete`, `agent_error`, `agent_fallback`.
+- `agent_start`, `agent_complete`, `agent_error`, `agent_fallback`
+- `task_stalled`
+- `budget_warning`
+- `gate_result`
 
-Sinks: `JSONLSink` (file), `MultiplexSink` (fan-out), `NopSink` (disabled), `CollectorSink` (tests).
-
-## PTY model
-
-`internal/runtime/pty` exposes interactive sessions with first-class operations:
-
-- `Start(ctx, spec)`
-- `Events() <-chan StreamEvent`
-- `Write(input)`
-- `CloseInput()`
-- `Wait()`
-- `Close()`
-
-This enables bidirectional interaction with CLI tools that require a real TTY.
-
-## Process runner
-
-`internal/runtime/process` provides non-interactive subprocess execution with
-stdout/stderr capture and optional file persistence. Used by direct-mode runners
-and agent specs that invoke CLI tools without a TTY.
+This stream is consumed by `praetor plan diagnose`.
 
 ## State and recovery
 
-All state lives under a single project home directory (`<praetor-home>/projects/<project-key>/`):
+Project data is isolated under `<praetor-home>/projects/<project-key>/`:
 
-- **Project state**: canonical mutable execution state, checkpoints, locks, logs, plans.
-- **Transactional snapshots**: `<project-home>/runtime/<run-id>/` for crash-safe recovery.
+- `plans/` plan files
+- `state/` mutable state
+- `locks/` run locks
+- `checkpoints/` transition ledger
+- `costs/` cost metrics
+- `logs/` per-invocation logs
+- `runtime/<run-id>/` transactional snapshots + diagnostics
 
-Snapshot files:
+Recovery behavior:
 
-- `snapshot.json`
-- `events.log`
-- `events.jsonl` (structured execution events)
-- `lock.json`
-- `meta.json`
+- latest valid snapshot may restore newer state
+- checksum mismatch prevents stale/foreign restore
+- transient in-progress states are reset to `pending` on load
 
-Writes are atomic (`tmp + rename`) and synced (`fsync`) on critical paths.
-`meta.json` stores snapshot checksum (`snapshot_sha256`) for integrity checks on recovery.
-Local run retention is enforced with `keep-last-runs` pruning and explicit resume is available via `praetor plan resume`.
+## Intelligent routing
+
+Agent availability is probed at bootstrap. Executor routing uses plan-level defaults and availability:
+
+1. Use configured default executor when healthy.
+2. Otherwise auto-select from available executors (CLI preferred over REST).
+
+There is no per-task agent override in plan schema v1.
 
 ## Design principles
 
-- Small packages with clear ownership.
-- Explicit interfaces over implicit coupling.
-- Provider transport isolation (CLI and REST behind one `Agent` contract).
-- Domain types in a single, dependency-free package.
-- Workspace context anchored at repository root.
-- FSM-driven orchestration to avoid nested, brittle control flow.
-- Transactional recovery by default.
-- Decorator-based runtime composition (fallback, logging, metrics) without modifying core adapters.
-- Error classification enables automatic failover without adapter changes.
+- CLI-first operational UX
+- Strict schemas and explicit failure modes
+- Filesystem as auditable source of truth
+- Context-budgeted prompts for predictable execution
+- Event-driven diagnostics without mandatory UI/dashboard

@@ -1,605 +1,366 @@
 # Task orchestration
 
-Praetor's core is plan-driven task orchestration. Define a sequence of tasks in a JSON plan, then execute it with `praetor plan run`. Each task goes through an executor agent, an optional post-task hook, and a reviewer agent before being marked as done.
+Praetor orchestrates plans with a strict JSON schema (`schema_version = 1`) and a Plan -> Execute -> Review loop.
 
-## Commands
+## CLI workflows
 
-### Create a plan
+### Create a plan (agent-assisted)
 
 ```bash
-praetor plan create my-feature
+praetor plan create "Implement user authentication with JWT and tests"
+praetor plan create --from-file docs/brief.md
+cat brief.md | praetor plan create --stdin
 ```
 
-Creates a skeleton plan at `<project-home>/plans/my-feature.json` and opens `$EDITOR`.
+Useful flags:
+
+- `--planner <agent>` and `--planner-model <model>`: override planner defaults.
+- `--slug <slug>`: force a specific slug.
+- `--dry-run`: print generated JSON without writing a file.
+- `--no-agent`: generate a minimal valid template without calling a planner.
+- `--force`: overwrite an existing plan file.
 
 ### Run a plan
-
-```bash
-praetor plan run my-plan
-```
-
-### Run with options
 
 ```bash
 praetor plan run my-plan \
   --runner direct \
   --executor codex \
   --reviewer claude \
-  --max-retries 5 \
-  --max-transitions 200 \
-  --keep-last-runs 20 \
-  --hook ./scripts/validate.sh \
-  --fallback-on-transient ollama \
-  --timeout 2h
+  --executor-model gpt-5-codex \
+  --reviewer-model opus \
+  --budget-execute 120000 \
+  --budget-review 80000 \
+  --stall-enabled \
+  --stall-window 3 \
+  --stall-threshold 0.67
 ```
 
-### Check progress
+### Diagnose a run
 
 ```bash
-praetor plan status my-plan
+praetor plan diagnose my-plan --query errors
+praetor plan diagnose my-plan --query stalls --format json
+praetor plan diagnose my-plan --query costs
 ```
 
-Output:
+Allowed queries: `errors`, `stalls`, `fallbacks`, `costs`, `all`.
 
-```
-Plan:     my-plan
-State:    ~/.config/praetor/projects/my-project-abc123/state/my-plan.state.json
-Updated:  2026-02-25T14:30:00Z
-Progress: 3/5 tasks done
-Status:   in progress
+## Plan schema v1
 
-  [x] TASK-001: Implement feature
-  [x] TASK-002: Add tests
-  [x] TASK-003: Update docs
-  [ ] TASK-004: Integration tests
-  [!] TASK-005: Final review (failed, attempt 3)
-```
-
-Status markers: `[x]` done, `[ ]` pending, `[>]` executing/reviewing, `[!]` failed.
-
-### List all tracked plans
-
-```bash
-praetor plan list
-```
-
-### Reset plan state
-
-```bash
-praetor plan reset my-plan
-```
-
-Removes state, lock, retry, and feedback files for the plan. Does not delete the plan file itself.
-
-### Resume from local snapshot
-
-```bash
-praetor plan resume my-plan
-```
-
-Restores the latest valid local snapshot from `<project-home>/runtime/<run-id>/snapshot.json` into project state storage.
-
-## Plan format
-
-Plans are JSON files with a `tasks` array. Each task can specify its own executor, reviewer, and model:
+Canonical schema file: [`docs/schemas/plan.v1.schema.json`](schemas/plan.v1.schema.json)
 
 ```json
 {
-  "title": "implement user auth",
+  "schema_version": 1,
+  "name": "Implementar autenticação de usuários",
+  "summary": "Adicionar fluxo de login seguro com testes e documentação mínima.",
+  "meta": {
+    "source": "agent",
+    "created_at": "2026-02-27T10:30:00Z",
+    "created_by": "hugo",
+    "generator": {
+      "name": "praetor",
+      "version": "0.15.0",
+      "prompt_hash": "sha256:4d2f..."
+    }
+  },
+  "settings": {
+    "agents": {
+      "planner": {
+        "agent": "claude",
+        "model": "opus"
+      },
+      "executor": {
+        "agent": "codex",
+        "model": "gpt-5-codex"
+      },
+      "reviewer": {
+        "agent": "claude",
+        "model": "opus"
+      }
+    },
+    "execution_policy": {
+      "max_total_iterations": 200,
+      "max_retries_per_task": 3,
+      "timeout": "1h",
+      "budget": {
+        "execute": 120000,
+        "review": 80000
+      },
+      "stall_detection": {
+        "enabled": false,
+        "window": 3,
+        "threshold": 0.67
+      }
+    }
+  },
+  "quality": {
+    "evidence_format": "gates_v1",
+    "required": ["tests", "lint"],
+    "optional": ["coverage>=80"]
+  },
   "tasks": [
     {
       "id": "TASK-001",
-      "title": "Add password hashing",
-      "executor": "codex",
-      "reviewer": "claude",
-      "model": "sonnet",
-      "description": "Implement bcrypt password hashing in pkg/auth.",
-      "criteria": "All existing tests pass. New tests cover hash and verify."
-    },
-    {
-      "id": "TASK-002",
-      "title": "Add login endpoint",
-      "depends_on": ["TASK-001"],
-      "executor": "codex",
-      "reviewer": "claude",
-      "description": "Add POST /login endpoint using the auth package.",
-      "criteria": "Endpoint returns 200 with valid credentials, 401 otherwise."
+      "title": "Criar módulo de autenticação",
+      "description": "Implementar hash e verificação de senha com bcrypt",
+      "acceptance": [
+        "Todos os testes da camada auth passando",
+        "Senha nunca é persistida em texto puro"
+      ],
+      "depends_on": []
     }
   ]
 }
 ```
 
-### Task fields
+### Required fields
 
-| Field | Required | Description |
-|-------|----------|-------------|
-| `id` | no | Unique task identifier. Auto-generated as `auto-<index>` if omitted. |
-| `title` | yes | Short task description. |
-| `depends_on` | no | Array of task IDs that must complete before this task runs. |
-| `executor` | no | Agent for execution: `claude`, `codex`, `copilot`, `gemini`, `kimi`, `opencode`, `openrouter`, or `ollama`. Falls back to `--executor`. |
-| `reviewer` | no | Agent for review: `claude`, `codex`, `copilot`, `gemini`, `kimi`, `opencode`, `openrouter`, `ollama`, or `none`. Falls back to `--reviewer`. |
-| `model` | no | Model hint: `sonnet`, `opus`, or `haiku`. |
-| `description` | no | Detailed task description included in the executor prompt. |
-| `criteria` | no | Acceptance criteria included in both executor and reviewer prompts. |
+- `schema_version` (must be `1`)
+- `name`
+- `settings.agents.executor.agent`
+- `settings.agents.reviewer.agent`
+- `tasks` (non-empty)
+- `tasks[].id` (unique, non-empty)
+- `tasks[].title` (non-empty)
+- `tasks[].acceptance` (non-empty array)
 
-### Validation rules
+### Rejected legacy fields
 
-The plan is validated at load time:
+Top-level:
 
-- `tasks` array cannot be empty.
-- Every task must have a non-empty `title`.
-- Task IDs must be unique.
-- `depends_on` must reference existing task IDs.
-- `executor` must be one of the 8 supported agents: `claude`, `codex`, `copilot`, `gemini`, `kimi`, `opencode`, `openrouter`, or `ollama` (if specified).
-- `reviewer` must be one of the 8 supported agents or `none` (if specified).
-- `model` must be `sonnet`, `opus`, or `haiku` (if specified).
+- `title`
+- `execution`
+- `origin`
 
-## Runtime model
+Task-level:
 
-### Data layout
+- `executor`
+- `reviewer`
+- `model`
+- `criteria`
 
-All Praetor data lives under a single home directory. Resolution order: `$PRAETOR_HOME` > `$XDG_CONFIG_HOME/praetor` > `~/.config/praetor`.
+Other legacy settings:
 
-```text
-~/.config/praetor/                       # $PRAETOR_HOME
-├── config.toml
-└── projects/
-    └── <project-key>/                   # e.g. "my-project-a3f9c12b4d8e"
-        ├── plans/                       # Plan JSON files
-        │   └── my-feature.json
-        ├── state/                       # Task state per plan (.state.json)
-        ├── locks/                       # PID-based run locks
-        ├── retries/                     # Retry counters (absorbed into state file on load)
-        ├── feedback/                    # Feedback files (absorbed into state file on load)
-        ├── costs/                       # Cost tracking ledger (tracking.tsv)
-        ├── checkpoints/                 # Audit log (history.tsv) and current state (.state)
-        ├── logs/                        # Per-run execution logs (purgeable)
-        │   └── <timestamp>-<task>-<sig>/
-        │       ├── executor.system.txt
-        │       ├── executor.prompt.txt
-        │       ├── executor.output.txt
-        │       ├── executor.prompt          # Raw prompt file (tmux mode)
-        │       ├── executor.system-prompt   # Raw system prompt file (tmux mode)
-        │       ├── executor.stdout          # Raw stdout capture (tmux mode)
-        │       ├── executor.stderr          # Raw stderr capture (tmux mode)
-        │       ├── executor.exit            # Exit code (tmux mode)
-        │       ├── executor.run.sh          # Wrapper script (tmux mode)
-        │       ├── reviewer.*               # Same structure for reviewer
-        │       ├── post-hook.stdout         # Post-task hook stdout (if used)
-        │       └── post-hook.stderr         # Post-task hook stderr (if used)
-        ├── runtime/                     # Transactional snapshots
-        │   └── <run-id>/
-        │       ├── snapshot.json
-        │       ├── events.log
-        │       ├── events.jsonl           # Structured execution events (JSONL)
-        │       ├── lock.json
-        │       └── meta.json
-        └── worktrees/                   # Git worktrees for isolation
-            └── <task-id>--<token>/
-```
+- `settings.plan`
+- `settings.agents.<role>.max_iterations`
 
-The project key is derived from the git repository name and a truncated path hash, ensuring state isolation between projects. No files are generated inside the user's repository.
+Plan loading uses two-pass validation:
 
-`meta.json` stores `snapshot_sha256`, which is validated during recovery to skip corrupted snapshots.
+1. Legacy detection with migration-oriented errors.
+2. Strict decode with `DisallowUnknownFields()`.
 
-### Task state machine
+No compatibility mode or migration layer exists. Non-v1 plans fail fast and must be recreated.
 
-Each task follows an explicit finite state machine with five states and validated transitions. The design adapts Rob Pike's function-as-state pattern for persistence: each state maps to a step function that does its work and returns the next `TaskStatus` to persist.
+## Configuration precedence
 
-#### States
+The effective runtime configuration is resolved in this order:
 
-| Status | Description | Terminal |
-|--------|-------------|----------|
-| `pending` | Ready to execute (or awaiting retry). | no |
-| `executing` | Executor agent is running. | no |
-| `reviewing` | Reviewer agent is evaluating the result. | no |
-| `done` | Task completed and merged successfully. | yes |
-| `failed` | All retry attempts exhausted. | yes |
-
-#### State diagram
+1. Explicit CLI flags
+2. `plan.settings` (`agents` + `execution_policy`)
+3. Resolved Praetor config (`$PRAETOR_CONFIG` or `<praetor-home>/config.toml`, including project section)
+4. Built-in defaults
 
 ```mermaid
 ---
 config:
   theme: dark
-  look: neo
 ---
-stateDiagram
+flowchart TD
+    A[CLI flags] --> B[plan.settings]
+    B --> C[project config]
+    C --> D[global defaults]
+```
+
+## `plan create` flow
+
+```mermaid
+---
+config:
+  theme: dark
+---
+flowchart TD
+    A[User: plan create brief] --> B[Input resolver]
+    B --> C{--no-agent?}
+    C -- yes --> D[Build minimal template]
+    C -- no --> E[Planner agent]
+    E --> F{Planner output valid?}
+    F -- no --> G[Persist planner failure log + return error]
+    F -- yes --> H[Normalize plan]
+    D --> H
+    H --> I[Enrich meta/settings]
+    I --> J[Generate slug]
+    J --> K[Write plans/<slug>.json]
+    K --> L[Print slug/path/task count]
+```
+
+## `plan run` flow
+
+```mermaid
+---
+config:
+  theme: dark
+---
+flowchart TD
+    A[CLI: plan run] --> B[Load plan + state]
+    B --> C[Resolve options precedence]
+    C --> D[Build runtime and event sink]
+    D --> E[FSM loop]
+    E --> F[Select runnable task]
+    F --> G[Build prompt with budget manager]
+    G --> H[Execute]
+    H --> I[Stall detection]
+    I --> J[Review + gate enforcement]
+    J --> K[Apply outcome + checkpoint]
+    K --> L[Persist snapshot + events + metrics]
+    L --> M{Done or blocked?}
+    M -- no --> E
+    M -- yes --> N[Compute RunOutcome]
+    N --> O[Exit code + status]
+```
+
+## Task state machine (with stall guard)
+
+```mermaid
+---
+config:
+  theme: dark
+---
+stateDiagram-v2
     [*] --> pending
-    pending --> executing: stepExecute
-    executing --> reviewing: PASS
-    executing --> done: PASS + reviewer=none
-    executing --> pending: FAIL/crash (attempt < max)
-    executing --> failed: FAIL/crash (attempt >= max)
-    reviewing --> done: approve
-    reviewing --> pending: reject/crash (attempt < max)
-    reviewing --> failed: reject/crash (attempt >= max)
+    pending --> executing: runnable task selected
+
+    executing --> reviewing: executor PASS
+    executing --> pending: executor FAIL/crash and retry left
+    executing --> failed: executor FAIL/crash and retries exhausted
+    executing --> failed: stall escalated to force fail
+
+    reviewing --> done: reviewer PASS and required gates PASS
+    reviewing --> pending: reviewer FAIL/gate missing and retry left
+    reviewing --> failed: reviewer FAIL and retries exhausted
+    reviewing --> failed: stall escalated to force fail
+
     done --> [*]
     failed --> [*]
 ```
 
-Tasks with `reviewer = none` skip the `reviewing` state: `executing` transitions directly to `done` on success.
+## Run outcome and exit codes
 
-#### Transition table
+Run outcome is persisted in state and snapshots.
 
-Every state change is validated against a declarative transition table. Invalid transitions return an error immediately.
+```mermaid
+---
+config:
+  theme: dark
+---
+stateDiagram-v2
+    [*] --> running
+    running --> success: all tasks done
+    running --> partial: no active tasks and failed > 0
+    running --> failed: fatal pipeline error
+    running --> canceled: context canceled/deadline
 
-```go
-var validTransitions = map[TaskStatus][]TaskStatus{
-    TaskPending:   {TaskExecuting, TaskFailed},
-    TaskExecuting: {TaskReviewing, TaskDone, TaskPending, TaskFailed},
-    TaskReviewing: {TaskDone, TaskPending, TaskFailed},
-    TaskDone:      {},  // terminal
-    TaskFailed:    {},  // terminal
-}
+    success --> [*]
+    partial --> [*]
+    failed --> [*]
+    canceled --> [*]
 ```
 
-#### Step functions
+| Exit code | Outcome | Meaning |
+|---|---|---|
+| `0` | `success` | all tasks completed |
+| `1` | `failed` | fatal pipeline failure |
+| `2` | `canceled` | canceled by signal/context/timeout |
+| `3` | `partial` | mix of `done` and `failed` tasks |
 
-| Step | Trigger | Outcomes |
-|------|---------|----------|
-| **stepExecute** | Task is `pending` | `executing` → run executor → PASS: `reviewing` (or `done` if no reviewer) / FAIL: `pending` (retry) / crash: `pending` (retry) |
-| **stepReview** | Task is `reviewing` | Run reviewer → PASS: `done` / FAIL: `pending` (retry) / crash: `pending` (retry) |
-| **retryGuard** | Before each step | If `attempt >= maxRetries`: `pending` → `failed` |
+## Context budget manager
 
-#### Crash recovery
+`ContextBudgetManager` keeps prompts bounded per phase.
 
-On state file load, transient states are reset for crash safety:
+Default budgets:
 
-- `executing` → `pending` (executor was interrupted)
-- `reviewing` → `pending` (reviewer was interrupted)
+- Execute: `120000` chars
+- Review: `80000` chars
 
-This is safe because no partial work is committed to the main branch until a task reaches `done`.
+Token estimate heuristic:
 
-#### Status normalization
+- `estimated_tokens = len(prompt) / 4`
 
-On load, any unrecognized status value defaults to `"pending"`. Retry counts from external files (`retries/*.count`) are absorbed into `StateTask.Attempt`. The state file is the single source of truth.
+Behavior:
 
-#### StateTask fields
+- Execute phase truncates retry feedback first.
+- Review phase truncates `executor_output` first, then `git_diff`.
+- Performance metrics are appended to `runtime/<run-id>/diagnostics/performance.jsonl`.
+- Truncation emits `budget_warning` events.
 
-```go
-type StateTask struct {
-    // ... plan fields (ID, Title, DependsOn, etc.) ...
-    Status   TaskStatus `json:"status"`              // current state
-    Attempt  int        `json:"attempt,omitempty"`    // retry count (0 = never tried)
-    Feedback string     `json:"feedback,omitempty"`   // last failure feedback
-}
-```
+## Stall detection
 
-`Attempt` and `Feedback` are embedded in the state file — no external retry/feedback files are needed in the hot path.
+When enabled, stall detection fingerprints normalized outputs per `task+phase` with a sliding window.
 
-### Dependency resolution
+Normalization removes high-variance noise:
 
-Tasks are selected in order. A task is runnable when:
+- timestamps
+- UUIDs
+- absolute paths
+- extra whitespace
 
-1. Its status is `pending`.
-2. All tasks in its `depends_on` list have status `done`.
+Escalation policy:
 
-The runner picks the first runnable task. If no task is runnable and active (non-terminal) tasks remain, the plan is blocked.
+1. try fallback agent (if configured)
+2. reduce phase budget
+3. mark task as failed (`stalled`)
 
-### Locking
+Events emitted: `task_stalled` with similarity, window size, and action.
 
-Each plan run acquires a PID-based lock file. If the lock holder process is still alive, a new run is rejected unless `--force` is used. Locks are released on exit.
+## Backpressure via quality gates
 
-### Retry mechanism
+`quality.required` enforces evidence-based completion.
 
-Each task carries its retry state in `StateTask.Attempt` and `StateTask.Feedback`. On failure:
-
-1. `Attempt` increments and `Feedback` stores the failure reason (crash message, reviewer rejection, hook output).
-2. The task transitions back to `pending` via a validated state transition.
-3. On the next attempt, the feedback is injected into the executor prompt with emphatic formatting.
-4. Before each step, a retry guard checks `Attempt >= maxRetries`. If exhausted, the task transitions to `failed` (terminal).
-
-`Attempt` and `Feedback` are cleared when a task completes successfully. They persist across process restarts as part of the state file.
-
-## Project context (`praetor.yaml` / `praetor.md`)
-
-At run start, Praetor resolves context from repository root in this order:
-
-1. `praetor.yaml`
-2. `praetor.yml`
-3. `praetor.md`
-
-When YAML follows the lightweight schema below, content is normalized before injection:
-
-```yaml
-version: "1"
-instructions:
-  - keep public API stable
-constraints:
-  - do not modify infra manifests
-test_commands:
-  - go test ./...
-```
-
-Unknown YAML keys fall back to raw fenced YAML. Normalized context is injected into planner/executor/reviewer prompts.
-
-Use project context for:
-
-- Coding conventions and style guidelines
-- Architecture constraints agents must respect
-- Testing requirements and CI expectations
-- Technology-specific instructions
-
-Manifest content is limited to 16 KiB. If it exceeds this limit, content is truncated with a warning.
-
-## Prompt customization
-
-All agent prompts (executor, reviewer, planner) use `text/template` files with embedded defaults.
-To customize prompts for a specific project, create `.praetor/prompts/` in the repository root
-and add template files that override the defaults by filename.
-
-### Override a prompt
-
-```bash
-mkdir -p .praetor/prompts
-```
-
-Create a file matching the template name. For example, to customize the executor system prompt:
-
-```bash
-cat > .praetor/prompts/executor.system.tmpl << 'EOF'
-{{- if .ProjectContext }}## Project Context
-{{ .ProjectContext }}
-
-{{ end -}}
-## Your Role
-You are a senior engineer. Follow TDD strictly.
-Always run `make test` before reporting RESULT.
-
-Required result format:
-RESULT: PASS
-SUMMARY: <brief summary>
-TESTS: <commands and outcomes>
-EOF
-```
-
-### Available templates
-
-| Template | Data struct | Key fields |
-|----------|------------|------------|
-| `executor.system.tmpl` | `ExecutorSystemData` | `ProjectContext` |
-| `executor.task.tmpl` | `ExecutorTaskData` | `IsRetry`, `RetryAttempt`, `PreviousFeedback`, `TaskTitle`, `TaskID`, `TaskIndex`, `TaskDependsOn`, `TaskDescription`, `TaskCriteria`, `PlanFile`, `PlanTitle`, `PlanProgress`, `Workdir` |
-| `reviewer.system.tmpl` | `ReviewerSystemData` | `ProjectContext` |
-| `reviewer.task.tmpl` | `ReviewerTaskData` | `TaskTitle`, `TaskID`, `TaskDependsOn`, `TaskDescription`, `TaskCriteria`, `PlanFile`, `PlanTitle`, `PlanProgress`, `Workdir`, `ExecutorOutput`, `GitDiff` |
-| `planner.system.tmpl` | `PlannerSystemData` | `ProjectContext` |
-| `planner.task.tmpl` | `PlannerTaskData` | `Objective` |
-| `adapter.plan.tmpl` | `AdapterPlanData` | `Objective`, `WorkspaceContext` |
-| `adapter.plan.claude.tmpl` | `AdapterPlanData` | `Objective`, `WorkspaceContext` |
-
-Templates use Go's `text/template` syntax with `missingkey=error`. A custom `add` function is available for arithmetic (e.g., `{{ add .RetryAttempt 1 }}`).
-
-Remove the override file to revert to the embedded default — no rebuild required.
-
-## Safety mechanisms
-
-### Worktree isolation
-
-Enabled by default (`--isolation worktree`). Before each executor run:
-
-1. A dedicated `git worktree` is created on a new branch (`praetor/<task>--<runID>`).
-2. The executor and reviewer agents operate inside the worktree, never touching the main working tree.
-3. On success: uncommitted changes are auto-committed, the branch is merged into main, and the worktree is removed.
-4. On any failure (executor crash, self-reported FAIL, hook failure, reviewer rejection): the worktree and branch are deleted without merging — the main tree stays untouched.
-
-Disable with `--isolation off` for non-git workspaces. Orphan worktree metadata from previous crashes is pruned automatically at startup via `git worktree prune`.
-
-### Post-task hook
-
-A custom script (`--hook <path>`) runs between the executor and reviewer phases:
-
-- The hook runs with the workdir as CWD.
-- Exit code 0: proceed to reviewer.
-- Exit code non-zero: increment retry, store last 50 lines of stdout as feedback, discard the worktree.
-- Stdout/stderr are saved to `<runDir>/post-hook.stdout` and `post-hook.stderr`.
-
-Use this for linters, type checkers, or integration tests that must pass before review.
-
-### Pre-flight checks
-
-Before the run starts, all required prerequisites are validated:
-
-- **CLI agents** (`claude`, `codex`, `copilot`, `gemini`, `kimi`, `opencode`): validated with `exec.LookPath` against the configured binary name.
-- **REST agents** (`openrouter`): validates that the API key environment variable is set.
-- **`tmux`**: required only in `--runner tmux` mode.
-
-Missing binaries or unset API keys produce a clear error listing all that are absent. Use `praetor doctor` to check agent availability independently.
-
-## Observability
-
-### Cost tracking
-
-Every agent invocation records a cost entry to `costs/tracking.tsv`:
-
-```
-timestamp	run_id	task_id	agent	role	duration_s	status	cost_usd
-2026-02-25T14:30:00Z	20260225-143000-TASK-001-abc12345	TASK-001	codex	executor	45.20	pass	0.032100
-```
-
-Cost is extracted from:
-- **Claude**: `ResultMessage.TotalCostUSD` from the stream-json protocol.
-- **Codex**: `total_cost_usd` from `--json` output (tmux mode).
-
-The run summary displays accumulated cost:
-
-```
-Run summary  done=5 rejected=1 iterations=6 cost=$0.2341 duration=2m15s
-```
-
-### Checkpoint audit log
-
-Every state transition appends to `checkpoints/history.tsv`:
-
-```
-timestamp	status	task_id	signature	run_id	message
-```
-
-Tracked transitions include `completed`, `executor_crashed`, `hook_failed`, `reviewer_crashed`, `review_rejected`, `blocked`, and `runtime_strategy`.
-
-The current checkpoint is also written as a key-value file at `checkpoints/<plan>.state`.
-
-### Terminal output
-
-Colored, structured output shows real-time progress:
-
-```
-=== Praetor ===
-Plan:        implement user auth
-Plan:        user-auth
-State:       ~/.config/praetor/projects/my-project-abc123/state/user-auth.state.json
-Progress:    0/2 done
-Isolation:   worktree
-tmux:        praetor-abc123
-
-[1/2] TASK-001 Add password hashing
-  executor (codex) attempt 1/3 [45.2s]
-  hook     (post-task) ./scripts/validate.sh
-  reviewer (claude) review complete [12.1s]
-  [ok] Completed: TASK-001
-
-[2/2] TASK-002 Add login endpoint
-  executor (codex) attempt 1/3 [38.7s]
-  reviewer (claude) review complete [8.3s]
-  [ok] Completed: TASK-002
-
-Run summary  done=2 rejected=0 iterations=2 cost=$0.0891 duration=1m44s
-```
-
-Disable colors with `--no-color` or the `NO_COLOR` environment variable.
-
-## Tmux execution
-
-Every agent invocation runs in a dedicated tmux window:
-
-1. A wrapper shell script is generated with the agent command, I/O redirection, and a `tmux wait-for` signal.
-2. The script is launched in a new tmux window named `praetor-<task>-<role>`.
-3. The runner blocks on `tmux wait-for <channel>` until the script completes.
-4. Exit code, stdout, and stderr are read from files.
-
-The tmux session is auto-created if it doesn't exist and auto-destroyed on clean exit (only if praetor created it). Attach to the session to watch agents work in real time:
-
-```bash
-tmux attach -t praetor-<project-hash>
-```
-
-## Execution strategy
-
-Each agent invocation records the effective execution strategy:
-
-- `structured` for native structured transports (for example REST/Ollama)
-- `process` for regular subprocess execution
-- `pty` for interactive terminal execution
-
-In `--runner direct`, CLI execution prefers `process` and falls back to `pty` when TTY-related failures are detected.
-
-## Fallback and resilience
-
-### Error classification
-
-When an agent fails, the error is classified automatically:
-
-| Class | Patterns |
-|-------|----------|
-| `transient` | connection refused, timeout, 502, 503, 504, network unreachable |
-| `auth` | 401, 403, api key, unauthorized |
-| `rate_limit` | 429, rate limit, too many requests |
-| `unsupported` | unsupported, not implemented |
-| `unknown` | everything else |
-
-### Fallback policy
-
-Configure automatic failover when errors occur:
-
-```toml
-# config.toml
-fallback = "ollama"                # per-agent: default executor → ollama
-fallback-on-transient = "gemini"   # all transient errors → gemini
-fallback-on-auth = "ollama"        # all auth errors → ollama
-```
-
-Or via CLI flags:
-
-```bash
-praetor plan run my-plan \
-  --fallback ollama \
-  --fallback-on-transient gemini \
-  --fallback-on-auth ollama
-```
-
-Resolution order:
-1. Per-agent mapping (`--fallback`) — if the default executor fails, use this agent.
-2. Global class-based fallback (`--fallback-on-transient`, `--fallback-on-auth`) — matches any agent by error class.
-3. No match — original error propagates.
-
-Context cancellation always propagates immediately — no fallback is attempted.
-
-## Middleware pipeline
-
-Every agent invocation passes through a composable middleware chain:
+Executor output format:
 
 ```text
-Request → Logging → Metrics → [FallbackRuntime →] RegistryRuntime → Agent adapter
+GATES:
+- tests: PASS (42 tests passed, 0 failed)
+- lint: PASS (no issues found)
 ```
 
-### Logging middleware
+Rules:
 
-Captures structured log entries for every invocation:
-- Timestamp, agent, role, status, error, strategy, duration, cost.
-- Emits `ExecutionEvent` to the configured event sink.
+- Missing required gate => review rejection.
+- Required gate with `FAIL` => review rejection.
+- Optional gates are logged (`gate_result`) but do not block completion.
 
-### Metrics middleware
+## Diagnostics and observability
 
-Thread-safe counters keyed by `(agent, role, status)`:
-- Total invocations, total cost, per-key breakdowns.
-- Queryable via `Counters.Snapshot()`.
+Run artifacts:
 
-## Structured events
+- `runtime/<run-id>/events.jsonl`
+- `runtime/<run-id>/diagnostics/performance.jsonl`
+- `runtime/<run-id>/snapshot.json`
 
-Execution events are written as JSONL to `<run-dir>/events.jsonl`:
+Event schema (v1):
 
 ```json
-{"timestamp":"2026-02-27T10:30:00Z","type":"agent_complete","agent":"claude","role":"execute","duration_s":12.3,"cost_usd":0.05}
-{"timestamp":"2026-02-27T10:30:15Z","type":"agent_error","agent":"codex","role":"execute","error":"connection refused","duration_s":0.1}
+{
+  "schema_version": 1,
+  "event_type": "agent_start",
+  "timestamp": "2026-02-27T10:30:00Z",
+  "run_id": "20260227-...",
+  "task_id": "TASK-001",
+  "phase": "execute",
+  "data": {}
+}
 ```
 
-Event types:
+Supported event types:
 
-| Type | Description |
-|------|-------------|
-| `agent_start` | Agent invocation started |
-| `agent_complete` | Agent invocation succeeded |
-| `agent_error` | Agent invocation failed |
-| `agent_fallback` | Fallback agent activated |
+- `agent_start`
+- `agent_complete`
+- `agent_error`
+- `agent_fallback`
+- `task_stalled`
+- `budget_warning`
+- `gate_result`
 
-Event sinks:
-
-| Sink | Description |
-|------|-------------|
-| `JSONLSink` | Appends to a file (production default) |
-| `MultiplexSink` | Fans out to multiple sinks |
-| `NopSink` | Discards events (disabled observability) |
-
-## Intelligent routing
-
-At bootstrap, Praetor probes all configured agents to determine availability:
-
-- **CLI agents**: checks binary existence via `exec.LookPath` and runs `--version` / `--help`.
-- **REST agents**: sends HTTP requests to health endpoints.
-
-When selecting an executor for a task, the router uses three-level resolution:
-
-1. **Task-level executor** (if set in the plan) — always used.
-2. **Default executor** (if available according to probe results) — used normally.
-3. **Auto-selection** from available agents — scans healthy agents, preferring CLI transport over REST.
-
-This ensures plans continue executing even when the default agent becomes temporarily unavailable.
-
-### Doctor command
-
-Use `praetor doctor` to inspect agent availability independently:
-
-```bash
-praetor doctor
-```
-
-Shows health status, binary paths, versions, and transport type for all 8 agents.
+`plan diagnose` reads these files and filters by query (`errors`, `stalls`, `fallbacks`, `costs`, `all`).

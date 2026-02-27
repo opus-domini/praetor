@@ -15,11 +15,13 @@ type ExecutorTaskData struct {
 	TaskIndex        int
 	TaskDependsOn    string
 	TaskDescription  string
-	TaskCriteria     string
+	TaskAcceptance   string
 	PlanFile         string
-	PlanTitle        string
+	PlanName         string
 	PlanProgress     string
 	Workdir          string
+	GatesRequired    []string
+	EvidenceFormat   string
 }
 
 // ReviewerSystemData holds template data for the reviewer system prompt.
@@ -33,9 +35,9 @@ type ReviewerTaskData struct {
 	TaskID          string
 	TaskDependsOn   string
 	TaskDescription string
-	TaskCriteria    string
+	TaskAcceptance  string
 	PlanFile        string
-	PlanTitle       string
+	PlanName        string
 	PlanProgress    string
 	Workdir         string
 	ExecutorOutput  string

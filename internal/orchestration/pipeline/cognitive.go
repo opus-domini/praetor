@@ -2,7 +2,6 @@ package pipeline
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -69,6 +68,26 @@ type runtimeCognitiveAgent struct {
 	promptEngine *prompt.Engine
 }
 
+// PlannerOutputError carries the raw planner output when parsing/validation fails.
+type PlannerOutputError struct {
+	Err       error
+	RawOutput string
+}
+
+func (e *PlannerOutputError) Error() string {
+	if e == nil || e.Err == nil {
+		return "planner output error"
+	}
+	return e.Err.Error()
+}
+
+func (e *PlannerOutputError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Err
+}
+
 // NewCognitiveAgent creates a CognitiveAgent backed by the given runtime.
 func NewCognitiveAgent(id domain.Agent, runtime domain.AgentRuntime, opts ...CognitiveOption) (CognitiveAgent, error) {
 	id = domain.NormalizeAgent(id)
@@ -114,17 +133,17 @@ func (a *runtimeCognitiveAgent) Plan(ctx context.Context, req PlanRequest) (doma
 	}
 	payload, err := ExtractJSONObject(result.Output)
 	if err != nil {
-		return domain.Plan{}, fmt.Errorf("extract planner json payload: %w", err)
+		return domain.Plan{}, &PlannerOutputError{
+			Err:       fmt.Errorf("extract planner json payload: %w", err),
+			RawOutput: result.Output,
+		}
 	}
-	plan := domain.Plan{}
-	if err := json.Unmarshal([]byte(payload), &plan); err != nil {
-		return domain.Plan{}, fmt.Errorf("decode planner output: %w", err)
-	}
-	if strings.TrimSpace(plan.Title) == "" {
-		plan.Title = "generated plan"
-	}
-	if err := domain.ValidatePlan(plan); err != nil {
-		return domain.Plan{}, fmt.Errorf("planner generated invalid plan: %w", err)
+	plan, err := domain.ParsePlanLenient([]byte(payload))
+	if err != nil {
+		return domain.Plan{}, &PlannerOutputError{
+			Err:       fmt.Errorf("decode planner output: %w", err),
+			RawOutput: result.Output,
+		}
 	}
 	return plan, nil
 }
@@ -180,17 +199,36 @@ func buildPlannerSystemPrompt(engine *prompt.Engine, projectContext string) stri
 	b.WriteString(`You are a planning agent.
 Return only valid JSON matching this schema:
 {
-  "$schema": "../schemas/loop-plan.schema.json",
-  "title": "string",
+  "schema_version": 1,
+  "name": "string",
+  "summary": "string",
+  "meta": {
+    "source": "agent",
+    "created_at": "RFC3339 timestamp"
+  },
+  "settings": {
+    "agents": {
+      "executor": {
+        "agent": "claude|codex|copilot|gemini|kimi|opencode|openrouter|ollama",
+        "model": "string optional"
+      },
+      "reviewer": {
+        "agent": "claude|codex|copilot|gemini|kimi|opencode|openrouter|ollama|none",
+        "model": "string optional"
+      },
+      "planner": {
+        "agent": "claude|codex|copilot|gemini|kimi|opencode|openrouter|ollama",
+        "model": "string optional"
+      }
+    }
+  },
   "tasks": [
     {
       "id": "TASK-001",
       "title": "string",
       "depends_on": ["TASK-000"],
-      "executor": "claude|codex|copilot|gemini|kimi|opencode|openrouter|ollama",
-      "reviewer": "claude|codex|copilot|gemini|kimi|opencode|openrouter|ollama|none",
       "description": "string",
-      "criteria": "string"
+      "acceptance": ["string"]
     }
   ]
 }
@@ -199,6 +237,8 @@ Rules:
 - Create actionable, dependency-aware tasks.
 - Use stable TASK-XXX ids in execution order.
 - Keep each task atomic.
+- Always include at least one acceptance item per task.
+- Do not emit legacy fields like title/criteria/executor/reviewer/model at task level.
 - Return JSON only.`)
 	return b.String()
 }

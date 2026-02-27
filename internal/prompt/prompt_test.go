@@ -57,11 +57,11 @@ func TestRenderExecutorTask(t *testing.T) {
 			TaskID:          "TASK-001",
 			TaskIndex:       0,
 			PlanFile:        "plan.json",
-			PlanTitle:       "Main Plan",
+			PlanName:        "Main Plan",
 			PlanProgress:    "1/3",
 			Workdir:         "/tmp/work",
 			TaskDescription: "Add structured logging",
-			TaskCriteria:    "Tests pass",
+			TaskAcceptance:  "- Tests pass",
 		})
 		if err != nil {
 			t.Fatalf("Render: %v", err)

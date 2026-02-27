@@ -110,11 +110,9 @@ func TestValidateRequiredBinariesSkipsReviewerWhenNoReview(t *testing.T) {
 		CodexBin:        self,
 		ClaudeBin:       "__missing_claude_binary__",
 	}
-	plan := domain.Plan{
-		Tasks: []domain.Task{
-			{Title: "task", Executor: domain.AgentCodex, Reviewer: domain.AgentClaude},
-		},
-	}
+	plan := testPlan([]domain.Task{
+		{ID: "TASK-001", Title: "task", Acceptance: []string{"command succeeds"}},
+	})
 	if err := validateRequiredBinaries(opts, plan); err != nil {
 		t.Fatalf("expected reviewer checks to be skipped, got error: %v", err)
 	}
@@ -135,11 +133,9 @@ func TestValidateRequiredBinariesRequiresReviewerWhenEnabled(t *testing.T) {
 		CodexBin:        self,
 		ClaudeBin:       "__missing_claude_binary__",
 	}
-	plan := domain.Plan{
-		Tasks: []domain.Task{
-			{Title: "task", Executor: domain.AgentCodex, Reviewer: domain.AgentClaude},
-		},
-	}
+	plan := testPlan([]domain.Task{
+		{ID: "TASK-001", Title: "task", Acceptance: []string{"command succeeds"}},
+	})
 	err = validateRequiredBinaries(opts, plan)
 	if err == nil {
 		t.Fatal("expected missing reviewer binary error")
@@ -163,11 +159,9 @@ func TestValidateRequiredBinariesOpenRouterRequiresAPIKey(t *testing.T) {
 		ClaudeBin:        self,
 		OpenRouterKeyEnv: "PRAETOR_TEST_OPENROUTER_KEY",
 	}
-	plan := domain.Plan{
-		Tasks: []domain.Task{
-			{Title: "task", Executor: domain.AgentOpenRouter, Reviewer: domain.AgentNone},
-		},
-	}
+	plan := testPlan([]domain.Task{
+		{ID: "TASK-001", Title: "task", Acceptance: []string{"command succeeds"}},
+	})
 	t.Setenv("PRAETOR_TEST_OPENROUTER_KEY", "")
 
 	err = validateRequiredBinaries(opts, plan)
@@ -218,11 +212,9 @@ func TestRunnerStopsImmediatelyOnCanceledContext(t *testing.T) {
 	if err := store.Init(); err != nil {
 		t.Fatalf("init store: %v", err)
 	}
-	writePlanFile(t, store.PlanFile(slug), domain.Plan{
-		Tasks: []domain.Task{
-			{ID: "TASK-001", Title: "Task", Executor: domain.AgentCodex, Reviewer: domain.AgentNone},
-		},
-	})
+	writePlanFile(t, store.PlanFile(slug), testPlan([]domain.Task{
+		{ID: "TASK-001", Title: "Task", Acceptance: []string{"task completes"}},
+	}))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -258,11 +250,9 @@ func TestRunnerReleasesLockWhenBootstrapFailsAfterLock(t *testing.T) {
 	if err := store.Init(); err != nil {
 		t.Fatalf("init store: %v", err)
 	}
-	writePlanFile(t, store.PlanFile(slug), domain.Plan{
-		Tasks: []domain.Task{
-			{ID: "TASK-001", Title: "Task", Executor: domain.AgentCodex, Reviewer: domain.AgentNone},
-		},
-	})
+	writePlanFile(t, store.PlanFile(slug), testPlan([]domain.Task{
+		{ID: "TASK-001", Title: "Task", Acceptance: []string{"task completes"}},
+	}))
 
 	lockPath := store.LockFile(slug)
 	runner := NewRunner(nilRuntime{})
@@ -297,11 +287,9 @@ func TestRunnerFailsWhenMaxTransitionsExceeded(t *testing.T) {
 	if err := store.Init(); err != nil {
 		t.Fatalf("init store: %v", err)
 	}
-	writePlanFile(t, store.PlanFile(slug), domain.Plan{
-		Tasks: []domain.Task{
-			{ID: "TASK-001", Title: "Task", Executor: domain.AgentCodex, Reviewer: domain.AgentNone},
-		},
-	})
+	writePlanFile(t, store.PlanFile(slug), testPlan([]domain.Task{
+		{ID: "TASK-001", Title: "Task", Acceptance: []string{"task completes"}},
+	}))
 
 	runner := NewRunner(scriptedRuntime{
 		executeOutput: "RESULT: PASS\nSUMMARY: ok",
@@ -340,11 +328,9 @@ func TestRunnerReviewRejectionExhaustsRetries(t *testing.T) {
 	if err := store.Init(); err != nil {
 		t.Fatalf("init store: %v", err)
 	}
-	writePlanFile(t, store.PlanFile(slug), domain.Plan{
-		Tasks: []domain.Task{
-			{ID: "TASK-001", Title: "Task", Executor: domain.AgentCodex, Reviewer: domain.AgentClaude},
-		},
-	})
+	writePlanFile(t, store.PlanFile(slug), testPlan([]domain.Task{
+		{ID: "TASK-001", Title: "Task", Acceptance: []string{"task completes"}},
+	}))
 
 	runner := NewRunner(scriptedRuntime{
 		executeOutput: "RESULT: PASS\nSUMMARY: ok",
@@ -387,11 +373,9 @@ func TestRunnerWritesRuntimeStrategyCheckpoint(t *testing.T) {
 	if err := store.Init(); err != nil {
 		t.Fatalf("init store: %v", err)
 	}
-	writePlanFile(t, store.PlanFile(slug), domain.Plan{
-		Tasks: []domain.Task{
-			{ID: "TASK-001", Title: "Task", Executor: domain.AgentCodex, Reviewer: domain.AgentNone},
-		},
-	})
+	writePlanFile(t, store.PlanFile(slug), testPlan([]domain.Task{
+		{ID: "TASK-001", Title: "Task", Acceptance: []string{"task completes"}},
+	}))
 
 	runner := NewRunner(scriptedRuntime{
 		executeOutput: "RESULT: PASS\nSUMMARY: ok",
@@ -443,11 +427,9 @@ func TestRunnerKeepsTaskOpenWhenMergeFails(t *testing.T) {
 	if err := store.Init(); err != nil {
 		t.Fatalf("init store: %v", err)
 	}
-	writePlanFile(t, store.PlanFile(slug), domain.Plan{
-		Tasks: []domain.Task{
-			{ID: "TASK-001", Title: "Task", Executor: domain.AgentCodex, Reviewer: domain.AgentNone},
-		},
-	})
+	writePlanFile(t, store.PlanFile(slug), testPlan([]domain.Task{
+		{ID: "TASK-001", Title: "Task", Acceptance: []string{"task completes"}},
+	}))
 
 	runtime := &mergeConflictRuntime{mainDir: tmpDir}
 	runner := NewRunner(runtime)
@@ -569,6 +551,20 @@ func (r *mergeConflictRuntime) Run(_ context.Context, req domain.AgentRequest) (
 	}
 
 	return domain.AgentResult{Output: "RESULT: PASS\nSUMMARY: ok"}, nil
+}
+
+func testPlan(tasks []domain.Task) domain.Plan {
+	return domain.Plan{
+		SchemaVersion: 1,
+		Name:          "test plan",
+		Settings: domain.PlanSettings{
+			Agents: domain.PlanAgents{
+				Executor: domain.PlanAgentConfig{Agent: domain.AgentCodex},
+				Reviewer: domain.PlanAgentConfig{Agent: domain.AgentClaude},
+			},
+		},
+		Tasks: tasks,
+	}
 }
 
 func writePlanFile(t *testing.T, path string, plan domain.Plan) {

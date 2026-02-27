@@ -41,7 +41,8 @@ If not completed, use RESULT: FAIL and explain why.`)
 }
 
 // BuildExecutorTaskPrompt constructs the task prompt for the executor agent.
-func BuildExecutorTaskPrompt(engine *prompt.Engine, planFile string, taskIndex int, task domain.StateTask, previousFeedback string, retryCount int, planTitle, progress, workdir string) string {
+func BuildExecutorTaskPrompt(engine *prompt.Engine, planFile string, taskIndex int, task domain.StateTask, previousFeedback string, retryCount int, planTitle, progress, workdir string, requiredGates []string, evidenceFormat string) string {
+	acceptance := formatAcceptance(task.Acceptance)
 	if engine != nil {
 		dependsOn := ""
 		if len(task.DependsOn) > 0 {
@@ -56,11 +57,13 @@ func BuildExecutorTaskPrompt(engine *prompt.Engine, planFile string, taskIndex i
 			TaskIndex:        taskIndex,
 			TaskDependsOn:    dependsOn,
 			TaskDescription:  task.Description,
-			TaskCriteria:     task.Criteria,
+			TaskAcceptance:   acceptance,
 			PlanFile:         planFile,
-			PlanTitle:        strings.TrimSpace(planTitle),
+			PlanName:         strings.TrimSpace(planTitle),
 			PlanProgress:     strings.TrimSpace(progress),
 			Workdir:          workdir,
+			GatesRequired:    requiredGates,
+			EvidenceFormat:   strings.TrimSpace(evidenceFormat),
 		}); err == nil {
 			return s
 		}
@@ -98,8 +101,25 @@ func BuildExecutorTaskPrompt(engine *prompt.Engine, planFile string, taskIndex i
 	if task.Description != "" {
 		fmt.Fprintf(&b, "\nDESCRIPTION\n%s\n", task.Description)
 	}
-	if task.Criteria != "" {
-		fmt.Fprintf(&b, "\nACCEPTANCE CRITERIA\n%s\n", task.Criteria)
+	if acceptance != "" {
+		fmt.Fprintf(&b, "\nACCEPTANCE CRITERIA\n%s\n", acceptance)
+	}
+	if len(requiredGates) > 0 {
+		if strings.TrimSpace(evidenceFormat) == "" {
+			evidenceFormat = "gates_v1"
+		}
+		fmt.Fprintf(&b, "\nQUALITY GATES (required)\n")
+		for _, gate := range requiredGates {
+			gate = strings.TrimSpace(gate)
+			if gate == "" {
+				continue
+			}
+			fmt.Fprintf(&b, "- %s\n", gate)
+		}
+		fmt.Fprintf(&b, "\nEmit evidence using format %q:\n", strings.TrimSpace(evidenceFormat))
+		fmt.Fprintf(&b, "GATES:\n")
+		fmt.Fprintf(&b, "- tests: PASS (details)\n")
+		fmt.Fprintf(&b, "- lint: PASS (details)\n")
 	}
 
 	return strings.TrimSpace(b.String())
@@ -134,6 +154,7 @@ Review principles:
 
 // BuildReviewerTaskPrompt constructs the task prompt for the reviewer agent.
 func BuildReviewerTaskPrompt(engine *prompt.Engine, planFile string, task domain.StateTask, executorOutput, workdir, planTitle, progress, gitDiff string) string {
+	acceptance := formatAcceptance(task.Acceptance)
 	if engine != nil {
 		dependsOn := ""
 		if len(task.DependsOn) > 0 {
@@ -144,12 +165,12 @@ func BuildReviewerTaskPrompt(engine *prompt.Engine, planFile string, task domain
 			TaskID:          task.ID,
 			TaskDependsOn:   dependsOn,
 			TaskDescription: task.Description,
-			TaskCriteria:    task.Criteria,
+			TaskAcceptance:  acceptance,
 			PlanFile:        planFile,
-			PlanTitle:       strings.TrimSpace(planTitle),
+			PlanName:        strings.TrimSpace(planTitle),
 			PlanProgress:    strings.TrimSpace(progress),
 			Workdir:         workdir,
-			ExecutorOutput:  TruncateOutput(executorOutput, 300),
+			ExecutorOutput:  strings.TrimSpace(executorOutput),
 			GitDiff:         strings.TrimSpace(gitDiff),
 		}); err == nil {
 			return s
@@ -177,11 +198,11 @@ func BuildReviewerTaskPrompt(engine *prompt.Engine, planFile string, task domain
 	if task.Description != "" {
 		fmt.Fprintf(&b, "\nDESCRIPTION\n%s\n", task.Description)
 	}
-	if task.Criteria != "" {
-		fmt.Fprintf(&b, "\nACCEPTANCE CRITERIA\n%s\n", task.Criteria)
+	if acceptance != "" {
+		fmt.Fprintf(&b, "\nACCEPTANCE CRITERIA\n%s\n", acceptance)
 	}
 
-	fmt.Fprintf(&b, "\nEXECUTOR OUTPUT (last 300 lines)\n%s\n", TruncateOutput(executorOutput, 300))
+	fmt.Fprintf(&b, "\nEXECUTOR OUTPUT\n%s\n", strings.TrimSpace(executorOutput))
 
 	if strings.TrimSpace(gitDiff) != "" {
 		fmt.Fprintf(&b, "\nGIT DIFF\n%s\n", strings.TrimSpace(gitDiff))
@@ -201,4 +222,16 @@ func TruncateOutput(output string, maxLines int) string {
 		return output
 	}
 	return strings.Join(lines[len(lines)-maxLines:], "\n")
+}
+
+func formatAcceptance(items []string) string {
+	normalized := make([]string, 0, len(items))
+	for _, item := range items {
+		item = strings.TrimSpace(item)
+		if item == "" {
+			continue
+		}
+		normalized = append(normalized, "- "+item)
+	}
+	return strings.Join(normalized, "\n")
 }
