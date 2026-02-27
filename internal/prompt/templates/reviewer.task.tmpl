@@ -1,0 +1,36 @@
+TASK
+  Title: {{ .TaskTitle }}
+  ID: {{ .TaskID }}
+{{- if .TaskDependsOn }}
+  Depends on: {{ .TaskDependsOn }}
+{{- end }}
+
+PLAN
+  File: {{ .PlanFile }}
+{{- if .PlanTitle }}
+  Title: {{ .PlanTitle }}
+{{- end }}
+{{- if .PlanProgress }}
+  Progress: {{ .PlanProgress }}
+{{- end }}
+
+WORKDIR
+  {{ .Workdir }}
+{{- if .TaskDescription }}
+
+DESCRIPTION
+{{ .TaskDescription }}
+{{- end }}
+{{- if .TaskCriteria }}
+
+ACCEPTANCE CRITERIA
+{{ .TaskCriteria }}
+{{- end }}
+
+EXECUTOR OUTPUT (last 300 lines)
+{{ .ExecutorOutput }}
+{{- if .GitDiff }}
+
+GIT DIFF
+{{ .GitDiff }}
+{{- end }}

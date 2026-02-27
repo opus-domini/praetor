@@ -36,6 +36,7 @@ internal/
 ├── orchestration/
 │   ├── fsm/                      Generic functional state machine (stateFn pattern)
 │   └── pipeline/                 Plan/Execute/Review runner, cognitive agents, prompts, runtime composition, router
+├── prompt/                       Prompt template engine (go:embed + overlay)
 ├── runtime/
 │   ├── process/                  Non-interactive subprocess execution
 │   ├── pty/                      Interactive pseudo-terminal sessions (start/read/write/close)
@@ -153,6 +154,49 @@ Contains the full Plan/Execute/Review orchestration engine:
 - **Prompts:** System and task prompt builders for executor, reviewer, and planner.
 - **Runtime composition:** layered `BuildAgentRuntime` factory that assembles `RegistryRuntime` → `FallbackRuntime` → `Logging` → `Metrics` middleware chain, preserving `SessionManager` delegation via `composedRuntime`.
 - **Router:** `resolveExecutorWithRouting()` intelligently selects an executor from available agents when the default is unreachable, preferring CLI over REST transport.
+
+## Prompt template system
+
+`internal/prompt` externalizes all system and task prompts into `text/template` files
+with embedded defaults via `go:embed` and optional per-project overrides.
+
+### Engine
+
+`prompt.Engine` loads templates in two layers:
+
+1. **Embedded defaults** — `internal/prompt/templates/*.tmpl` compiled into the binary.
+2. **Project overlay** — `.praetor/prompts/*.tmpl` in the project root. Files override defaults by matching filename.
+
+```go
+engine, _ := prompt.NewEngine(".praetor/prompts")
+result, _ := engine.Render("executor.system", prompt.ExecutorSystemData{...})
+```
+
+- `NewEngine("")` uses only embedded defaults.
+- Non-existent overlay directory is silently ignored.
+- `missingkey=error` ensures missing template variables fail loud.
+
+### Templates
+
+| Template | Purpose |
+|----------|---------|
+| `executor.system.tmpl` | System prompt for the executor agent |
+| `executor.task.tmpl` | Task prompt (retry, dependencies, description, criteria) |
+| `reviewer.system.tmpl` | System prompt for the reviewer agent |
+| `reviewer.task.tmpl` | Task prompt (executor output, git diff) |
+| `planner.system.tmpl` | System prompt for the planner (JSON schema) |
+| `planner.task.tmpl` | Task prompt for the planner (objective) |
+| `adapter.plan.tmpl` | Shared adapter Plan() prompt |
+| `adapter.plan.claude.tmpl` | Claude-specific Plan() system prompt |
+
+### Integration
+
+All `Build*Prompt()` functions in `pipeline/prompts.go` accept `*prompt.Engine` as the first parameter.
+When the engine is non-nil, templates are rendered; on any error, the original hardcoded fallback is used.
+This ensures backward compatibility — a nil engine produces identical output to the previous implementation.
+
+The `agent.PromptRenderer` interface (`Render(name, data) (string, error)`) decouples adapters
+from the prompt package, preventing import cycles.
 
 ## Runtime model
 

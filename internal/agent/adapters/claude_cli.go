@@ -50,10 +50,19 @@ func (a *ClaudeCLI) Plan(ctx context.Context, req agent.PlanRequest) (agent.Plan
 		return agent.PlanResponse{}, errors.New("objective is required")
 	}
 	systemPrompt := "You are a planning agent. Return only valid JSON."
-	if c := strings.TrimSpace(req.WorkspaceContext); c != "" {
-		systemPrompt = "Project context:\n" + c + "\n\n" + systemPrompt
-	}
 	prompt := "Create a dependency-aware execution plan for:\n\n" + objective
+	if req.PromptEngine != nil {
+		if s, err := req.PromptEngine.Render("adapter.plan.claude", adapterPlanData(objective, req.WorkspaceContext)); err == nil {
+			systemPrompt = s
+		}
+		if s, err := req.PromptEngine.Render("adapter.plan", adapterPlanData(objective, req.WorkspaceContext)); err == nil {
+			prompt = s
+		}
+	} else {
+		if c := strings.TrimSpace(req.WorkspaceContext); c != "" {
+			systemPrompt = "Project context:\n" + c + "\n\n" + systemPrompt
+		}
+	}
 	resp, err := a.run(ctx, req.Workdir, req.Model, systemPrompt, prompt, req.RunDir, req.OutputPrefix, req.TaskLabel)
 	if err != nil {
 		return agent.PlanResponse{}, err

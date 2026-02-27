@@ -48,7 +48,11 @@ func (a *KimiCLI) Plan(ctx context.Context, req agent.PlanRequest) (agent.PlanRe
 		return agent.PlanResponse{}, errors.New("objective is required")
 	}
 	prompt := "Return ONLY JSON with a dependency-aware execution plan for:\n\n" + objective
-	if c := strings.TrimSpace(req.WorkspaceContext); c != "" {
+	if req.PromptEngine != nil {
+		if s, err := req.PromptEngine.Render("adapter.plan", adapterPlanData(objective, req.WorkspaceContext)); err == nil {
+			prompt = s
+		}
+	} else if c := strings.TrimSpace(req.WorkspaceContext); c != "" {
 		prompt = "Project context:\n" + c + "\n\n" + prompt
 	}
 	resp, err := a.run(ctx, req.Workdir, req.Model, prompt, req.RunDir, req.OutputPrefix, req.TaskLabel)

@@ -39,6 +39,12 @@ type Capabilities struct {
 	StructuredOutput bool
 }
 
+// PromptRenderer renders named prompt templates with data.
+// This interface decouples adapters from the prompt package to avoid import cycles.
+type PromptRenderer interface {
+	Render(name string, data any) (string, error)
+}
+
 // PlanRequest is the macro-planning request contract.
 type PlanRequest struct {
 	Objective        string
@@ -48,6 +54,7 @@ type PlanRequest struct {
 	RunDir           string
 	OutputPrefix     string
 	TaskLabel        string
+	PromptEngine     PromptRenderer
 }
 
 // PlanResponse is the standardized planning result.

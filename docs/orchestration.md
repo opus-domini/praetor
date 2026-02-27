@@ -323,6 +323,54 @@ Use project context for:
 
 Manifest content is limited to 16 KiB. If it exceeds this limit, content is truncated with a warning.
 
+## Prompt customization
+
+All agent prompts (executor, reviewer, planner) use `text/template` files with embedded defaults.
+To customize prompts for a specific project, create `.praetor/prompts/` in the repository root
+and add template files that override the defaults by filename.
+
+### Override a prompt
+
+```bash
+mkdir -p .praetor/prompts
+```
+
+Create a file matching the template name. For example, to customize the executor system prompt:
+
+```bash
+cat > .praetor/prompts/executor.system.tmpl << 'EOF'
+{{- if .ProjectContext }}## Project Context
+{{ .ProjectContext }}
+
+{{ end -}}
+## Your Role
+You are a senior engineer. Follow TDD strictly.
+Always run `make test` before reporting RESULT.
+
+Required result format:
+RESULT: PASS
+SUMMARY: <brief summary>
+TESTS: <commands and outcomes>
+EOF
+```
+
+### Available templates
+
+| Template | Data struct | Key fields |
+|----------|------------|------------|
+| `executor.system.tmpl` | `ExecutorSystemData` | `ProjectContext` |
+| `executor.task.tmpl` | `ExecutorTaskData` | `IsRetry`, `RetryAttempt`, `PreviousFeedback`, `TaskTitle`, `TaskID`, `TaskIndex`, `TaskDependsOn`, `TaskDescription`, `TaskCriteria`, `PlanFile`, `PlanTitle`, `PlanProgress`, `Workdir` |
+| `reviewer.system.tmpl` | `ReviewerSystemData` | `ProjectContext` |
+| `reviewer.task.tmpl` | `ReviewerTaskData` | `TaskTitle`, `TaskID`, `TaskDependsOn`, `TaskDescription`, `TaskCriteria`, `PlanFile`, `PlanTitle`, `PlanProgress`, `Workdir`, `ExecutorOutput`, `GitDiff` |
+| `planner.system.tmpl` | `PlannerSystemData` | `ProjectContext` |
+| `planner.task.tmpl` | `PlannerTaskData` | `Objective` |
+| `adapter.plan.tmpl` | `AdapterPlanData` | `Objective`, `WorkspaceContext` |
+| `adapter.plan.claude.tmpl` | `AdapterPlanData` | `Objective`, `WorkspaceContext` |
+
+Templates use Go's `text/template` syntax with `missingkey=error`. A custom `add` function is available for arithmetic (e.g., `{{ add .RetryAttempt 1 }}`).
+
+Remove the override file to revert to the embedded default — no rebuild required.
+
 ## Safety mechanisms
 
 ### Worktree isolation

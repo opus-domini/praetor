@@ -5,10 +5,18 @@ import (
 	"strings"
 
 	"github.com/opus-domini/praetor/internal/domain"
+	"github.com/opus-domini/praetor/internal/prompt"
 )
 
 // BuildExecutorSystemPrompt constructs the system prompt for the executor agent.
-func BuildExecutorSystemPrompt(projectContext string) string {
+func BuildExecutorSystemPrompt(engine *prompt.Engine, projectContext string) string {
+	if engine != nil {
+		if s, err := engine.Render("executor.system", prompt.ExecutorSystemData{
+			ProjectContext: projectContext,
+		}); err == nil {
+			return s
+		}
+	}
 	var b strings.Builder
 	if projectContext != "" {
 		fmt.Fprintf(&b, "## Project Context\n%s\n\n", projectContext)
@@ -33,7 +41,30 @@ If not completed, use RESULT: FAIL and explain why.`)
 }
 
 // BuildExecutorTaskPrompt constructs the task prompt for the executor agent.
-func BuildExecutorTaskPrompt(planFile string, taskIndex int, task domain.StateTask, previousFeedback string, retryCount int, planTitle, progress, workdir string) string {
+func BuildExecutorTaskPrompt(engine *prompt.Engine, planFile string, taskIndex int, task domain.StateTask, previousFeedback string, retryCount int, planTitle, progress, workdir string) string {
+	if engine != nil {
+		dependsOn := ""
+		if len(task.DependsOn) > 0 {
+			dependsOn = strings.Join(task.DependsOn, ",")
+		}
+		if s, err := engine.Render("executor.task", prompt.ExecutorTaskData{
+			IsRetry:          previousFeedback != "" && retryCount > 0,
+			RetryAttempt:     retryCount,
+			PreviousFeedback: previousFeedback,
+			TaskTitle:        task.Title,
+			TaskID:           task.ID,
+			TaskIndex:        taskIndex,
+			TaskDependsOn:    dependsOn,
+			TaskDescription:  task.Description,
+			TaskCriteria:     task.Criteria,
+			PlanFile:         planFile,
+			PlanTitle:        strings.TrimSpace(planTitle),
+			PlanProgress:     strings.TrimSpace(progress),
+			Workdir:          workdir,
+		}); err == nil {
+			return s
+		}
+	}
 	var b strings.Builder
 
 	if previousFeedback != "" && retryCount > 0 {
@@ -75,7 +106,14 @@ func BuildExecutorTaskPrompt(planFile string, taskIndex int, task domain.StateTa
 }
 
 // BuildReviewerSystemPrompt constructs the system prompt for the reviewer agent.
-func BuildReviewerSystemPrompt(projectContext string) string {
+func BuildReviewerSystemPrompt(engine *prompt.Engine, projectContext string) string {
+	if engine != nil {
+		if s, err := engine.Render("reviewer.system", prompt.ReviewerSystemData{
+			ProjectContext: projectContext,
+		}); err == nil {
+			return s
+		}
+	}
 	var b strings.Builder
 	if projectContext != "" {
 		fmt.Fprintf(&b, "## Project Context\n%s\n\n", projectContext)
@@ -95,7 +133,28 @@ Review principles:
 }
 
 // BuildReviewerTaskPrompt constructs the task prompt for the reviewer agent.
-func BuildReviewerTaskPrompt(planFile string, task domain.StateTask, executorOutput, workdir, planTitle, progress, gitDiff string) string {
+func BuildReviewerTaskPrompt(engine *prompt.Engine, planFile string, task domain.StateTask, executorOutput, workdir, planTitle, progress, gitDiff string) string {
+	if engine != nil {
+		dependsOn := ""
+		if len(task.DependsOn) > 0 {
+			dependsOn = strings.Join(task.DependsOn, ",")
+		}
+		if s, err := engine.Render("reviewer.task", prompt.ReviewerTaskData{
+			TaskTitle:       task.Title,
+			TaskID:          task.ID,
+			TaskDependsOn:   dependsOn,
+			TaskDescription: task.Description,
+			TaskCriteria:    task.Criteria,
+			PlanFile:        planFile,
+			PlanTitle:       strings.TrimSpace(planTitle),
+			PlanProgress:    strings.TrimSpace(progress),
+			Workdir:         workdir,
+			ExecutorOutput:  TruncateOutput(executorOutput, 300),
+			GitDiff:         strings.TrimSpace(gitDiff),
+		}); err == nil {
+			return s
+		}
+	}
 	var b strings.Builder
 
 	fmt.Fprintf(&b, "TASK\n")

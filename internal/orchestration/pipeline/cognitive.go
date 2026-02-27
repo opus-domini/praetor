@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/opus-domini/praetor/internal/domain"
+	"github.com/opus-domini/praetor/internal/prompt"
 )
 
 // PlanRequest is the macro-planning request contract.
@@ -52,13 +53,24 @@ type CognitiveAgent interface {
 	Review(ctx context.Context, req ReviewRequest) (domain.ReviewDecision, domain.AgentResult, error)
 }
 
+// CognitiveOption configures optional behavior of a runtimeCognitiveAgent.
+type CognitiveOption func(*runtimeCognitiveAgent)
+
+// WithPromptEngine attaches a prompt.Engine to the cognitive agent.
+func WithPromptEngine(e *prompt.Engine) CognitiveOption {
+	return func(a *runtimeCognitiveAgent) {
+		a.promptEngine = e
+	}
+}
+
 type runtimeCognitiveAgent struct {
-	id      domain.Agent
-	runtime domain.AgentRuntime
+	id           domain.Agent
+	runtime      domain.AgentRuntime
+	promptEngine *prompt.Engine
 }
 
 // NewCognitiveAgent creates a CognitiveAgent backed by the given runtime.
-func NewCognitiveAgent(id domain.Agent, runtime domain.AgentRuntime) (CognitiveAgent, error) {
+func NewCognitiveAgent(id domain.Agent, runtime domain.AgentRuntime, opts ...CognitiveOption) (CognitiveAgent, error) {
 	id = domain.NormalizeAgent(id)
 	if _, ok := domain.ValidExecutors[id]; !ok {
 		return nil, fmt.Errorf("unsupported cognitive agent %q", id)
@@ -66,7 +78,11 @@ func NewCognitiveAgent(id domain.Agent, runtime domain.AgentRuntime) (CognitiveA
 	if runtime == nil {
 		return nil, errors.New("runtime is required")
 	}
-	return &runtimeCognitiveAgent{id: id, runtime: runtime}, nil
+	a := &runtimeCognitiveAgent{id: id, runtime: runtime}
+	for _, opt := range opts {
+		opt(a)
+	}
+	return a, nil
 }
 
 func (a *runtimeCognitiveAgent) ID() domain.Agent {
@@ -78,8 +94,8 @@ func (a *runtimeCognitiveAgent) Plan(ctx context.Context, req PlanRequest) (doma
 	if objective == "" {
 		return domain.Plan{}, errors.New("objective is required")
 	}
-	systemPrompt := buildPlannerSystemPrompt(req.ProjectContext)
-	userPrompt := buildPlannerTaskPrompt(objective)
+	systemPrompt := buildPlannerSystemPrompt(a.promptEngine, req.ProjectContext)
+	userPrompt := buildPlannerTaskPrompt(a.promptEngine, objective)
 	result, err := a.runtime.Run(ctx, domain.AgentRequest{
 		Role:         "plan",
 		Agent:        a.id,
@@ -118,7 +134,7 @@ func (a *runtimeCognitiveAgent) Execute(ctx context.Context, req ExecuteRequest)
 		Role:         "execute",
 		Agent:        a.id,
 		Prompt:       strings.TrimSpace(req.Prompt),
-		SystemPrompt: BuildExecutorSystemPrompt(req.ProjectContext),
+		SystemPrompt: BuildExecutorSystemPrompt(a.promptEngine, req.ProjectContext),
 		Model:        strings.TrimSpace(req.Model),
 		Workdir:      strings.TrimSpace(req.Workdir),
 		RunDir:       strings.TrimSpace(req.RunDir),
@@ -134,7 +150,7 @@ func (a *runtimeCognitiveAgent) Review(ctx context.Context, req ReviewRequest) (
 		Role:         "review",
 		Agent:        a.id,
 		Prompt:       strings.TrimSpace(req.Prompt),
-		SystemPrompt: BuildReviewerSystemPrompt(req.ProjectContext),
+		SystemPrompt: BuildReviewerSystemPrompt(a.promptEngine, req.ProjectContext),
 		Model:        strings.TrimSpace(req.Model),
 		Workdir:      strings.TrimSpace(req.Workdir),
 		RunDir:       strings.TrimSpace(req.RunDir),
@@ -149,7 +165,14 @@ func (a *runtimeCognitiveAgent) Review(ctx context.Context, req ReviewRequest) (
 	return domain.ParseReviewDecision(result.Output), result, nil
 }
 
-func buildPlannerSystemPrompt(projectContext string) string {
+func buildPlannerSystemPrompt(engine *prompt.Engine, projectContext string) string {
+	if engine != nil {
+		if s, err := engine.Render("planner.system", prompt.PlannerSystemData{
+			ProjectContext: strings.TrimSpace(projectContext),
+		}); err == nil {
+			return s
+		}
+	}
 	var b strings.Builder
 	if strings.TrimSpace(projectContext) != "" {
 		fmt.Fprintf(&b, "## Project Context\n%s\n\n", strings.TrimSpace(projectContext))
@@ -180,7 +203,14 @@ Rules:
 	return b.String()
 }
 
-func buildPlannerTaskPrompt(objective string) string {
+func buildPlannerTaskPrompt(engine *prompt.Engine, objective string) string {
+	if engine != nil {
+		if s, err := engine.Render("planner.task", prompt.PlannerTaskData{
+			Objective: strings.TrimSpace(objective),
+		}); err == nil {
+			return s
+		}
+	}
 	return fmt.Sprintf("Create an execution plan for this objective:\n\n%s", strings.TrimSpace(objective))
 }
 

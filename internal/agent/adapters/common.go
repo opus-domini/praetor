@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	agent "github.com/opus-domini/praetor/internal/agent"
+	"github.com/opus-domini/praetor/internal/prompt"
 )
 
 func ComposePrompt(systemPrompt, prompt string) string {
@@ -55,6 +56,13 @@ func ParseReview(output string) (agent.ReviewDecision, string) {
 		}
 	}
 	return agent.DecisionUnknown, ""
+}
+
+func adapterPlanData(objective, workspaceContext string) prompt.AdapterPlanData {
+	return prompt.AdapterPlanData{
+		Objective:        strings.TrimSpace(objective),
+		WorkspaceContext: strings.TrimSpace(workspaceContext),
+	}
 }
 
 func TailText(input string, maxLines int) string {

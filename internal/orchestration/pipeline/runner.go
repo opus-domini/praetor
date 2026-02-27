@@ -16,6 +16,7 @@ import (
 	"github.com/opus-domini/praetor/internal/agent/middleware"
 	"github.com/opus-domini/praetor/internal/domain"
 	"github.com/opus-domini/praetor/internal/orchestration/fsm"
+	"github.com/opus-domini/praetor/internal/prompt"
 	localstate "github.com/opus-domini/praetor/internal/state"
 	"github.com/opus-domini/praetor/internal/workspace"
 )
@@ -57,6 +58,7 @@ type activeRun struct {
 	stopReason        string
 	eventSink         middleware.EventSink
 	availableAgents   []agent.ID
+	promptEngine      *prompt.Engine
 }
 
 // Run executes a plan slug until completion, blockage, or retry exhaustion.
@@ -127,6 +129,9 @@ func (r *Runner) bootstrapRun(ctx context.Context, render domain.RenderSink, slu
 	run.projectRoot = projectRoot
 	run.runID = newRunID()
 
+	promptDir := filepath.Join(projectRoot, ".praetor", "prompts")
+	run.promptEngine, _ = prompt.NewEngine(promptDir)
+
 	store := localstate.NewStore(normalized.ProjectHome)
 	run.store = store
 
@@ -181,7 +186,7 @@ func (r *Runner) bootstrapRun(ctx context.Context, render domain.RenderSink, slu
 	planFile := store.PlanFile(slug)
 
 	if strings.TrimSpace(normalized.Objective) != "" {
-		planner, plannerErr := NewCognitiveAgent(normalized.PlannerAgent, runtime)
+		planner, plannerErr := NewCognitiveAgent(normalized.PlannerAgent, runtime, WithPromptEngine(run.promptEngine))
 		if plannerErr != nil {
 			return run, localstate.RunLock{}, cleanupRuntime, plannerErr
 		}

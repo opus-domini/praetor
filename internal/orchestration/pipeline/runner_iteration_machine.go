@@ -161,8 +161,8 @@ func iterationStateExecuteTask(ctx context.Context, machine *iterationMachine) (
 	selected := machine.selected
 	runDir := filepath.Join(run.store.LogsDir(), machine.runID)
 
-	executorSystemPrompt := BuildExecutorSystemPrompt(run.projectContext)
-	executorTaskPrompt := BuildExecutorTaskPrompt(run.slug, selected.index, selected.task, selected.feedback, selected.retries, run.plan.Title, selected.progress, machine.taskWorkdir)
+	executorSystemPrompt := BuildExecutorSystemPrompt(run.promptEngine, run.projectContext)
+	executorTaskPrompt := BuildExecutorTaskPrompt(run.promptEngine, run.slug, selected.index, selected.task, selected.feedback, selected.retries, run.plan.Title, selected.progress, machine.taskWorkdir)
 	_ = writeText(filepath.Join(runDir, "executor.system.txt"), executorSystemPrompt)
 	_ = writeText(filepath.Join(runDir, "executor.prompt.txt"), executorTaskPrompt)
 
@@ -314,8 +314,8 @@ func iterationStateReviewTask(ctx context.Context, machine *iterationMachine) (i
 	runDir := filepath.Join(run.store.LogsDir(), machine.runID)
 	gitDiff := CaptureGitDiff(machine.taskWorkdir, 500)
 
-	reviewerSystemPrompt := BuildReviewerSystemPrompt(run.projectContext)
-	reviewerTaskPrompt := BuildReviewerTaskPrompt(run.slug, selected.task, machine.executorOutput, machine.taskWorkdir, run.plan.Title, selected.progress, gitDiff)
+	reviewerSystemPrompt := BuildReviewerSystemPrompt(run.promptEngine, run.projectContext)
+	reviewerTaskPrompt := BuildReviewerTaskPrompt(run.promptEngine, run.slug, selected.task, machine.executorOutput, machine.taskWorkdir, run.plan.Title, selected.progress, gitDiff)
 	_ = writeText(filepath.Join(runDir, "reviewer.system.txt"), reviewerSystemPrompt)
 	_ = writeText(filepath.Join(runDir, "reviewer.prompt.txt"), reviewerTaskPrompt)
 
