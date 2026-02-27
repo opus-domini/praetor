@@ -164,8 +164,8 @@ Return only valid JSON matching this schema:
       "id": "TASK-001",
       "title": "string",
       "depends_on": ["TASK-000"],
-      "executor": "codex|claude",
-      "reviewer": "codex|claude|none",
+      "executor": "claude|codex|copilot|gemini|kimi|opencode|openrouter|ollama",
+      "reviewer": "claude|codex|copilot|gemini|kimi|opencode|openrouter|ollama|none",
       "description": "string",
       "criteria": "string"
     }

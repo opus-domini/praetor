@@ -463,8 +463,26 @@ func normalizeRunnerOptions(options domain.RunnerOptions) (domain.RunnerOptions,
 	if strings.TrimSpace(normalized.ClaudeBin) == "" {
 		normalized.ClaudeBin = "claude"
 	}
+	if strings.TrimSpace(normalized.CopilotBin) == "" {
+		normalized.CopilotBin = "copilot"
+	}
 	if strings.TrimSpace(normalized.GeminiBin) == "" {
 		normalized.GeminiBin = "gemini"
+	}
+	if strings.TrimSpace(normalized.KimiBin) == "" {
+		normalized.KimiBin = "kimi"
+	}
+	if strings.TrimSpace(normalized.OpenCodeBin) == "" {
+		normalized.OpenCodeBin = "opencode"
+	}
+	if strings.TrimSpace(normalized.OpenRouterURL) == "" {
+		normalized.OpenRouterURL = "https://openrouter.ai/api/v1"
+	}
+	if strings.TrimSpace(normalized.OpenRouterModel) == "" {
+		normalized.OpenRouterModel = "openai/gpt-4o-mini"
+	}
+	if strings.TrimSpace(normalized.OpenRouterKeyEnv) == "" {
+		normalized.OpenRouterKeyEnv = "OPENROUTER_API_KEY"
 	}
 	if strings.TrimSpace(normalized.OllamaURL) == "" {
 		normalized.OllamaURL = "http://127.0.0.1:11434"
@@ -474,13 +492,13 @@ func normalizeRunnerOptions(options domain.RunnerOptions) (domain.RunnerOptions,
 	}
 	if normalized.RunnerMode == domain.RunnerTMUX {
 		if !isTMUXCompatibleAgent(normalized.DefaultExecutor) {
-			return domain.RunnerOptions{}, fmt.Errorf("runner mode %q only supports codex/claude executors (got %q)", normalized.RunnerMode, normalized.DefaultExecutor)
+			return domain.RunnerOptions{}, fmt.Errorf("runner mode %q does not support executor %q", normalized.RunnerMode, normalized.DefaultExecutor)
 		}
 		if !isTMUXCompatibleAgent(normalized.DefaultReviewer) {
-			return domain.RunnerOptions{}, fmt.Errorf("runner mode %q only supports codex/claude reviewers (got %q)", normalized.RunnerMode, normalized.DefaultReviewer)
+			return domain.RunnerOptions{}, fmt.Errorf("runner mode %q does not support reviewer %q", normalized.RunnerMode, normalized.DefaultReviewer)
 		}
 		if strings.TrimSpace(normalized.Objective) != "" && !isTMUXCompatibleAgent(normalized.PlannerAgent) {
-			return domain.RunnerOptions{}, fmt.Errorf("runner mode %q only supports codex/claude planners (got %q)", normalized.RunnerMode, normalized.PlannerAgent)
+			return domain.RunnerOptions{}, fmt.Errorf("runner mode %q does not support planner %q", normalized.RunnerMode, normalized.PlannerAgent)
 		}
 	}
 	if normalized.RunnerMode == domain.RunnerTMUX {
@@ -498,7 +516,7 @@ func normalizeRunnerOptions(options domain.RunnerOptions) (domain.RunnerOptions,
 }
 
 func validateRequiredBinaries(opts domain.RunnerOptions, plan domain.Plan) error {
-	needed := map[string]string{}
+	neededAgents := map[domain.Agent]struct{}{}
 	if opts.RunnerMode == domain.RunnerTMUX {
 		for idx, task := range plan.Tasks {
 			executor := domain.NormalizeAgent(task.Executor)
@@ -515,71 +533,64 @@ func validateRequiredBinaries(opts domain.RunnerOptions, plan domain.Plan) error
 	}
 
 	if strings.TrimSpace(opts.Objective) != "" {
-		switch domain.NormalizeAgent(opts.PlannerAgent) {
-		case domain.AgentCodex:
-			needed[opts.CodexBin] = "codex(planner)"
-		case domain.AgentClaude:
-			needed[opts.ClaudeBin] = "claude(planner)"
-		case domain.AgentGemini:
-			needed[opts.GeminiBin] = "gemini(planner)"
-		}
+		neededAgents[domain.NormalizeAgent(opts.PlannerAgent)] = struct{}{}
 	}
-
-	if opts.DefaultExecutor == domain.AgentCodex {
-		needed[opts.CodexBin] = "codex"
-	}
-	if opts.DefaultExecutor == domain.AgentClaude {
-		needed[opts.ClaudeBin] = "claude"
-	}
-	if opts.DefaultExecutor == domain.AgentGemini {
-		needed[opts.GeminiBin] = "gemini"
-	}
+	neededAgents[domain.NormalizeAgent(opts.DefaultExecutor)] = struct{}{}
 	if !opts.SkipReview {
-		if opts.DefaultReviewer == domain.AgentCodex {
-			needed[opts.CodexBin] = "codex"
-		}
-		if opts.DefaultReviewer == domain.AgentClaude {
-			needed[opts.ClaudeBin] = "claude"
-		}
-		if opts.DefaultReviewer == domain.AgentGemini {
-			needed[opts.GeminiBin] = "gemini"
-		}
+		neededAgents[domain.NormalizeAgent(opts.DefaultReviewer)] = struct{}{}
 	}
 
 	for _, task := range plan.Tasks {
-		agent := domain.NormalizeAgent(task.Executor)
-		if agent == domain.AgentCodex {
-			needed[opts.CodexBin] = "codex"
-		}
-		if agent == domain.AgentClaude {
-			needed[opts.ClaudeBin] = "claude"
-		}
-		if agent == domain.AgentGemini {
-			needed[opts.GeminiBin] = "gemini"
-		}
+		neededAgents[domain.NormalizeAgent(task.Executor)] = struct{}{}
 		if !opts.SkipReview {
-			reviewer := domain.NormalizeAgent(task.Reviewer)
-			if reviewer == domain.AgentCodex {
-				needed[opts.CodexBin] = "codex"
+			neededAgents[domain.NormalizeAgent(task.Reviewer)] = struct{}{}
+		}
+	}
+
+	neededBins := map[string]string{}
+	var missing []string
+	for agent := range neededAgents {
+		agent = domain.NormalizeAgent(agent)
+		if agent == "" || agent == domain.AgentNone {
+			continue
+		}
+
+		if domain.AgentRequiresBinary(agent) {
+			bin, ok := domain.AgentBinary(opts, agent)
+			if !ok || strings.TrimSpace(bin) == "" {
+				missing = append(missing, fmt.Sprintf("%s(binary not configured)", domain.AgentDisplayName(agent)))
+				continue
 			}
-			if reviewer == domain.AgentClaude {
-				needed[opts.ClaudeBin] = "claude"
+			if label, exists := neededBins[bin]; exists {
+				if strings.Contains(label, string(agent)) {
+					continue
+				}
+				neededBins[bin] = label + "+" + string(agent)
+				continue
 			}
-			if reviewer == domain.AgentGemini {
-				needed[opts.GeminiBin] = "gemini"
+			neededBins[bin] = string(agent)
+			continue
+		}
+
+		if agent == domain.AgentOpenRouter {
+			keyEnv := strings.TrimSpace(opts.OpenRouterKeyEnv)
+			if keyEnv == "" {
+				keyEnv = "OPENROUTER_API_KEY"
+			}
+			if strings.TrimSpace(os.Getenv(keyEnv)) == "" {
+				missing = append(missing, fmt.Sprintf("%s(api key env %s not set)", domain.AgentDisplayName(agent), keyEnv))
 			}
 		}
 	}
 
-	var missing []string
-	for bin, label := range needed {
+	for bin, label := range neededBins {
 		if _, err := exec.LookPath(bin); err != nil {
 			missing = append(missing, fmt.Sprintf("%s (%s)", label, bin))
 		}
 	}
 	if len(missing) > 0 {
 		sort.Strings(missing)
-		return fmt.Errorf("required binaries not found: %s", strings.Join(missing, ", "))
+		return fmt.Errorf("required provider prerequisites not met: %s", strings.Join(missing, ", "))
 	}
 	return nil
 }
@@ -650,12 +661,7 @@ func resolveReviewer(task domain.StateTask, defaultReviewer domain.Agent, skipRe
 }
 
 func isTMUXCompatibleAgent(agent domain.Agent) bool {
-	switch domain.NormalizeAgent(agent) {
-	case "", domain.AgentNone, domain.AgentCodex, domain.AgentClaude:
-		return true
-	default:
-		return false
-	}
+	return domain.AgentSupportsTMUX(agent)
 }
 
 func prepareRunDir(logRoot string, task domain.StateTask, signature string) (string, error) {

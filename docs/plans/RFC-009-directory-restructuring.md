@@ -118,8 +118,8 @@ internal/
   - Criado `pipeline/runtime_composed.go` com `composedRuntime`, `defaultAgents()`, `BuildAgentRuntime`
   - `loop/runtime.go` esvaziado (sem chamadores restantes no loop)
 
-- [x] **T16. Mover runtime_agents bridge para `internal/agents/`**
-  - Criado `agents/loop_runtime.go` com `RegistryRuntime`, `NewRegistryRuntime`
+- [x] **T16. Mover runtime_agents bridge para `internal/agent/runtime/`**
+  - Criado `agent/runtime/registry_runtime.go` com `RegistryRuntime`, `NewRegistryRuntime`
   - `loop/runtime_agents.go` esvaziado (sem chamadores restantes no loop)
 
 ## Fase 6 — Extrair agent specs para providers

@@ -50,6 +50,24 @@ func TestNormalizeRunnerOptionsSetsDefaultGeminiAndOllamaSettings(t *testing.T) 
 	if normalized.GeminiBin != "gemini" {
 		t.Fatalf("expected default gemini binary, got %q", normalized.GeminiBin)
 	}
+	if normalized.CopilotBin != "copilot" {
+		t.Fatalf("expected default copilot binary, got %q", normalized.CopilotBin)
+	}
+	if normalized.KimiBin != "kimi" {
+		t.Fatalf("expected default kimi binary, got %q", normalized.KimiBin)
+	}
+	if normalized.OpenCodeBin != "opencode" {
+		t.Fatalf("expected default opencode binary, got %q", normalized.OpenCodeBin)
+	}
+	if normalized.OpenRouterURL == "" {
+		t.Fatal("expected default openrouter url")
+	}
+	if normalized.OpenRouterModel == "" {
+		t.Fatal("expected default openrouter model")
+	}
+	if normalized.OpenRouterKeyEnv == "" {
+		t.Fatal("expected default openrouter key env")
+	}
 	if normalized.OllamaURL == "" {
 		t.Fatal("expected default ollama url")
 	}
@@ -127,6 +145,36 @@ func TestValidateRequiredBinariesRequiresReviewerWhenEnabled(t *testing.T) {
 		t.Fatal("expected missing reviewer binary error")
 	}
 	if !strings.Contains(err.Error(), "claude") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestValidateRequiredBinariesOpenRouterRequiresAPIKey(t *testing.T) {
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatalf("resolve executable: %v", err)
+	}
+
+	opts := domain.RunnerOptions{
+		SkipReview:       true,
+		DefaultExecutor:  domain.AgentOpenRouter,
+		DefaultReviewer:  domain.AgentNone,
+		CodexBin:         self,
+		ClaudeBin:        self,
+		OpenRouterKeyEnv: "PRAETOR_TEST_OPENROUTER_KEY",
+	}
+	plan := domain.Plan{
+		Tasks: []domain.Task{
+			{Title: "task", Executor: domain.AgentOpenRouter, Reviewer: domain.AgentNone},
+		},
+	}
+	t.Setenv("PRAETOR_TEST_OPENROUTER_KEY", "")
+
+	err = validateRequiredBinaries(opts, plan)
+	if err == nil {
+		t.Fatal("expected missing openrouter api key validation error")
+	}
+	if !strings.Contains(err.Error(), "PRAETOR_TEST_OPENROUTER_KEY") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }

@@ -15,24 +15,30 @@ import (
 // Config holds resolved configuration values.
 // Pointer fields distinguish "not set" from "set to zero/false".
 type Config struct {
-	Executor       string
-	Reviewer       string
-	Planner        string
-	MaxRetries     *int
-	MaxIterations  *int
-	MaxTransitions *int
-	KeepLastRuns   *int
-	Runner         string
-	Isolation      string
-	NoReview       *bool
-	NoColor        *bool
-	CodexBin       string
-	ClaudeBin      string
-	GeminiBin      string
-	OllamaURL      string
-	OllamaModel    string
-	Hook           string
-	Timeout        string
+	Executor         string
+	Reviewer         string
+	Planner          string
+	MaxRetries       *int
+	MaxIterations    *int
+	MaxTransitions   *int
+	KeepLastRuns     *int
+	Runner           string
+	Isolation        string
+	NoReview         *bool
+	NoColor          *bool
+	CodexBin         string
+	ClaudeBin        string
+	CopilotBin       string
+	GeminiBin        string
+	KimiBin          string
+	OpenCodeBin      string
+	OpenRouterURL    string
+	OpenRouterModel  string
+	OpenRouterKeyEnv string
+	OllamaURL        string
+	OllamaModel      string
+	Hook             string
+	Timeout          string
 }
 
 // Path returns the config file path, respecting $PRAETOR_CONFIG.
@@ -180,8 +186,26 @@ func configFromMap(section string, m map[string]string) (Config, error) {
 	if v, ok := m["claude-bin"]; ok {
 		cfg.ClaudeBin = strings.TrimSpace(v)
 	}
+	if v, ok := m["copilot-bin"]; ok {
+		cfg.CopilotBin = strings.TrimSpace(v)
+	}
 	if v, ok := m["gemini-bin"]; ok {
 		cfg.GeminiBin = strings.TrimSpace(v)
+	}
+	if v, ok := m["kimi-bin"]; ok {
+		cfg.KimiBin = strings.TrimSpace(v)
+	}
+	if v, ok := m["opencode-bin"]; ok {
+		cfg.OpenCodeBin = strings.TrimSpace(v)
+	}
+	if v, ok := m["openrouter-url"]; ok {
+		cfg.OpenRouterURL = strings.TrimSpace(v)
+	}
+	if v, ok := m["openrouter-model"]; ok {
+		cfg.OpenRouterModel = strings.TrimSpace(v)
+	}
+	if v, ok := m["openrouter-api-key-env"]; ok {
+		cfg.OpenRouterKeyEnv = strings.TrimSpace(v)
 	}
 	if v, ok := m["ollama-url"]; ok {
 		cfg.OllamaURL = strings.TrimSpace(v)
@@ -249,8 +273,26 @@ func mergeConfig(global, project Config) Config {
 	if project.ClaudeBin != "" {
 		merged.ClaudeBin = project.ClaudeBin
 	}
+	if project.CopilotBin != "" {
+		merged.CopilotBin = project.CopilotBin
+	}
 	if project.GeminiBin != "" {
 		merged.GeminiBin = project.GeminiBin
+	}
+	if project.KimiBin != "" {
+		merged.KimiBin = project.KimiBin
+	}
+	if project.OpenCodeBin != "" {
+		merged.OpenCodeBin = project.OpenCodeBin
+	}
+	if project.OpenRouterURL != "" {
+		merged.OpenRouterURL = project.OpenRouterURL
+	}
+	if project.OpenRouterModel != "" {
+		merged.OpenRouterModel = project.OpenRouterModel
+	}
+	if project.OpenRouterKeyEnv != "" {
+		merged.OpenRouterKeyEnv = project.OpenRouterKeyEnv
 	}
 	if project.OllamaURL != "" {
 		merged.OllamaURL = project.OllamaURL

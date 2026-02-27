@@ -9,13 +9,23 @@ import (
 	"strings"
 	"time"
 
-	"github.com/opus-domini/praetor/internal/agents"
+	agent "github.com/opus-domini/praetor/internal/agent"
+	agentruntime "github.com/opus-domini/praetor/internal/agent/runtime"
 	"github.com/spf13/cobra"
 )
 
 func newExecCmd() *cobra.Command {
 	var provider string
 	var model string
+	var codexBin string
+	var claudeBin string
+	var copilotBin string
+	var geminiBin string
+	var kimiBin string
+	var opencodeBin string
+	var openrouterURL string
+	var openrouterModel string
+	var openrouterKeyEnv string
 	var ollamaURL string
 	var timeout time.Duration
 	var quiet bool
@@ -28,6 +38,8 @@ func newExecCmd() *cobra.Command {
 Pass the prompt as an argument or pipe it via stdin.`,
 		Example: `  praetor exec "Explain this error"
   praetor exec --provider claude "Refactor this function"
+  praetor exec --provider copilot "Generate tests for this package"
+  praetor exec --provider openrouter --model openai/gpt-4o-mini "Summarize this module"
   praetor exec --provider ollama --model llama3.1 "Summarize this module"
   praetor exec -q "Explain this error"
   echo "Reply with OK" | praetor exec`,
@@ -48,14 +60,23 @@ Pass the prompt as an argument or pipe it via stdin.`,
 				return err
 			}
 
-			registry := agents.NewDefaultRegistry(agents.DefaultOptions{
-				OllamaURL:   ollamaURL,
-				OllamaModel: model,
+			registry := agentruntime.NewDefaultRegistry(agentruntime.DefaultOptions{
+				CodexBin:         codexBin,
+				ClaudeBin:        claudeBin,
+				CopilotBin:       copilotBin,
+				GeminiBin:        geminiBin,
+				KimiBin:          kimiBin,
+				OpenCodeBin:      opencodeBin,
+				OpenRouterURL:    openrouterURL,
+				OpenRouterModel:  openrouterModel,
+				OpenRouterKeyEnv: openrouterKeyEnv,
+				OllamaURL:        ollamaURL,
+				OllamaModel:      model,
 			})
-			agentID := agents.Normalize(provider)
-			agent, ok := registry.Get(agentID)
+			agentID := agent.Normalize(provider)
+			providerAgent, ok := registry.Get(agentID)
 			if !ok {
-				return fmt.Errorf("unknown provider %q (supported: codex, claude, gemini, ollama)", provider)
+				return fmt.Errorf("unknown provider %q (supported: claude, codex, copilot, gemini, kimi, opencode, openrouter, ollama)", provider)
 			}
 
 			ctx := cmd.Context()
@@ -65,7 +86,7 @@ Pass the prompt as an argument or pipe it via stdin.`,
 				defer cancel()
 			}
 
-			response, err := agent.Execute(ctx, agents.ExecuteRequest{
+			response, err := providerAgent.Execute(ctx, agent.ExecuteRequest{
 				Prompt:  resolvedPrompt,
 				Model:   strings.TrimSpace(model),
 				Workdir: ".",
@@ -89,8 +110,17 @@ Pass the prompt as an argument or pipe it via stdin.`,
 		},
 	}
 
-	cmd.Flags().StringVar(&provider, "provider", string(agents.Codex), "Provider: codex, claude, gemini or ollama")
+	cmd.Flags().StringVar(&provider, "provider", string(agent.Codex), "Provider: claude, codex, copilot, gemini, kimi, opencode, openrouter, or ollama")
 	cmd.Flags().StringVar(&model, "model", "", "Model name (provider-specific)")
+	cmd.Flags().StringVar(&codexBin, "codex-bin", "codex", "Codex binary path or name")
+	cmd.Flags().StringVar(&claudeBin, "claude-bin", "claude", "Claude binary path or name")
+	cmd.Flags().StringVar(&copilotBin, "copilot-bin", "copilot", "Copilot binary path or name")
+	cmd.Flags().StringVar(&geminiBin, "gemini-bin", "gemini", "Gemini CLI binary path or name")
+	cmd.Flags().StringVar(&kimiBin, "kimi-bin", "kimi", "Kimi binary path or name")
+	cmd.Flags().StringVar(&opencodeBin, "opencode-bin", "opencode", "OpenCode binary path or name")
+	cmd.Flags().StringVar(&openrouterURL, "openrouter-url", "https://openrouter.ai/api/v1", "OpenRouter base URL")
+	cmd.Flags().StringVar(&openrouterModel, "openrouter-model", "openai/gpt-4o-mini", "Default OpenRouter model when --provider openrouter and --model is empty")
+	cmd.Flags().StringVar(&openrouterKeyEnv, "openrouter-api-key-env", "OPENROUTER_API_KEY", "Environment variable containing OpenRouter API key")
 	cmd.Flags().StringVar(&ollamaURL, "ollama-url", "http://127.0.0.1:11434", "Ollama base URL when --provider ollama")
 	cmd.Flags().DurationVar(&timeout, "timeout", 0, "Timeout (e.g. 30s, 5m)")
 	cmd.Flags().BoolVarP(&quiet, "quiet", "q", false, "Print only the agent output (no metadata)")

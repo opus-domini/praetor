@@ -10,28 +10,40 @@ import (
 type Agent string
 
 const (
-	AgentClaude Agent = "claude"
-	AgentCodex  Agent = "codex"
-	AgentGemini Agent = "gemini"
-	AgentOllama Agent = "ollama"
-	AgentNone   Agent = "none"
+	AgentClaude     Agent = "claude"
+	AgentCodex      Agent = "codex"
+	AgentCopilot    Agent = "copilot"
+	AgentGemini     Agent = "gemini"
+	AgentKimi       Agent = "kimi"
+	AgentOpenCode   Agent = "opencode"
+	AgentOpenRouter Agent = "openrouter"
+	AgentOllama     Agent = "ollama"
+	AgentNone       Agent = "none"
 )
 
 // ValidExecutors lists agents that may execute tasks.
 var ValidExecutors = map[Agent]struct{}{
-	AgentClaude: {},
-	AgentCodex:  {},
-	AgentGemini: {},
-	AgentOllama: {},
+	AgentClaude:     {},
+	AgentCodex:      {},
+	AgentCopilot:    {},
+	AgentGemini:     {},
+	AgentKimi:       {},
+	AgentOpenCode:   {},
+	AgentOpenRouter: {},
+	AgentOllama:     {},
 }
 
 // ValidReviewers lists agents that may review tasks.
 var ValidReviewers = map[Agent]struct{}{
-	AgentClaude: {},
-	AgentCodex:  {},
-	AgentGemini: {},
-	AgentOllama: {},
-	AgentNone:   {},
+	AgentClaude:     {},
+	AgentCodex:      {},
+	AgentCopilot:    {},
+	AgentGemini:     {},
+	AgentKimi:       {},
+	AgentOpenCode:   {},
+	AgentOpenRouter: {},
+	AgentOllama:     {},
+	AgentNone:       {},
 }
 
 // NormalizeAgent lowercases and trims an agent identifier.
@@ -122,29 +134,35 @@ func (s State) ActiveCount() int {
 
 // RunnerOptions controls loop execution behavior.
 type RunnerOptions struct {
-	ProjectHome     string
-	Workdir         string
-	RunnerMode      RunnerMode
-	DefaultExecutor Agent
-	DefaultReviewer Agent
-	PlannerAgent    Agent
-	Objective       string
-	MaxRetries      int
-	MaxIterations   int
-	MaxTransitions  int
-	KeepLastRuns    int
-	SkipReview      bool
-	Force           bool
-	CodexBin        string
-	ClaudeBin       string
-	GeminiBin       string
-	OllamaURL       string
-	OllamaModel     string
-	TMUXSession     string
-	Verbose         bool
-	NoColor         bool
-	Isolation       IsolationMode
-	PostTaskHook    string
+	ProjectHome      string
+	Workdir          string
+	RunnerMode       RunnerMode
+	DefaultExecutor  Agent
+	DefaultReviewer  Agent
+	PlannerAgent     Agent
+	Objective        string
+	MaxRetries       int
+	MaxIterations    int
+	MaxTransitions   int
+	KeepLastRuns     int
+	SkipReview       bool
+	Force            bool
+	CodexBin         string
+	ClaudeBin        string
+	CopilotBin       string
+	GeminiBin        string
+	KimiBin          string
+	OpenCodeBin      string
+	OpenRouterURL    string
+	OpenRouterModel  string
+	OpenRouterKeyEnv string
+	OllamaURL        string
+	OllamaModel      string
+	TMUXSession      string
+	Verbose          bool
+	NoColor          bool
+	Isolation        IsolationMode
+	PostTaskHook     string
 }
 
 // RunnerMode controls how external agent commands are executed.
@@ -177,18 +195,25 @@ type RunnerStats struct {
 
 // AgentRequest is one execution request for an agent runtime.
 type AgentRequest struct {
-	Role         string
-	Agent        Agent
-	Prompt       string
-	SystemPrompt string
-	Model        string
-	Workdir      string
-	RunDir       string
-	OutputPrefix string
-	TaskLabel    string
-	CodexBin     string
-	ClaudeBin    string
-	Verbose      bool
+	Role             string
+	Agent            Agent
+	Prompt           string
+	SystemPrompt     string
+	Model            string
+	Workdir          string
+	RunDir           string
+	OutputPrefix     string
+	TaskLabel        string
+	CodexBin         string
+	ClaudeBin        string
+	CopilotBin       string
+	GeminiBin        string
+	KimiBin          string
+	OpenCodeBin      string
+	OpenRouterURL    string
+	OpenRouterModel  string
+	OpenRouterKeyEnv string
+	Verbose          bool
 }
 
 // AgentResult holds output and metrics from one agent invocation.

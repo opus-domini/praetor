@@ -25,7 +25,7 @@
 
 - [x] **T002. Mapear pontos de entrada de runtime**
   - Listar todos os chamadores de `BuildAgentRuntime`
-  - Listar todos os caminhos `domain.AgentSpec` e `internal/agents.Agent`
+  - Listar todos os caminhos `domain.AgentSpec` e `internal/agent.Agent`
   - Confirmar onde existe duplicidade ativa
 
 - [x] **T003. Criar matriz de suporte por runner**

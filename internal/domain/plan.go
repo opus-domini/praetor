@@ -181,13 +181,13 @@ func ValidatePlan(plan Plan) error {
 
 		if task.Executor != "" {
 			if _, ok := ValidExecutors[NormalizeAgent(task.Executor)]; !ok {
-				errorsList = append(errorsList, fmt.Sprintf("tasks[%d]: invalid executor %q (allowed: codex, claude, gemini, ollama)", idx, task.Executor))
+				errorsList = append(errorsList, fmt.Sprintf("tasks[%d]: invalid executor %q (allowed: claude, codex, copilot, gemini, kimi, opencode, openrouter, ollama)", idx, task.Executor))
 			}
 		}
 
 		if task.Reviewer != "" {
 			if _, ok := ValidReviewers[NormalizeAgent(task.Reviewer)]; !ok {
-				errorsList = append(errorsList, fmt.Sprintf("tasks[%d]: invalid reviewer %q (allowed: codex, claude, gemini, ollama, none)", idx, task.Reviewer))
+				errorsList = append(errorsList, fmt.Sprintf("tasks[%d]: invalid reviewer %q (allowed: claude, codex, copilot, gemini, kimi, opencode, openrouter, ollama, none)", idx, task.Reviewer))
 			}
 		}
 

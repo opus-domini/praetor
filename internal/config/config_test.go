@@ -55,6 +55,46 @@ isolation = "worktree"
 	}
 }
 
+func TestLoadExtendedProviderSettings(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.toml")
+	content := `
+copilot-bin = "gh-copilot"
+kimi-bin = "/usr/local/bin/kimi"
+opencode-bin = "opencode"
+openrouter-url = "https://openrouter.example/v1"
+openrouter-model = "openai/gpt-4o-mini"
+openrouter-api-key-env = "OPENROUTER_TOKEN"
+`
+	if err := os.WriteFile(cfgPath, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PRAETOR_CONFIG", cfgPath)
+
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.CopilotBin != "gh-copilot" {
+		t.Fatalf("expected copilot-bin, got %q", cfg.CopilotBin)
+	}
+	if cfg.KimiBin != "/usr/local/bin/kimi" {
+		t.Fatalf("expected kimi-bin, got %q", cfg.KimiBin)
+	}
+	if cfg.OpenCodeBin != "opencode" {
+		t.Fatalf("expected opencode-bin, got %q", cfg.OpenCodeBin)
+	}
+	if cfg.OpenRouterURL != "https://openrouter.example/v1" {
+		t.Fatalf("expected openrouter-url, got %q", cfg.OpenRouterURL)
+	}
+	if cfg.OpenRouterModel != "openai/gpt-4o-mini" {
+		t.Fatalf("expected openrouter-model, got %q", cfg.OpenRouterModel)
+	}
+	if cfg.OpenRouterKeyEnv != "OPENROUTER_TOKEN" {
+		t.Fatalf("expected openrouter-api-key-env, got %q", cfg.OpenRouterKeyEnv)
+	}
+}
+
 func TestLoadProjectOverrides(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "config.toml")
