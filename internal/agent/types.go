@@ -125,12 +125,8 @@ func Normalize(raw string) ID {
 	return ID(strings.ToLower(strings.TrimSpace(raw)))
 }
 
-// IsSupported reports whether id maps to a built-in agent.
+// IsSupported reports whether id maps to a known agent in the catalog.
 func IsSupported(id ID) bool {
-	switch id {
-	case Codex, Claude, Copilot, Gemini, Kimi, OpenCode, OpenRouter, Ollama:
-		return true
-	default:
-		return false
-	}
+	_, ok := LookupCatalog(id)
+	return ok
 }

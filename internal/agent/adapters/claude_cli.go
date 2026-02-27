@@ -10,7 +10,6 @@ import (
 
 	agent "github.com/opus-domini/praetor/internal/agent"
 	"github.com/opus-domini/praetor/internal/agent/runner"
-	agenttext "github.com/opus-domini/praetor/internal/agent/text"
 )
 
 // ClaudeCLI is a CLI-backed Agent implementation using the `claude` CLI.
@@ -59,7 +58,7 @@ func (a *ClaudeCLI) Plan(ctx context.Context, req agent.PlanRequest) (agent.Plan
 	if err != nil {
 		return agent.PlanResponse{}, err
 	}
-	obj, err := agenttext.ExtractJSONObject(resp.Output)
+	obj, err := ExtractJSONObject(resp.Output)
 	if err == nil {
 		resp.Manifest = json.RawMessage(obj)
 	}
@@ -108,7 +107,7 @@ func (a *ClaudeCLI) executeOneShot(ctx context.Context, req agent.ExecuteRequest
 		return agent.ExecuteResponse{DurationS: time.Since(start).Seconds()}, err
 	}
 	if result.ExitCode != 0 {
-		return agent.ExecuteResponse{DurationS: time.Since(start).Seconds()}, fmt.Errorf("claude exit code %d: %s", result.ExitCode, agenttext.TailText(result.Stderr, 20))
+		return agent.ExecuteResponse{DurationS: time.Since(start).Seconds()}, fmt.Errorf("claude exit code %d: %s", result.ExitCode, TailText(result.Stderr, 20))
 	}
 	parsed := parseClaudeOutput(result.Stdout)
 	if parsed.Model != "" {
@@ -128,7 +127,7 @@ func (a *ClaudeCLI) Review(ctx context.Context, req agent.ReviewRequest) (agent.
 	if err != nil {
 		return agent.ReviewResponse{}, err
 	}
-	decision, reason := agenttext.ParseReview(resp.Output)
+	decision, reason := ParseReview(resp.Output)
 	return agent.ReviewResponse{
 		Decision:  decision,
 		Reason:    reason,
@@ -167,7 +166,7 @@ func (a *ClaudeCLI) run(ctx context.Context, workdir, model, systemPrompt, promp
 		return agent.PlanResponse{DurationS: time.Since(start).Seconds()}, err
 	}
 	if result.ExitCode != 0 {
-		return agent.PlanResponse{DurationS: time.Since(start).Seconds()}, fmt.Errorf("claude exit code %d: %s", result.ExitCode, agenttext.TailText(result.Stderr, 20))
+		return agent.PlanResponse{DurationS: time.Since(start).Seconds()}, fmt.Errorf("claude exit code %d: %s", result.ExitCode, TailText(result.Stderr, 20))
 	}
 	output, cost := parseStreamOutput(result.Stdout)
 	return agent.PlanResponse{

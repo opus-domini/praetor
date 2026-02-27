@@ -12,7 +12,7 @@ func TestRootCommandHasExpectedSubcommands(t *testing.T) {
 
 	root := NewRootCmd()
 
-	expected := map[string]bool{"plan": false, "exec": false}
+	expected := map[string]bool{"plan": false, "exec": false, "doctor": false}
 	for _, cmd := range root.Commands() {
 		if _, ok := expected[cmd.Name()]; ok {
 			expected[cmd.Name()] = true

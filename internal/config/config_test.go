@@ -325,6 +325,61 @@ timeout = "-5m"
 	}
 }
 
+func TestLoadFallbackConfig(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.toml")
+	content := `
+fallback = "ollama"
+fallback-on-transient = "gemini"
+fallback-on-auth = "ollama"
+`
+	if err := os.WriteFile(cfgPath, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PRAETOR_CONFIG", cfgPath)
+
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Fallback != "ollama" {
+		t.Fatalf("expected fallback=ollama, got %q", cfg.Fallback)
+	}
+	if cfg.FallbackOnTransient != "gemini" {
+		t.Fatalf("expected fallback-on-transient=gemini, got %q", cfg.FallbackOnTransient)
+	}
+	if cfg.FallbackOnAuth != "ollama" {
+		t.Fatalf("expected fallback-on-auth=ollama, got %q", cfg.FallbackOnAuth)
+	}
+}
+
+func TestLoadFallbackProjectOverride(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.toml")
+	content := `
+fallback = "ollama"
+fallback-on-transient = "gemini"
+
+[projects."/my/project"]
+fallback-on-transient = "ollama"
+`
+	if err := os.WriteFile(cfgPath, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PRAETOR_CONFIG", cfgPath)
+
+	cfg, err := Load("/my/project")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Fallback != "ollama" {
+		t.Fatalf("expected global fallback=ollama, got %q", cfg.Fallback)
+	}
+	if cfg.FallbackOnTransient != "ollama" {
+		t.Fatalf("expected project override fallback-on-transient=ollama, got %q", cfg.FallbackOnTransient)
+	}
+}
+
 func TestLoadErrorIncludesPath(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "config.toml")

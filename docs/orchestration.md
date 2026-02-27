@@ -29,6 +29,7 @@ praetor plan run my-plan \
   --max-transitions 200 \
   --keep-last-runs 20 \
   --hook ./scripts/validate.sh \
+  --fallback-on-transient ollama \
   --timeout 2h
 ```
 
@@ -115,8 +116,8 @@ Plans are JSON files with a `tasks` array. Each task can specify its own executo
 | `id` | no | Unique task identifier. Auto-generated as `auto-<index>` if omitted. |
 | `title` | yes | Short task description. |
 | `depends_on` | no | Array of task IDs that must complete before this task runs. |
-| `executor` | no | Agent for execution: `codex`, `claude`, `gemini`, or `ollama`. Falls back to `--executor`. |
-| `reviewer` | no | Agent for review: `codex`, `claude`, `gemini`, `ollama`, or `none`. Falls back to `--reviewer`. |
+| `executor` | no | Agent for execution: `claude`, `codex`, `copilot`, `gemini`, `kimi`, `opencode`, `openrouter`, or `ollama`. Falls back to `--executor`. |
+| `reviewer` | no | Agent for review: `claude`, `codex`, `copilot`, `gemini`, `kimi`, `opencode`, `openrouter`, `ollama`, or `none`. Falls back to `--reviewer`. |
 | `model` | no | Model hint: `sonnet`, `opus`, or `haiku`. |
 | `description` | no | Detailed task description included in the executor prompt. |
 | `criteria` | no | Acceptance criteria included in both executor and reviewer prompts. |
@@ -129,8 +130,8 @@ The plan is validated at load time:
 - Every task must have a non-empty `title`.
 - Task IDs must be unique.
 - `depends_on` must reference existing task IDs.
-- `executor` must be `codex`, `claude`, `gemini`, or `ollama` (if specified).
-- `reviewer` must be `codex`, `claude`, `gemini`, `ollama`, or `none` (if specified).
+- `executor` must be one of the 8 supported agents: `claude`, `codex`, `copilot`, `gemini`, `kimi`, `opencode`, `openrouter`, or `ollama` (if specified).
+- `reviewer` must be one of the 8 supported agents or `none` (if specified).
 - `model` must be `sonnet`, `opus`, or `haiku` (if specified).
 
 ## Runtime model
@@ -170,6 +171,7 @@ All Praetor data lives under a single home directory. Resolution order: `$PRAETO
         │   └── <run-id>/
         │       ├── snapshot.json
         │       ├── events.log
+        │       ├── events.jsonl           # Structured execution events (JSONL)
         │       ├── lock.json
         │       └── meta.json
         └── worktrees/                   # Git worktrees for isolation
@@ -347,14 +349,13 @@ Use this for linters, type checkers, or integration tests that must pass before 
 
 ### Pre-flight checks
 
-Before the run starts, all required binaries are validated with `exec.LookPath`:
+Before the run starts, all required prerequisites are validated:
 
-- `tmux` (required only in `--runner tmux`)
-- `codex` (if any task uses the codex executor or reviewer)
-- `claude` (if any task uses the claude executor or reviewer)
-- `gemini` (if any task uses the gemini executor or reviewer)
+- **CLI agents** (`claude`, `codex`, `copilot`, `gemini`, `kimi`, `opencode`): validated with `exec.LookPath` against the configured binary name.
+- **REST agents** (`openrouter`): validates that the API key environment variable is set.
+- **`tmux`**: required only in `--runner tmux` mode.
 
-Missing binaries produce a clear error listing all that are absent.
+Missing binaries or unset API keys produce a clear error listing all that are absent. Use `praetor doctor` to check agent availability independently.
 
 ## Observability
 
@@ -433,7 +434,7 @@ The tmux session is auto-created if it doesn't exist and auto-destroyed on clean
 tmux attach -t praetor-<project-hash>
 ```
 
-## Execution strategy and fallback
+## Execution strategy
 
 Each agent invocation records the effective execution strategy:
 
@@ -442,3 +443,115 @@ Each agent invocation records the effective execution strategy:
 - `pty` for interactive terminal execution
 
 In `--runner direct`, CLI execution prefers `process` and falls back to `pty` when TTY-related failures are detected.
+
+## Fallback and resilience
+
+### Error classification
+
+When an agent fails, the error is classified automatically:
+
+| Class | Patterns |
+|-------|----------|
+| `transient` | connection refused, timeout, 502, 503, 504, network unreachable |
+| `auth` | 401, 403, api key, unauthorized |
+| `rate_limit` | 429, rate limit, too many requests |
+| `unsupported` | unsupported, not implemented |
+| `unknown` | everything else |
+
+### Fallback policy
+
+Configure automatic failover when errors occur:
+
+```toml
+# config.toml
+fallback = "ollama"                # per-agent: default executor → ollama
+fallback-on-transient = "gemini"   # all transient errors → gemini
+fallback-on-auth = "ollama"        # all auth errors → ollama
+```
+
+Or via CLI flags:
+
+```bash
+praetor plan run my-plan \
+  --fallback ollama \
+  --fallback-on-transient gemini \
+  --fallback-on-auth ollama
+```
+
+Resolution order:
+1. Per-agent mapping (`--fallback`) — if the default executor fails, use this agent.
+2. Global class-based fallback (`--fallback-on-transient`, `--fallback-on-auth`) — matches any agent by error class.
+3. No match — original error propagates.
+
+Context cancellation always propagates immediately — no fallback is attempted.
+
+## Middleware pipeline
+
+Every agent invocation passes through a composable middleware chain:
+
+```text
+Request → Logging → Metrics → [FallbackRuntime →] RegistryRuntime → Agent adapter
+```
+
+### Logging middleware
+
+Captures structured log entries for every invocation:
+- Timestamp, agent, role, status, error, strategy, duration, cost.
+- Emits `ExecutionEvent` to the configured event sink.
+
+### Metrics middleware
+
+Thread-safe counters keyed by `(agent, role, status)`:
+- Total invocations, total cost, per-key breakdowns.
+- Queryable via `Counters.Snapshot()`.
+
+## Structured events
+
+Execution events are written as JSONL to `<run-dir>/events.jsonl`:
+
+```json
+{"timestamp":"2026-02-27T10:30:00Z","type":"agent_complete","agent":"claude","role":"execute","duration_s":12.3,"cost_usd":0.05}
+{"timestamp":"2026-02-27T10:30:15Z","type":"agent_error","agent":"codex","role":"execute","error":"connection refused","duration_s":0.1}
+```
+
+Event types:
+
+| Type | Description |
+|------|-------------|
+| `agent_start` | Agent invocation started |
+| `agent_complete` | Agent invocation succeeded |
+| `agent_error` | Agent invocation failed |
+| `agent_fallback` | Fallback agent activated |
+
+Event sinks:
+
+| Sink | Description |
+|------|-------------|
+| `JSONLSink` | Appends to a file (production default) |
+| `MultiplexSink` | Fans out to multiple sinks |
+| `NopSink` | Discards events (disabled observability) |
+
+## Intelligent routing
+
+At bootstrap, Praetor probes all configured agents to determine availability:
+
+- **CLI agents**: checks binary existence via `exec.LookPath` and runs `--version` / `--help`.
+- **REST agents**: sends HTTP requests to health endpoints.
+
+When selecting an executor for a task, the router uses three-level resolution:
+
+1. **Task-level executor** (if set in the plan) — always used.
+2. **Default executor** (if available according to probe results) — used normally.
+3. **Auto-selection** from available agents — scans healthy agents, preferring CLI transport over REST.
+
+This ensures plans continue executing even when the default agent becomes temporarily unavailable.
+
+### Doctor command
+
+Use `praetor doctor` to inspect agent availability independently:
+
+```bash
+praetor doctor
+```
+
+Shows health status, binary paths, versions, and transport type for all 8 agents.

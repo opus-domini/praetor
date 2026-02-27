@@ -9,7 +9,6 @@ import (
 
 	agent "github.com/opus-domini/praetor/internal/agent"
 	"github.com/opus-domini/praetor/internal/agent/runner"
-	agenttext "github.com/opus-domini/praetor/internal/agent/text"
 )
 
 // CopilotCLI is a CLI-backed Agent implementation using the `copilot` CLI.
@@ -55,7 +54,7 @@ func (a *CopilotCLI) Plan(ctx context.Context, req agent.PlanRequest) (agent.Pla
 	if err != nil {
 		return agent.PlanResponse{}, err
 	}
-	obj, err := agenttext.ExtractJSONObject(resp.Output)
+	obj, err := ExtractJSONObject(resp.Output)
 	if err == nil {
 		resp.Manifest = []byte(obj)
 	}
@@ -63,7 +62,7 @@ func (a *CopilotCLI) Plan(ctx context.Context, req agent.PlanRequest) (agent.Pla
 }
 
 func (a *CopilotCLI) Execute(ctx context.Context, req agent.ExecuteRequest) (agent.ExecuteResponse, error) {
-	resp, err := a.run(ctx, req.Workdir, req.Model, agenttext.ComposePrompt(req.SystemPrompt, req.Prompt), req.RunDir, req.OutputPrefix, req.TaskLabel)
+	resp, err := a.run(ctx, req.Workdir, req.Model, ComposePrompt(req.SystemPrompt, req.Prompt), req.RunDir, req.OutputPrefix, req.TaskLabel)
 	if err != nil {
 		return agent.ExecuteResponse{}, err
 	}
@@ -71,11 +70,11 @@ func (a *CopilotCLI) Execute(ctx context.Context, req agent.ExecuteRequest) (age
 }
 
 func (a *CopilotCLI) Review(ctx context.Context, req agent.ReviewRequest) (agent.ReviewResponse, error) {
-	resp, err := a.run(ctx, req.Workdir, req.Model, agenttext.ComposePrompt(req.SystemPrompt, req.Prompt), req.RunDir, req.OutputPrefix, req.TaskLabel)
+	resp, err := a.run(ctx, req.Workdir, req.Model, ComposePrompt(req.SystemPrompt, req.Prompt), req.RunDir, req.OutputPrefix, req.TaskLabel)
 	if err != nil {
 		return agent.ReviewResponse{}, err
 	}
-	decision, reason := agenttext.ParseReview(resp.Output)
+	decision, reason := ParseReview(resp.Output)
 	return agent.ReviewResponse{Decision: decision, Reason: reason, Output: resp.Output, DurationS: resp.DurationS, Strategy: resp.Strategy}, nil
 }
 
@@ -99,7 +98,7 @@ func (a *CopilotCLI) run(ctx context.Context, workdir, model, prompt, runDir, ou
 		return agent.PlanResponse{DurationS: time.Since(start).Seconds()}, err
 	}
 	if result.ExitCode != 0 {
-		return agent.PlanResponse{DurationS: time.Since(start).Seconds()}, fmt.Errorf("copilot exit code %d: %s", result.ExitCode, agenttext.TailText(result.Stderr, 20))
+		return agent.PlanResponse{DurationS: time.Since(start).Seconds()}, fmt.Errorf("copilot exit code %d: %s", result.ExitCode, TailText(result.Stderr, 20))
 	}
 	return agent.PlanResponse{
 		Output:    strings.TrimSpace(result.Stdout),

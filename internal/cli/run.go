@@ -42,6 +42,9 @@ func newRunCmd() *cobra.Command {
 	var noColor bool
 	var isolation string
 	var postTaskHook string
+	var fallbackAgent string
+	var fallbackOnTransient string
+	var fallbackOnAuth string
 	var timeout time.Duration
 
 	cmd := &cobra.Command{
@@ -147,6 +150,15 @@ isolation protects the main branch from partial changes.`,
 			if !f.Changed("hook") && cfg.Hook != "" {
 				postTaskHook = cfg.Hook
 			}
+			if !f.Changed("fallback") && cfg.Fallback != "" {
+				fallbackAgent = cfg.Fallback
+			}
+			if !f.Changed("fallback-on-transient") && cfg.FallbackOnTransient != "" {
+				fallbackOnTransient = cfg.FallbackOnTransient
+			}
+			if !f.Changed("fallback-on-auth") && cfg.FallbackOnAuth != "" {
+				fallbackOnAuth = cfg.FallbackOnAuth
+			}
 			if !f.Changed("timeout") && cfg.Timeout != "" {
 				d, parseErr := time.ParseDuration(cfg.Timeout)
 				if parseErr != nil {
@@ -160,34 +172,37 @@ isolation protects the main branch from partial changes.`,
 
 			runner := pipeline.NewRunner(nil)
 			runnerOptions := domain.RunnerOptions{
-				ProjectHome:      store.Root,
-				Workdir:          absWorkdir,
-				RunnerMode:       domain.RunnerMode(strings.ToLower(strings.TrimSpace(runnerMode))),
-				DefaultExecutor:  domain.Agent(executor),
-				DefaultReviewer:  domain.Agent(reviewer),
-				PlannerAgent:     domain.Agent(planner),
-				Objective:        strings.TrimSpace(objective),
-				MaxRetries:       maxRetries,
-				MaxIterations:    maxIterations,
-				MaxTransitions:   maxTransitions,
-				KeepLastRuns:     keepLastRuns,
-				SkipReview:       noReview,
-				Force:            force,
-				CodexBin:         codexBin,
-				ClaudeBin:        claudeBin,
-				CopilotBin:       copilotBin,
-				GeminiBin:        geminiBin,
-				KimiBin:          kimiBin,
-				OpenCodeBin:      opencodeBin,
-				OpenRouterURL:    openrouterURL,
-				OpenRouterModel:  openrouterModel,
-				OpenRouterKeyEnv: openrouterKeyEnv,
-				OllamaURL:        ollamaURL,
-				OllamaModel:      ollamaModel,
-				TMUXSession:      tmuxSession,
-				NoColor:          noColor,
-				Isolation:        domain.IsolationMode(strings.ToLower(strings.TrimSpace(isolation))),
-				PostTaskHook:     postTaskHook,
+				ProjectHome:         store.Root,
+				Workdir:             absWorkdir,
+				RunnerMode:          domain.RunnerMode(strings.ToLower(strings.TrimSpace(runnerMode))),
+				DefaultExecutor:     domain.Agent(executor),
+				DefaultReviewer:     domain.Agent(reviewer),
+				PlannerAgent:        domain.Agent(planner),
+				Objective:           strings.TrimSpace(objective),
+				MaxRetries:          maxRetries,
+				MaxIterations:       maxIterations,
+				MaxTransitions:      maxTransitions,
+				KeepLastRuns:        keepLastRuns,
+				SkipReview:          noReview,
+				Force:               force,
+				CodexBin:            codexBin,
+				ClaudeBin:           claudeBin,
+				CopilotBin:          copilotBin,
+				GeminiBin:           geminiBin,
+				KimiBin:             kimiBin,
+				OpenCodeBin:         opencodeBin,
+				OpenRouterURL:       openrouterURL,
+				OpenRouterModel:     openrouterModel,
+				OpenRouterKeyEnv:    openrouterKeyEnv,
+				OllamaURL:           ollamaURL,
+				OllamaModel:         ollamaModel,
+				TMUXSession:         tmuxSession,
+				NoColor:             noColor,
+				Isolation:           domain.IsolationMode(strings.ToLower(strings.TrimSpace(isolation))),
+				PostTaskHook:        postTaskHook,
+				FallbackAgent:       domain.Agent(fallbackAgent),
+				FallbackOnTransient: domain.Agent(fallbackOnTransient),
+				FallbackOnAuth:      domain.Agent(fallbackOnAuth),
 			}
 
 			ctx := cmd.Context()
@@ -235,6 +250,9 @@ isolation protects the main branch from partial changes.`,
 	cmd.Flags().BoolVar(&noColor, "no-color", false, "Disable colored output")
 	cmd.Flags().StringVar(&isolation, "isolation", string(domain.IsolationWorktree), "Isolation mode: worktree or off")
 	cmd.Flags().StringVar(&postTaskHook, "hook", "", "Script to run after executor, before reviewer")
+	cmd.Flags().StringVar(&fallbackAgent, "fallback", "", "Per-agent fallback (primary → fallback)")
+	cmd.Flags().StringVar(&fallbackOnTransient, "fallback-on-transient", "", "Global fallback agent for transient errors")
+	cmd.Flags().StringVar(&fallbackOnAuth, "fallback-on-auth", "", "Global fallback agent for auth errors")
 	cmd.Flags().DurationVar(&timeout, "timeout", 0, "Run timeout (e.g. 30m, 2h)")
 	return cmd
 }

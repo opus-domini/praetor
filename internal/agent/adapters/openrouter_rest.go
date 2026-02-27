@@ -12,7 +12,6 @@ import (
 	"time"
 
 	agent "github.com/opus-domini/praetor/internal/agent"
-	agenttext "github.com/opus-domini/praetor/internal/agent/text"
 )
 
 // OpenRouterREST is a REST-backed Agent implementation for OpenRouter.
@@ -73,7 +72,7 @@ func (a *OpenRouterREST) Plan(ctx context.Context, req agent.PlanRequest) (agent
 	if err != nil {
 		return agent.PlanResponse{}, err
 	}
-	obj, err := agenttext.ExtractJSONObject(resp.Output)
+	obj, err := ExtractJSONObject(resp.Output)
 	if err == nil {
 		resp.Manifest = json.RawMessage(obj)
 	}
@@ -81,7 +80,7 @@ func (a *OpenRouterREST) Plan(ctx context.Context, req agent.PlanRequest) (agent
 }
 
 func (a *OpenRouterREST) Execute(ctx context.Context, req agent.ExecuteRequest) (agent.ExecuteResponse, error) {
-	resp, err := a.generate(ctx, req.Model, agenttext.ComposePrompt(req.SystemPrompt, req.Prompt))
+	resp, err := a.generate(ctx, req.Model, ComposePrompt(req.SystemPrompt, req.Prompt))
 	if err != nil {
 		return agent.ExecuteResponse{}, err
 	}
@@ -89,11 +88,11 @@ func (a *OpenRouterREST) Execute(ctx context.Context, req agent.ExecuteRequest) 
 }
 
 func (a *OpenRouterREST) Review(ctx context.Context, req agent.ReviewRequest) (agent.ReviewResponse, error) {
-	resp, err := a.generate(ctx, req.Model, agenttext.ComposePrompt(req.SystemPrompt, req.Prompt))
+	resp, err := a.generate(ctx, req.Model, ComposePrompt(req.SystemPrompt, req.Prompt))
 	if err != nil {
 		return agent.ReviewResponse{}, err
 	}
-	decision, reason := agenttext.ParseReview(resp.Output)
+	decision, reason := ParseReview(resp.Output)
 	return agent.ReviewResponse{Decision: decision, Reason: reason, Output: resp.Output, DurationS: resp.DurationS, Strategy: resp.Strategy}, nil
 }
 

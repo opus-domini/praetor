@@ -30,6 +30,9 @@ var allowedKeys = map[string]struct{}{
 	"ollama-model":           {},
 	"hook":                   {},
 	"timeout":                {},
+	"fallback":               {},
+	"fallback-on-transient":  {},
+	"fallback-on-auth":       {},
 }
 
 // parse reads a flat TOML-compatible config file.

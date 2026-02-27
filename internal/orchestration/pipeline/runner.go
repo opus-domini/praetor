@@ -12,6 +12,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/opus-domini/praetor/internal/agent"
+	"github.com/opus-domini/praetor/internal/agent/middleware"
 	"github.com/opus-domini/praetor/internal/domain"
 	"github.com/opus-domini/praetor/internal/orchestration/fsm"
 	localstate "github.com/opus-domini/praetor/internal/state"
@@ -53,6 +55,8 @@ type activeRun struct {
 	stateTransitions  int
 	stopRequested     bool
 	stopReason        string
+	eventSink         middleware.EventSink
+	availableAgents   []agent.ID
 }
 
 // Run executes a plan slug until completion, blockage, or retry exhaustion.
@@ -141,6 +145,17 @@ func (r *Runner) bootstrapRun(ctx context.Context, render domain.RenderSink, slu
 	run.manifestHash = manifest.Hash
 	run.manifestTruncated = manifest.Truncated
 	run.projectContext = manifest.Context
+
+	// Phase 5: Probe available agents for intelligent routing
+	prober := agent.NewProber(agent.WithTimeout(3 * time.Second))
+	probeResults := prober.ProbeAll(ctx, binaryOverridesFromOpts(normalized), restEndpointsFromOpts(normalized))
+	var availableAgents []agent.ID
+	for _, pr := range probeResults {
+		if pr.Healthy() {
+			availableAgents = append(availableAgents, pr.ID)
+		}
+	}
+	run.availableAgents = availableAgents
 
 	runtime := r.runtime
 	if runtime == nil {
@@ -239,6 +254,16 @@ func (r *Runner) bootstrapRun(ctx context.Context, render domain.RenderSink, slu
 		return run, lock, cleanupRuntime, err
 	}
 	run.snapshot = snapshotStore
+
+	// Phase 4: Event sink — JSONL file alongside snapshot data
+	var eventSink middleware.EventSink = middleware.NopSink{}
+	eventsPath := filepath.Join(snapshotStore.RootDir(), "events.jsonl")
+	if jsonlSink, sinkErr := middleware.NewJSONLSink(eventsPath); sinkErr == nil {
+		eventSink = jsonlSink
+	} else {
+		render.Warn(fmt.Sprintf("failed to create event sink: %v", sinkErr))
+	}
+	run.eventSink = eventSink
 
 	stuck, err := store.DetectStuckTasks(slug, run.state, normalized.MaxRetries)
 	if err != nil {
@@ -777,4 +802,38 @@ func (run *activeRun) appendSnapshotEvent(status, taskID, message string) error 
 
 func newRunID() string {
 	return fmt.Sprintf("%s-%d", time.Now().UTC().Format("20060102-150405.000000000"), os.Getpid())
+}
+
+func binaryOverridesFromOpts(opts domain.RunnerOptions) map[agent.ID]string {
+	m := map[agent.ID]string{}
+	if opts.CodexBin != "" {
+		m[agent.Codex] = opts.CodexBin
+	}
+	if opts.ClaudeBin != "" {
+		m[agent.Claude] = opts.ClaudeBin
+	}
+	if opts.CopilotBin != "" {
+		m[agent.Copilot] = opts.CopilotBin
+	}
+	if opts.GeminiBin != "" {
+		m[agent.Gemini] = opts.GeminiBin
+	}
+	if opts.KimiBin != "" {
+		m[agent.Kimi] = opts.KimiBin
+	}
+	if opts.OpenCodeBin != "" {
+		m[agent.OpenCode] = opts.OpenCodeBin
+	}
+	return m
+}
+
+func restEndpointsFromOpts(opts domain.RunnerOptions) map[agent.ID]string {
+	m := map[agent.ID]string{}
+	if opts.OpenRouterURL != "" {
+		m[agent.OpenRouter] = opts.OpenRouterURL
+	}
+	if opts.OllamaURL != "" {
+		m[agent.Ollama] = opts.OllamaURL
+	}
+	return m
 }

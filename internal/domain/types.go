@@ -134,35 +134,38 @@ func (s State) ActiveCount() int {
 
 // RunnerOptions controls loop execution behavior.
 type RunnerOptions struct {
-	ProjectHome      string
-	Workdir          string
-	RunnerMode       RunnerMode
-	DefaultExecutor  Agent
-	DefaultReviewer  Agent
-	PlannerAgent     Agent
-	Objective        string
-	MaxRetries       int
-	MaxIterations    int
-	MaxTransitions   int
-	KeepLastRuns     int
-	SkipReview       bool
-	Force            bool
-	CodexBin         string
-	ClaudeBin        string
-	CopilotBin       string
-	GeminiBin        string
-	KimiBin          string
-	OpenCodeBin      string
-	OpenRouterURL    string
-	OpenRouterModel  string
-	OpenRouterKeyEnv string
-	OllamaURL        string
-	OllamaModel      string
-	TMUXSession      string
-	Verbose          bool
-	NoColor          bool
-	Isolation        IsolationMode
-	PostTaskHook     string
+	ProjectHome         string
+	Workdir             string
+	RunnerMode          RunnerMode
+	DefaultExecutor     Agent
+	DefaultReviewer     Agent
+	PlannerAgent        Agent
+	Objective           string
+	MaxRetries          int
+	MaxIterations       int
+	MaxTransitions      int
+	KeepLastRuns        int
+	SkipReview          bool
+	Force               bool
+	CodexBin            string
+	ClaudeBin           string
+	CopilotBin          string
+	GeminiBin           string
+	KimiBin             string
+	OpenCodeBin         string
+	OpenRouterURL       string
+	OpenRouterModel     string
+	OpenRouterKeyEnv    string
+	OllamaURL           string
+	OllamaModel         string
+	TMUXSession         string
+	Verbose             bool
+	NoColor             bool
+	Isolation           IsolationMode
+	PostTaskHook        string
+	FallbackAgent       Agent
+	FallbackOnTransient Agent
+	FallbackOnAuth      Agent
 }
 
 // RunnerMode controls how external agent commands are executed.

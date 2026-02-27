@@ -11,7 +11,6 @@ import (
 	"time"
 
 	agent "github.com/opus-domini/praetor/internal/agent"
-	agenttext "github.com/opus-domini/praetor/internal/agent/text"
 )
 
 // OllamaREST is a REST-backed Agent implementation for local/remote Ollama.
@@ -62,7 +61,7 @@ func (a *OllamaREST) Plan(ctx context.Context, req agent.PlanRequest) (agent.Pla
 	if err != nil {
 		return agent.PlanResponse{}, err
 	}
-	obj, err := agenttext.ExtractJSONObject(resp.Output)
+	obj, err := ExtractJSONObject(resp.Output)
 	if err == nil {
 		resp.Manifest = json.RawMessage(obj)
 	}
@@ -70,7 +69,7 @@ func (a *OllamaREST) Plan(ctx context.Context, req agent.PlanRequest) (agent.Pla
 }
 
 func (a *OllamaREST) Execute(ctx context.Context, req agent.ExecuteRequest) (agent.ExecuteResponse, error) {
-	resp, err := a.generate(ctx, req.Model, agenttext.ComposePrompt(req.SystemPrompt, req.Prompt))
+	resp, err := a.generate(ctx, req.Model, ComposePrompt(req.SystemPrompt, req.Prompt))
 	if err != nil {
 		return agent.ExecuteResponse{}, err
 	}
@@ -78,11 +77,11 @@ func (a *OllamaREST) Execute(ctx context.Context, req agent.ExecuteRequest) (age
 }
 
 func (a *OllamaREST) Review(ctx context.Context, req agent.ReviewRequest) (agent.ReviewResponse, error) {
-	resp, err := a.generate(ctx, req.Model, agenttext.ComposePrompt(req.SystemPrompt, req.Prompt))
+	resp, err := a.generate(ctx, req.Model, ComposePrompt(req.SystemPrompt, req.Prompt))
 	if err != nil {
 		return agent.ReviewResponse{}, err
 	}
-	decision, reason := agenttext.ParseReview(resp.Output)
+	decision, reason := ParseReview(resp.Output)
 	return agent.ReviewResponse{Decision: decision, Reason: reason, Output: resp.Output, DurationS: resp.DurationS, Strategy: resp.Strategy}, nil
 }
 

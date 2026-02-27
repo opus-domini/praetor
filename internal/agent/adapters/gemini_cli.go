@@ -9,7 +9,6 @@ import (
 
 	agent "github.com/opus-domini/praetor/internal/agent"
 	"github.com/opus-domini/praetor/internal/agent/runner"
-	agenttext "github.com/opus-domini/praetor/internal/agent/text"
 )
 
 // GeminiCLI is a CLI-backed Agent implementation using the `gemini` CLI.
@@ -60,7 +59,7 @@ func (a *GeminiCLI) Execute(ctx context.Context, req agent.ExecuteRequest) (agen
 	if req.OneShot {
 		return a.executeOneShot(ctx, req)
 	}
-	resp, err := a.run(ctx, req.Workdir, req.Model, agenttext.ComposePrompt(req.SystemPrompt, req.Prompt), req.RunDir, req.OutputPrefix, req.TaskLabel)
+	resp, err := a.run(ctx, req.Workdir, req.Model, ComposePrompt(req.SystemPrompt, req.Prompt), req.RunDir, req.OutputPrefix, req.TaskLabel)
 	if err != nil {
 		return agent.ExecuteResponse{}, err
 	}
@@ -75,7 +74,7 @@ func (a *GeminiCLI) executeOneShot(ctx context.Context, req agent.ExecuteRequest
 	if model != "" {
 		args = append(args, "--model", model)
 	}
-	args = append(args, strings.TrimSpace(agenttext.ComposePrompt(req.SystemPrompt, req.Prompt)))
+	args = append(args, strings.TrimSpace(ComposePrompt(req.SystemPrompt, req.Prompt)))
 
 	result, err := a.Runner.Run(ctx, runner.CommandSpec{
 		Args:         args,
@@ -89,7 +88,7 @@ func (a *GeminiCLI) executeOneShot(ctx context.Context, req agent.ExecuteRequest
 		return agent.ExecuteResponse{DurationS: time.Since(start).Seconds()}, err
 	}
 	if result.ExitCode != 0 {
-		return agent.ExecuteResponse{DurationS: time.Since(start).Seconds()}, fmt.Errorf("gemini exit code %d: %s", result.ExitCode, agenttext.TailText(result.Stderr, 20))
+		return agent.ExecuteResponse{DurationS: time.Since(start).Seconds()}, fmt.Errorf("gemini exit code %d: %s", result.ExitCode, TailText(result.Stderr, 20))
 	}
 	return agent.ExecuteResponse{
 		Output:    strings.TrimSpace(result.Stdout),
@@ -100,11 +99,11 @@ func (a *GeminiCLI) executeOneShot(ctx context.Context, req agent.ExecuteRequest
 }
 
 func (a *GeminiCLI) Review(ctx context.Context, req agent.ReviewRequest) (agent.ReviewResponse, error) {
-	resp, err := a.run(ctx, req.Workdir, req.Model, agenttext.ComposePrompt(req.SystemPrompt, req.Prompt), req.RunDir, req.OutputPrefix, req.TaskLabel)
+	resp, err := a.run(ctx, req.Workdir, req.Model, ComposePrompt(req.SystemPrompt, req.Prompt), req.RunDir, req.OutputPrefix, req.TaskLabel)
 	if err != nil {
 		return agent.ReviewResponse{}, err
 	}
-	decision, reason := agenttext.ParseReview(resp.Output)
+	decision, reason := ParseReview(resp.Output)
 	return agent.ReviewResponse{Decision: decision, Reason: reason, Output: resp.Output, DurationS: resp.DurationS, Strategy: resp.Strategy}, nil
 }
 
@@ -127,7 +126,7 @@ func (a *GeminiCLI) run(ctx context.Context, workdir, model, prompt, runDir, out
 		return agent.PlanResponse{DurationS: time.Since(start).Seconds()}, err
 	}
 	if result.ExitCode != 0 {
-		return agent.PlanResponse{DurationS: time.Since(start).Seconds()}, fmt.Errorf("gemini exit code %d: %s", result.ExitCode, agenttext.TailText(result.Stderr, 20))
+		return agent.PlanResponse{DurationS: time.Since(start).Seconds()}, fmt.Errorf("gemini exit code %d: %s", result.ExitCode, TailText(result.Stderr, 20))
 	}
 	return agent.PlanResponse{Output: strings.TrimSpace(result.Stdout), Model: model, DurationS: time.Since(start).Seconds(), Strategy: result.Strategy}, nil
 }

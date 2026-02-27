@@ -30,6 +30,7 @@ Home: %s  (override: $PRAETOR_HOME)`, homePath),
 
 	root.AddCommand(newPlanCmd())
 	root.AddCommand(newExecCmd())
+	root.AddCommand(newDoctorCmd())
 	root.AddCommand(newFmtCmd())
 	return root
 }

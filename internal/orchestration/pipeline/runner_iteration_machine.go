@@ -94,7 +94,7 @@ func iterationStateSelectTask(ctx context.Context, machine *iterationMachine) (i
 		return nil, fmt.Errorf("plan is blocked by dependencies:\n- %s", strings.Join(report, "\n- "))
 	}
 
-	executor, err := resolveExecutor(task, run.options.DefaultExecutor)
+	executor, err := resolveExecutorWithRouting(task, run.options.DefaultExecutor, run.availableAgents)
 	if err != nil {
 		return nil, fmt.Errorf("task %s: %w", task.ID, err)
 	}

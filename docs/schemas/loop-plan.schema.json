@@ -25,11 +25,11 @@
           },
           "executor": {
             "type": "string",
-            "enum": ["codex", "claude"]
+            "enum": ["claude", "codex", "copilot", "gemini", "kimi", "opencode", "openrouter", "ollama"]
           },
           "reviewer": {
             "type": "string",
-            "enum": ["codex", "claude", "none"]
+            "enum": ["claude", "codex", "copilot", "gemini", "kimi", "opencode", "openrouter", "ollama", "none"]
           },
           "model": { "type": "string" },
           "description": { "type": "string" },

@@ -15,30 +15,33 @@ import (
 // Config holds resolved configuration values.
 // Pointer fields distinguish "not set" from "set to zero/false".
 type Config struct {
-	Executor         string
-	Reviewer         string
-	Planner          string
-	MaxRetries       *int
-	MaxIterations    *int
-	MaxTransitions   *int
-	KeepLastRuns     *int
-	Runner           string
-	Isolation        string
-	NoReview         *bool
-	NoColor          *bool
-	CodexBin         string
-	ClaudeBin        string
-	CopilotBin       string
-	GeminiBin        string
-	KimiBin          string
-	OpenCodeBin      string
-	OpenRouterURL    string
-	OpenRouterModel  string
-	OpenRouterKeyEnv string
-	OllamaURL        string
-	OllamaModel      string
-	Hook             string
-	Timeout          string
+	Executor            string
+	Reviewer            string
+	Planner             string
+	MaxRetries          *int
+	MaxIterations       *int
+	MaxTransitions      *int
+	KeepLastRuns        *int
+	Runner              string
+	Isolation           string
+	NoReview            *bool
+	NoColor             *bool
+	CodexBin            string
+	ClaudeBin           string
+	CopilotBin          string
+	GeminiBin           string
+	KimiBin             string
+	OpenCodeBin         string
+	OpenRouterURL       string
+	OpenRouterModel     string
+	OpenRouterKeyEnv    string
+	OllamaURL           string
+	OllamaModel         string
+	Hook                string
+	Timeout             string
+	Fallback            string
+	FallbackOnTransient string
+	FallbackOnAuth      string
 }
 
 // Path returns the config file path, respecting $PRAETOR_CONFIG.
@@ -227,6 +230,15 @@ func configFromMap(section string, m map[string]string) (Config, error) {
 		}
 		cfg.Timeout = timeoutValue
 	}
+	if v, ok := m["fallback"]; ok {
+		cfg.Fallback = strings.TrimSpace(v)
+	}
+	if v, ok := m["fallback-on-transient"]; ok {
+		cfg.FallbackOnTransient = strings.TrimSpace(v)
+	}
+	if v, ok := m["fallback-on-auth"]; ok {
+		cfg.FallbackOnAuth = strings.TrimSpace(v)
+	}
 	return cfg, nil
 }
 
@@ -305,6 +317,15 @@ func mergeConfig(global, project Config) Config {
 	}
 	if project.Timeout != "" {
 		merged.Timeout = project.Timeout
+	}
+	if project.Fallback != "" {
+		merged.Fallback = project.Fallback
+	}
+	if project.FallbackOnTransient != "" {
+		merged.FallbackOnTransient = project.FallbackOnTransient
+	}
+	if project.FallbackOnAuth != "" {
+		merged.FallbackOnAuth = project.FallbackOnAuth
 	}
 	return merged
 }
