@@ -35,6 +35,12 @@ var allowedKeys = map[string]struct{}{
 	"fallback-on-auth":       {},
 }
 
+// IsAllowedKey reports whether key is a recognized config key.
+func IsAllowedKey(key string) bool {
+	_, ok := allowedKeys[key]
+	return ok
+}
+
 // parse reads a flat TOML-compatible config file.
 // Returns a map of section -> key -> value.
 // The global (top-level) section has key "".

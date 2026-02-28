@@ -1,138 +1,84 @@
-# Codex provider
+# Codex
 
-Go port of `@openai/codex-sdk`. Communicates with the `codex` CLI process over a JSONL event stream.
+Adapter for [OpenAI Codex CLI](https://github.com/openai/codex) (`@openai/codex`). Uses the `exec --json` subcommand for structured JSONL output.
 
-## Transport
+## Overview
 
-The provider launches `codex exec` as a subprocess with `--experimental-json` for structured output. Events are parsed from stdout as newline-delimited JSON.
+| Property | Value |
+|---|---|
+| Agent ID | `codex` |
+| Transport | CLI |
+| Binary | `codex` (configurable via `--codex-bin` or `codex-bin` config) |
+| Requires TTY | no |
+| Structured output | yes |
+| Install | `npm install -g @openai/codex` |
 
-## SDK surface
+## Command construction
 
-### Client and threads
+### Pipeline path (Plan, Review, Execute in pipeline)
 
-```go
-client, err := codex.New(codex.CodexOptions{})
-
-thread := client.StartThread(&codex.ThreadOptions{
-    WorkingDirectory: "/path/to/project",
-    SandboxMode:      codex.SandboxModeWorkspaceWrite,
-    ApprovalPolicy:   codex.ApprovalModeNever,
-    Model:            "o4-mini",
-})
-
-turn, err := thread.Run(ctx, "implement feature X", nil)
-fmt.Println(turn.FinalResponse)
+```
+codex exec --json \
+  --sandbox workspace-write \
+  --skip-git-repo-check \
+  --config approval_policy="never" \
+  [--cd <workdir>] \
+  [--model <model>] \
+  <prompt>
 ```
 
-### Thread options
+- Prompt is a positional argument.
+- `UsePTY = false` — Codex doesn't require a TTY.
+- `--sandbox workspace-write` restricts file system access.
+- `--skip-git-repo-check` prevents git repo validation.
+- `--config approval_policy="never"` disables interactive tool approval.
+- Working directory is passed via `--cd` (not the process CWD).
+- System prompt is concatenated into the user prompt via `ComposePrompt()`.
 
-| Option | Description |
-|--------|-------------|
-| `WorkingDirectory` | CWD for the codex process |
-| `Model` | Model to use |
-| `SandboxMode` | Sandbox policy: `off`, `workspace-write`, `workspace-read` |
-| `ApprovalPolicy` | Tool approval: `never`, `unless-allow-listed`, `on-failure` |
-| `SkipGitRepoCheck` | Skip git repository validation |
-| `WebSearchEnabled` | Enable web search capability |
-| `AdditionalDirectories` | Extra directories to include |
-| `Config` | Key-value configuration overrides |
-| `OutputSchema` | JSON schema for structured output |
+### One-shot path (Execute with `OneShot = true`)
 
-### Resuming threads
-
-```go
-threadID, ok := thread.ID()
-if ok {
-    resumed := client.ResumeThread(threadID, &codex.ThreadOptions{...})
-    turn, err := resumed.Run(ctx, "follow-up prompt", nil)
-}
+```
+codex exec --json \
+  [--cd <workdir>] \
+  [--model <model>] \
+  <prompt>
 ```
 
-`Thread.ID()` returns `(string, bool)` — the second value is `false` before the first turn completes.
+- Same structure but without sandbox/approval flags.
+- Used by `praetor exec` for quick single-dispatch invocations.
 
-### Streaming
+## Output parsing
 
-```go
-turn, err := thread.RunStreamed(ctx, "prompt", nil, func(item codex.StreamItem) {
-    switch item.Type {
-    case "agent_message":
-        fmt.Println(item.AgentMessage.Content)
-    case "file_change":
-        fmt.Println(item.FileChange.Path)
-    }
-})
-```
+Codex produces a JSONL event stream on stdout. The adapter parses it as follows:
 
-### Stream item types
+1. Scans for events with `type == "item.completed"` where `item.type == "agent_message"`.
+2. Extracts `item.text` from each matching event.
+3. Tracks the `model` field from any event in the stream.
+4. If the output isn't valid JSONL or no matching events are found, falls back to raw stdout.
 
-| Type | Description |
-|------|-------------|
-| `agent_message` | Model text response |
-| `reasoning` | Chain-of-thought reasoning |
-| `command_execution` | Shell command execution |
-| `file_change` | File creation, modification, or deletion |
-| `mcp_tool_call` | MCP tool invocation |
-| `web_search` | Web search result |
-| `todo_list` | Task list update |
-| `error` | Error message |
+Multiple `agent_message` items are concatenated with newlines.
 
-### Input types
+## Pipeline behavior
 
-```go
-// Text input
-turn, err := thread.Run(ctx, "hello", nil)
+| Phase | Method | Path | System prompt |
+|---|---|---|---|
+| Plan | `Plan()` | Pipeline | Concatenated into prompt via `ComposePrompt()` |
+| Execute | `Execute()` | Pipeline | Concatenated into prompt via `ComposePrompt()` |
+| Execute (one-shot) | `Execute(OneShot=true)` | One-shot | Concatenated into prompt via `ComposePrompt()` |
+| Review | `Review()` | Pipeline | Concatenated into prompt via `ComposePrompt()` |
 
-// Structured input with images
-turn, err := thread.Run(ctx, "", []codex.UserInput{
-    {Type: "text", Text: "describe this image"},
-    {Type: "image", ImagePath: "/path/to/image.png"},
-})
-```
+For `Plan()`, the prompt is rendered using the `adapter.plan.tmpl` template (or hardcoded fallback). The adapter extracts the JSON manifest from the output via `ExtractJSONObject()`.
 
-## Type system
+For `Review()`, the adapter calls `ParseReview()` on the output to extract `DECISION: PASS/FAIL` and `REASON:` lines.
 
-### Status constants
+## Cost tracking
 
-```go
-// Patch apply status
-codex.PatchApplyStatusCompleted  // "completed"
-codex.PatchApplyStatusFailed     // "failed"
+Codex's JSONL stream does not include cost information. `CostUSD` is always `0` in responses.
 
-// MCP tool call status
-codex.McpToolCallStatusInProgress  // "in_progress"
-codex.McpToolCallStatusCompleted   // "completed"
-codex.McpToolCallStatusFailed      // "failed"
-```
+## Configuration
 
-### FileUpdateChange
+| Config key | CLI flag | Default | Description |
+|---|---|---|---|
+| `codex-bin` | `--codex-bin` | `codex` | Binary path or name |
 
-File changes include a `Status` field indicating the patch apply result:
-
-```go
-type FileUpdateChange struct {
-    Type    string `json:"type"`
-    Path    string `json:"path"`
-    Content string `json:"content,omitempty"`
-    Patch   string `json:"patch,omitempty"`
-    Status  string `json:"status,omitempty"` // PatchApplyStatus
-}
-```
-
-## Pipeline integration
-
-In the pipeline runner, Codex runs with `--json` output mode (tmux runtime). The raw JSON output is post-processed to extract:
-
-- `.result` — the agent's text response
-- `.total_cost_usd` — invocation cost for the tracking ledger
-
-Raw JSON is preserved as `<prefix>.raw.json` in the run log directory.
-
-## Agent integration
-
-Adapted to the agent registry through:
-
-```go
-provider, err := codex.NewProvider(codex.CodexOptions{})
-provider.ID()                          // "codex"
-provider.Run(ctx, providers.Request{Prompt: "..."})
-```
+Model override is per-invocation via `--model` flag on the adapter command.

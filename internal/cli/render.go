@@ -29,6 +29,10 @@ func (r *Renderer) KV(label, value string) {
 	_, _ = fmt.Fprintf(r.out, "%s%-12s%s %s\n", r.c("2"), label, r.reset(), value)
 }
 
+func (r *Renderer) ConfigKV(key, value, source string) {
+	_, _ = fmt.Fprintf(r.out, "  %-26s = %-30s %s(%s)%s\n", key, value, r.c("2"), source, r.reset())
+}
+
 func (r *Renderer) Task(progress, label, title string) {
 	_, _ = fmt.Fprintf(r.out, "\n%s[%s] %s%s %s\n", r.c("1;34"), progress, label, r.reset(), title)
 }

@@ -19,12 +19,19 @@
 
 - [Architecture](architecture.md) — package boundaries, execution flow, and design rationale
 - [Pipeline orchestration](orchestration.md) — plan format, runtime model, safety mechanisms, and CLI reference
-- [Providers overview](providers/README.md) — how providers are abstracted and integrated
+- [Configuration](configuration.md) — config file format, CLI commands, and full key reference
+- [Providers overview](providers/README.md) — agent interface, runner abstraction, registry, middleware, and fallback
 
 ## Provider documentation
 
-- [Claude provider](providers/claude.md) — Claude Code SDK port, stream-json transport, session control
-- [Codex provider](providers/codex.md) — Codex SDK port, JSONL transport, thread model
+- [Claude](providers/claude.md) — stream-json JSONL protocol, PTY streaming, cost tracking
+- [Codex](providers/codex.md) — exec --json JSONL events, sandbox and approval policies
+- [Copilot](providers/copilot.md) — GitHub Copilot CLI adapter
+- [Gemini](providers/gemini.md) — Gemini CLI with PTY streaming
+- [Kimi](providers/kimi.md) — Kimi CLI with stdin/PTY delivery
+- [OpenCode](providers/opencode.md) — OpenCode run --quiet adapter
+- [OpenRouter](providers/openrouter.md) — OpenAI-compatible Chat Completions REST API, 300+ models
+- [Ollama](providers/ollama.md) — local REST API for open-source models
 
 ## Documentation standard
 

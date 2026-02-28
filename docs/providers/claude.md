@@ -1,179 +1,100 @@
-# Claude provider
+# Claude
 
-Go port of `@anthropic-ai/claude-agent-sdk`. Communicates with the `claude` CLI process over the `stream-json` protocol.
+Adapter for [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (`@anthropic-ai/claude-code`). Uses the `stream-json` output format for structured JSONL streaming with cost tracking.
 
-## Transport
+## Overview
 
-The provider launches `claude` as a subprocess with:
+| Property | Value |
+|---|---|
+| Agent ID | `claude` |
+| Transport | CLI |
+| Binary | `claude` (configurable via `--claude-bin` or `claude-bin` config) |
+| Requires TTY | yes |
+| Structured output | yes |
+| Install | `npm install -g @anthropic-ai/claude-code` |
+
+## Command construction
+
+### Streaming path (Plan, Review, Execute in pipeline)
 
 ```
-claude --output-format stream-json --verbose --input-format stream-json [flags...]
+claude -p \
+  --dangerously-skip-permissions \
+  --no-session-persistence \
+  --verbose \
+  --output-format stream-json \
+  [--model <model>] \
+  [--append-system-prompt <systemPrompt>]
 ```
 
-Messages are exchanged as newline-delimited JSON on stdin/stdout. The transport handles process lifecycle, stdin writing, stdout reading, and graceful shutdown.
+- Prompt is delivered via **stdin** (not as a positional argument).
+- `UsePTY = true` — requires a PTY for the streaming protocol.
+- `--dangerously-skip-permissions` and `--no-session-persistence` are always set.
+- System prompt uses the `--append-system-prompt` flag (not concatenated into the user prompt).
 
-## SDK surface
+### One-shot path (Execute with `OneShot = true`)
 
-### One-shot prompt
-
-```go
-message, err := claude.Prompt(ctx, "your prompt", claude.Options{
-    Model: "sonnet",
-    CWD:   "/path/to/project",
-    AllowDangerouslySkipPermissions: true,
-})
+```
+claude -p \
+  --output-format json \
+  [--model <model>] \
+  [--append-system-prompt <systemPrompt>] \
+  <prompt>
 ```
 
-`Prompt()` waits for initialization, sends the user text, closes stdin, and collects the final result message.
+- Prompt is a positional argument.
+- `UsePTY = false` — single JSON response, no streaming.
+- Used by `praetor exec` for quick single-dispatch invocations.
 
-### Query lifecycle
+## Output parsing
 
-For streaming and interactive use:
+### Streaming (`stream-json`)
 
-```go
-q, err := claude.NewQuery(ctx, opts)
-defer q.Close()
+The adapter reads a JSONL stream from stdout. Each line is a JSON event with a `type` field.
 
-q.WaitInitialized(ctx)         // wait for session ready
-q.SendUserText("hello")        // send prompt
-q.EndInput()                   // close input stream
-result, err := q.AwaitResult(ctx)  // block until completion
-```
+1. Scans for `type == "result"` events — extracts `.result` text and `.cost_usd`.
+2. If no result text found, falls back to collecting all `type == "assistant"` content blocks where `block.type == "text"`.
+3. Model name is extracted from result events when available.
 
-### Session control
+### One-shot (`json`)
 
-Session control operations are sent as JSON commands on stdin:
+Single JSON object:
 
-- `Interrupt` — cancel current generation
-- `SetPermissionMode` — change permission mode
-- `SetModel` — change model
-- `SetMaxThinkingTokens` — adjust thinking budget
-- `ApplyFlagSettings` — apply CLI flag settings
-- `StopTask` — stop current task
-- `RewindFiles` — revert file changes
-- `ReconnectMCPServer` / `ToggleMCPServer` — MCP server management
-- `MCPAuthenticate` / `MCPClearAuth` / `MCPServerStatus` / `SetMCPServers` — MCP auth and status
-
-### Callbacks
-
-- `CanUseTool` — permission callback for tool use decisions, returns `PermissionUpdate`
-- Hook callbacks — `PreToolUse`, `PostToolUse`, etc.
-- `OnMCPMessage` — MCP message handler
-- `OnControlRequest` — fallback for unknown control subtypes
-
-### Initialization
-
-```go
-q.WaitInitialized(ctx)
-init := q.InitializationResult()   // SystemInitMessage
-commands := q.SupportedCommands()  // available slash commands
-models := q.SupportedModels()      // available models
-account := q.AccountInfo()         // account information
-```
-
-### Sessions
-
-```go
-sessions, err := claude.ListSessions(claude.ListSessionsOptions{
-    Dir: "/path/to/project",
-})
-```
-
-Scans `~/.claude/projects` for persisted session data.
-
-## Type system
-
-### Message types
-
-| Type | Description |
-|------|-------------|
-| `SDKMessage` | Raw message with `Type` and `Raw` JSON payload |
-| `ResultMessage` | Final result with output, cost, usage, duration, errors |
-| `AssistantMessage` | Model response with UUID, session ID, parent tool use |
-| `SystemInitMessage` | Initialization message with model, CWD, tools, version |
-| `StatusMessage` | Status updates (e.g. compacting) |
-
-Parse helpers: `ParseResultMessage()`, `ParseAssistantMessage()`, `ParseSystemInitMessage()`, `ParseStatusMessage()`.
-
-### ResultMessage fields
-
-The result message carries comprehensive execution metadata:
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `Result` | `string` | Final output text |
-| `IsError` | `bool` | Whether the result is an error |
-| `TotalCostUSD` | `float64` | Total cost in USD |
-| `DurationMS` | `int` | Wall clock duration |
-| `DurationAPIMS` | `int` | API-only duration |
-| `NumTurns` | `int` | Number of agentic turns |
-| `StopReason` | `*string` | Why generation stopped |
-| `Usage` | `*NonNullableUsage` | Aggregate token usage |
-| `ModelUsage` | `map[string]ModelUsage` | Per-model token usage and cost |
-| `PermissionDenials` | `[]PermissionDenial` | Tools that were denied |
-| `StructuredOutput` | `json.RawMessage` | JSON schema output |
-
-### Options
-
-Key options for configuring the Claude process:
-
-| Option | Description |
-|--------|-------------|
-| `Model` | Model to use |
-| `CWD` | Working directory |
-| `MaxTurns` | Maximum agentic turns |
-| `MaxBudgetUSD` | Spending cap |
-| `Thinking` | Thinking mode (adaptive, enabled, disabled) |
-| `Effort` | Effort level |
-| `PermissionMode` | Permission mode (bypass, plan, default) |
-| `AllowedTools` / `DisallowedTools` | Tool allowlists/denylists |
-| `MCPServers` | MCP server configurations |
-| `Sandbox` | Sandbox settings (network, filesystem, ripgrep) |
-| `OutputFormat` | Structured output format (JSON schema) |
-| `CanUseTool` | Permission callback |
-| `Plugins` | Local plugin directories |
-
-### Permission system
-
-`PermissionUpdate` supports six operation types:
-
-| Type | Description |
-|------|-------------|
-| `addRules` | Add permission rules with behavior (allow/deny) |
-| `replaceRules` | Replace all rules |
-| `removeRules` | Remove specific rules |
-| `setMode` | Change permission mode |
-| `addDirectories` | Add allowed directories |
-| `removeDirectories` | Remove allowed directories |
-
-### Sandbox settings
-
-Typed configuration for the Claude Code sandbox:
-
-```go
-claude.SandboxSettings{
-    Enabled: boolPtr(true),
-    Network: &claude.SandboxNetworkConfig{
-        AllowedDomains: []string{"api.example.com"},
-    },
-    Filesystem: &claude.SandboxFilesystemConfig{
-        AllowWrite: []string{"/tmp"},
-    },
+```json
+{
+  "result": "...",
+  "model": "...",
+  "cost_usd": 0.042
 }
 ```
 
-## Known limitations
+Falls back to raw stdout if JSON parsing fails.
 
-- No in-process MCP SDK server support (`createSdkMcpServer` from TypeScript SDK).
-- No unstable v2 session API (`unstable_v2_createSession`).
-- Type surface focuses on practical query/session control usage.
+## Pipeline behavior
 
-## Agent integration
+| Phase | Method | Path | System prompt |
+|---|---|---|---|
+| Plan | `Plan()` | Streaming | `adapter.plan.claude.tmpl` via `--append-system-prompt` |
+| Execute | `Execute()` | Streaming | Via `--append-system-prompt` if provided |
+| Execute (one-shot) | `Execute(OneShot=true)` | One-shot JSON | Via `--append-system-prompt` if provided |
+| Review | `Review()` | Streaming | Via `--append-system-prompt` if provided |
 
-Adapted to the agent registry through:
+For `Plan()`, the prompt is rendered using the `adapter.plan.claude.tmpl` template (or hardcoded fallback if no prompt engine is available). The system prompt instructs Claude to return valid JSON only.
 
-```go
-provider := claude.NewProvider(claude.Options{})
-provider.ID()                          // "claude"
-provider.Run(ctx, providers.Request{Prompt: "..."})
-```
+For `Review()`, the adapter calls `ParseReview()` on the output to extract `DECISION: PASS/FAIL` and `REASON:` lines.
+
+## Cost tracking
+
+Claude's `stream-json` format includes `cost_usd` in result events. This is propagated through `PlanResponse.CostUSD`, `ExecuteResponse.CostUSD`, and `ReviewResponse.CostUSD` for the metrics middleware and cost ledger.
+
+## tmux integration
+
+When running under the tmux runner, the wrapper script includes `unset CLAUDECODE` to allow nested Claude Code sessions (otherwise the inner `claude` process detects the parent and refuses to start).
+
+## Configuration
+
+| Config key | CLI flag | Default | Description |
+|---|---|---|---|
+| `claude-bin` | `--claude-bin` | `claude` | Binary path or name |
+
+Model override is per-invocation via `--model` flag on the adapter command (driven by `--executor-model`, `--reviewer-model`, or `--planner-model` on the CLI).
