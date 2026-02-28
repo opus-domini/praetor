@@ -1,0 +1,52 @@
+{{- if and .IsRetry .PreviousFeedback -}}
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+!! RETRY — attempt {{ add .RetryAttempt 1 }}
+!! Your previous attempt was REJECTED.
+!! Read the feedback below carefully and fix ALL issues.
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+PREVIOUS FEEDBACK:
+{{ .PreviousFeedback }}
+
+{{ end -}}
+TASK
+  Title: {{ .TaskTitle }}
+  ID: {{ .TaskID }}
+  Index: {{ .TaskIndex }}
+{{- if .TaskDependsOn }}
+  Depends on: {{ .TaskDependsOn }}
+{{- end }}
+
+PLAN
+  File: {{ .PlanFile }}
+{{- if .PlanName }}
+  Title: {{ .PlanName }}
+{{- end }}
+{{- if .PlanProgress }}
+  Progress: {{ .PlanProgress }}
+{{- end }}
+
+WORKDIR
+  {{ .Workdir }}
+{{- if .TaskDescription }}
+
+DESCRIPTION
+{{ .TaskDescription }}
+{{- end }}
+{{- if .TaskAcceptance }}
+
+ACCEPTANCE CRITERIA
+{{ .TaskAcceptance }}
+{{- end }}
+{{- if .GatesRequired }}
+
+QUALITY GATES (required)
+{{- range .GatesRequired }}
+- {{ . }}
+{{- end }}
+
+Emit evidence using format {{ if .EvidenceFormat }}{{ .EvidenceFormat }}{{ else }}gates_v1{{ end }}:
+GATES:
+- tests: PASS (details)
+- lint: PASS (details)
+{{- end }}
