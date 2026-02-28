@@ -11,7 +11,7 @@
 </div>
 
 Praetor is a Go CLI for agent orchestration with a strict Plan-and-Execute runtime.
-It executes dependency-aware plans with isolated worktrees, independent review gates, snapshot-based recovery, and explicit runtime strategy tracking.
+It orchestrates 8 AI agent providers through a single execution surface with dependency-aware plans, isolated worktrees, independent review gates, snapshot-based recovery, and structured observability.
 
 <p align="center">
   <a href="https://opus-domini.github.io/praetor/">Documentation</a> •
@@ -22,24 +22,47 @@ It executes dependency-aware plans with isolated worktrees, independent review g
 ## Why Praetor
 
 - One CLI surface for planning, execution, review, and recovery.
-- Unified provider abstraction across CLI and REST agents.
+- Unified provider abstraction across 8 CLI and REST agents.
 - Explicit finite-state orchestration with transition guard rails.
 - Worktree-first isolation to protect the main branch during task execution.
+- Automatic fallback with error-classified failover to alternate agents.
+- Middleware pipeline with composable logging and metrics.
+- Structured observability via JSONL event stream and diagnostics.
 - Local transactional snapshots with checksum validation and explicit resume.
-- Observable execution with checkpoints, metrics, and runtime strategy logging.
 
 ## Core Capabilities
 
 - **Plan execution** — run JSON plans with dependencies via `praetor plan run`.
-- **Agents** — built-in `codex`, `claude`, `gemini`, and `ollama` backends.
+- **Agents** — 8 built-in providers: `claude`, `codex`, `copilot`, `gemini`, `kimi`, `opencode`, `openrouter`, and `ollama`.
 - **Plan-and-Execute** — optional planner phase (`--objective`) followed by execute/review gates.
 - **FSM runtime** — loop modeled as explicit states with `max-iterations` and `max-transitions` guard rails.
 - **Runner modes** — `tmux`, `direct`, and `pty` under a unified runtime contract.
-- **PTY fallback** — execution strategy is recorded as `structured`, `process`, or `pty`.
+- **Fallback engine** — error-classified failover: per-agent mapping, transient, and auth fallback modes.
+- **Stall detection** — sliding-window similarity detection with escalation (fallback agent → budget reduction → fail).
+- **Context budget** — character-level prompt truncation for executor and reviewer phases.
+- **Intelligent routing** — live health-probe-based auto-selection when the preferred agent is unavailable.
+- **Quality gates** — required and optional gate enforcement in plan execution.
 - **Workspace context** — automatic manifest discovery from `praetor.yaml` / `praetor.md`.
+- **Prompt templates** — 8 embedded templates with project-level overlay via `.praetor/prompts/`.
+- **Post-task hooks** — arbitrary script execution after executor, before reviewer (`--hook`).
 - **Recovery** — automatic snapshot inspection plus manual `praetor plan resume`.
 - **Retention** — local runtime pruning with `--keep-last-runs`.
-- **Auditability** — checkpoint history, cost ledger, and per-task logs.
+- **Observability** — JSONL event stream, performance diagnostics, checkpoint history, cost ledger, and per-task logs.
+- **Health checks** — `praetor doctor` probes all agents for availability and version info.
+- **Configuration** — persistent config with `praetor config` (show, set, path, edit, init).
+
+## Providers
+
+| Provider | Transport | TTY | Structured Output |
+|---|---|---|---|
+| Claude | CLI | yes | yes |
+| Codex | CLI | no | yes |
+| Copilot | CLI | no | no |
+| Gemini | CLI | yes | no |
+| Kimi | CLI | yes | no |
+| OpenCode | CLI | no | no |
+| OpenRouter | REST | no | yes |
+| Ollama | REST | no | no |
 
 ## Requirements
 
@@ -47,7 +70,8 @@ It executes dependency-aware plans with isolated worktrees, independent review g
 - Go 1.26+.
 - `git` available in `PATH`.
 - For `--runner tmux`: `tmux` installed.
-- Agent binaries as needed: `codex`, `claude`, `gemini`.
+- CLI agent binaries as needed: `codex`, `claude`, `copilot`, `gemini`, `kimi`, `opencode`.
+- For OpenRouter: `OPENROUTER_API_KEY` env var set.
 - For Ollama: reachable REST endpoint (default `http://127.0.0.1:11434`).
 
 ## Quick Start
@@ -63,6 +87,12 @@ go install github.com/opus-domini/praetor/cmd/praetor@latest
 ```bash
 make build
 ./build/praetor --help
+```
+
+### Check agent availability
+
+```bash
+praetor doctor
 ```
 
 ### Create and run a plan
@@ -86,6 +116,14 @@ praetor plan run my-plan \
   --max-transitions 200
 ```
 
+### Run with fallback
+
+```bash
+praetor plan run my-plan \
+  --fallback-on-transient ollama \
+  --fallback-on-auth openrouter
+```
+
 ### Check status and resume
 
 ```bash
@@ -94,30 +132,48 @@ praetor plan list
 praetor plan resume my-plan
 ```
 
+### Diagnose a run
+
+```bash
+praetor plan diagnose my-plan
+praetor plan diagnose my-plan --query errors --format json
+```
+
 ### Single prompt mode
 
 ```bash
 praetor exec "Reply with OK"
 praetor exec --provider claude "Summarize this diff"
-praetor exec --provider ollama --model llama3.1 "Explain this module"
+praetor exec --provider ollama --model llama3 "Explain this module"
+praetor exec --provider openrouter --model anthropic/claude-sonnet-4 "Review this code"
 ```
 
 ## Command Overview
 
-- `praetor plan run <slug>` — execute orchestration pipeline.
-- `praetor plan status <slug>` — inspect state/progress.
-- `praetor plan list` — list tracked plans for current project.
-- `praetor plan create [brief]` — create a plan from text/markdown input.
-- `praetor plan edit <slug>` — open a plan in `$EDITOR`.
-- `praetor plan show <slug>` — print plan JSON to stdout.
-- `praetor plan path <slug>` — print the absolute plan file path.
-- `praetor plan reset <slug>` — clear runtime state for one plan.
-- `praetor plan resume <slug>` — restore latest valid local snapshot.
-- `praetor plan diagnose <slug>` — inspect structured diagnostics (`events.jsonl`, `performance.jsonl`).
-- `praetor exec [prompt]` — run a single prompt against one provider.
+| Command | Description |
+|---|---|
+| `praetor plan run <slug>` | Execute orchestration pipeline |
+| `praetor plan create [brief]` | Create a plan from text/markdown input |
+| `praetor plan status <slug>` | Inspect state and progress |
+| `praetor plan list` | List tracked plans for current project |
+| `praetor plan show <slug>` | Print plan JSON to stdout |
+| `praetor plan path <slug>` | Print absolute plan file path |
+| `praetor plan edit <slug>` | Open a plan in `$EDITOR` |
+| `praetor plan reset <slug>` | Clear runtime state for one plan |
+| `praetor plan resume <slug>` | Restore latest valid local snapshot |
+| `praetor plan diagnose <slug>` | Inspect structured diagnostics |
+| `praetor exec [prompt]` | Run a single prompt against one provider |
+| `praetor doctor` | Check agent availability and health |
+| `praetor config show` | Show effective config with source annotations |
+| `praetor config set <key> <value>` | Persist a configuration key |
+| `praetor config path` | Print resolved config file path |
+| `praetor config edit` | Open config in `$EDITOR` |
+| `praetor config init` | Create a commented template config file |
 
 ## Configuration and State
 
+- Config file: `$PRAETOR_CONFIG` > `<praetor-home>/config.toml` (TOML format).
+- Config cascade: built-in defaults < global config < project section < plan settings < CLI flags.
 - Home directory: `$PRAETOR_HOME` > `$XDG_CONFIG_HOME/praetor` > `~/.config/praetor`.
 - All state is isolated per git project under `<home>/projects/<project-key>/`.
 - Plans are identified by slug and stored in `<project>/plans/<slug>.json`.
@@ -128,17 +184,27 @@ praetor exec --provider ollama --model llama3.1 "Explain this module"
 - [Documentation Home](https://opus-domini.github.io/praetor/#/)
 - [Architecture](https://opus-domini.github.io/praetor/#/architecture)
 - [Pipeline Orchestration](https://opus-domini.github.io/praetor/#/orchestration)
+- [Configuration](https://opus-domini.github.io/praetor/#/configuration)
 - [Providers Overview](https://opus-domini.github.io/praetor/#/providers/README)
 - [Claude Provider](https://opus-domini.github.io/praetor/#/providers/claude)
 - [Codex Provider](https://opus-domini.github.io/praetor/#/providers/codex)
+- [Copilot Provider](https://opus-domini.github.io/praetor/#/providers/copilot)
+- [Gemini Provider](https://opus-domini.github.io/praetor/#/providers/gemini)
+- [Kimi Provider](https://opus-domini.github.io/praetor/#/providers/kimi)
+- [OpenCode Provider](https://opus-domini.github.io/praetor/#/providers/opencode)
+- [OpenRouter Provider](https://opus-domini.github.io/praetor/#/providers/openrouter)
+- [Ollama Provider](https://opus-domini.github.io/praetor/#/providers/ollama)
 
 ## Development
 
 ```bash
-make fmt
-make lint
-make test
-make ci
+make fmt              # Format code
+make lint             # Lint code
+make test             # Run tests
+make test-coverage    # Run tests with race detection + coverage
+make benchmark        # Run benchmarks
+make security         # Run govulncheck
+make ci               # Full CI pipeline (fmt + lint + test + coverage + benchmark + security)
 ```
 
 ## Stargazers over time ⭐
