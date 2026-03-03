@@ -21,6 +21,27 @@ The server communicates over **stdio** using JSON-RPC 2.0 (one message per line)
 }
 ```
 
+### MCP initialization handshake
+
+```mermaid
+---
+config:
+  theme: dark
+---
+sequenceDiagram
+    participant Client
+    participant Server
+
+    Client->>Server: initialize (protocolVersion, clientInfo)
+    Server->>Client: result (capabilities: tools, resources)
+    Client->>Server: notifications/initialized
+    Note over Server: Server marks session as initialized
+    Client->>Server: tools/list
+    Server->>Client: tools list (plan_list, plan_show, doctor, ...)
+    Client->>Server: resources/list
+    Server->>Client: resources list (praetor://plans, praetor://config, ...)
+```
+
 ## Tools
 
 ### Plan management
@@ -55,6 +76,29 @@ The `plan_diagnose` tool accepts a `query` parameter: `errors`, `stalls`, `fallb
 |---|---|---|
 | `doctor` | Check availability of all AI agent providers | - |
 
+### Tool call dispatch
+
+```mermaid
+---
+config:
+  theme: dark
+---
+sequenceDiagram
+    participant Client
+    participant Server
+    participant ToolRegistry
+    participant Handler
+    participant Store as state.Store
+
+    Client->>Server: tools/call (plan_list, args)
+    Server->>ToolRegistry: lookup("plan_list")
+    ToolRegistry->>Handler: call(args)
+    Handler->>Store: LoadPlans()
+    Store->>Handler: plans
+    Handler->>Server: content blocks
+    Server->>Client: JSON-RPC result
+```
+
 ## Resources
 
 The server also exposes MCP resources for passive data access:
@@ -76,6 +120,40 @@ The server also exposes MCP resources for passive data access:
 {"jsonrpc":"2.0","id":4,"method":"resources/read","params":{"uri":"praetor://config"}}
 ```
 
+### Typical session flow
+
+```mermaid
+---
+config:
+  theme: dark
+---
+sequenceDiagram
+    participant Client
+    participant Server
+
+    Client->>Server: initialize
+    Server->>Client: capabilities (tools, resources)
+    Client->>Server: notifications/initialized
+
+    Note over Client, Server: Discovery phase
+    Client->>Server: tools/call (plan_list)
+    Server->>Client: [{slug: "auth-flow", ...}, ...]
+
+    Note over Client, Server: Inspection phase
+    Client->>Server: tools/call (plan_show, slug: "auth-flow")
+    Server->>Client: full plan JSON
+
+    Client->>Server: tools/call (plan_status, slug: "auth-flow")
+    Server->>Client: task states, progress, run outcome
+
+    Note over Client, Server: Diagnostics phase
+    Client->>Server: tools/call (plan_diagnose, slug: "auth-flow", query: "errors")
+    Server->>Client: error events, failed tasks, agent output
+
+    Client->>Server: tools/call (doctor)
+    Server->>Client: agent availability report
+```
+
 ## Implementation
 
 The MCP server is implemented in `internal/mcp/` using only Go stdlib:
@@ -88,5 +166,35 @@ The MCP server is implemented in `internal/mcp/` using only Go stdlib:
 - `tools_config.go` — Configuration tools
 - `tools_exec.go` — Execution tools (doctor)
 - `resources.go` — MCP resource definitions
+
+### Component architecture
+
+```mermaid
+---
+config:
+  theme: dark
+---
+flowchart TD
+    STDIO[JSON-RPC stdio] --> Server[Server dispatch]
+    Server --> TR[Tool Registry]
+    Server --> RR[Resource Registry]
+
+    TR --> PlanTools[Plan tools]
+    TR --> StateTools[State tools]
+    TR --> ConfigTools[Config tools]
+    TR --> ExecTools[Exec tools]
+
+    RR --> ResHandlers[Resource handlers]
+
+    PlanTools --> DL[domain.LoadPlan]
+    PlanTools --> SS[state.Store]
+    StateTools --> SS
+    StateTools --> DL
+    ConfigTools --> CR[config.LoadResolved]
+    ExecTools --> AP[agent.Prober]
+    ResHandlers --> DL
+    ResHandlers --> SS
+    ResHandlers --> CR
+```
 
 All tool handlers reuse existing praetor packages (`state.Store`, `domain.LoadPlan`, `config.LoadResolved`, etc.) ensuring consistent behavior with the CLI.

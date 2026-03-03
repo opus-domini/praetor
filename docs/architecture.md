@@ -45,6 +45,57 @@ internal/
 └── workspace/                    Project root/manifest resolution
 ```
 
+```mermaid
+---
+config:
+  theme: dark
+---
+flowchart TD
+    subgraph entrypoints ["Entry Points"]
+        CLI["cli\nCobra commands"]
+        MCP["mcp\nJSON-RPC 2.0 server"]
+    end
+
+    subgraph core ["Core"]
+        DOMAIN["domain\nTypes, parsing, transitions, validation"]
+    end
+
+    subgraph orchestration ["Orchestration"]
+        PIPELINE["orchestration/pipeline\nPlan / Execute / Review loop"]
+        FSM["orchestration/fsm\nGeneric state-function engine"]
+    end
+
+    subgraph agent ["Agent Layer"]
+        RUNTIME["agent/runtime\nRegistry + fallback"]
+        ADAPTERS["agent/adapters\nCLI and REST providers"]
+        MIDDLEWARE["agent/middleware\nLogging, metrics, events"]
+    end
+
+    subgraph support ["Support"]
+        PROMPT["prompt\nTemplate engine"]
+        STATE["state\nStores, locks, checkpoints"]
+        CONFIG["config\nLoading + normalization"]
+    end
+
+    CLI --> PIPELINE
+    CLI --> RUNTIME
+    MCP --> PIPELINE
+    MCP --> STATE
+
+    PIPELINE --> FSM
+    PIPELINE --> RUNTIME
+    PIPELINE --> PROMPT
+    PIPELINE --> STATE
+
+    RUNTIME --> MIDDLEWARE
+    MIDDLEWARE --> ADAPTERS
+
+    PIPELINE --> DOMAIN
+    RUNTIME --> DOMAIN
+    STATE --> DOMAIN
+    PROMPT --> DOMAIN
+```
+
 ## Domain model
 
 `internal/domain` is dependency-free and centralizes:
@@ -71,6 +122,29 @@ The schema includes:
 3. Agent executes.
 4. Output is written to stdout.
 
+```mermaid
+---
+config:
+  theme: dark
+---
+sequenceDiagram
+    actor User
+    participant CLI as CLI (exec)
+    participant Registry as RegistryRuntime
+    participant Adapter as Agent Adapter
+    participant Runner as CommandRunner
+
+    User->>CLI: praetor exec --agent claude ...
+    CLI->>CLI: Resolve provider + prompt
+    CLI->>Registry: Run(AgentRequest)
+    Registry->>Adapter: Lookup provider
+    Adapter->>Runner: Execute command
+    Runner-->>Adapter: stdout / stderr
+    Adapter-->>Registry: AgentResponse
+    Registry-->>CLI: AgentResponse
+    CLI-->>User: Output to stdout
+```
+
 ### `praetor plan run <slug>`
 
 1. Resolve project root and workspace manifest.
@@ -96,6 +170,33 @@ RegistryRuntime
             └── Metrics middleware
 ```
 
+```mermaid
+---
+config:
+  theme: dark
+---
+flowchart TD
+    REQ["AgentRequest"] --> METRICS
+
+    subgraph stack ["Middleware Stack (outermost first)"]
+        METRICS["Metrics middleware\nlatency, token counts"]
+        LOGGING["Logging middleware\nstructured request/response logs"]
+        FALLBACK["FallbackRuntime\nerror classification + fallback mappings"]
+        REGISTRY["RegistryRuntime\nprovider lookup"]
+    end
+
+    METRICS --> LOGGING
+    LOGGING --> FALLBACK
+    FALLBACK --> REGISTRY
+
+    REGISTRY --> ADAPTER["Resolved Adapter\nclaude / codex / gemini / ..."]
+
+    FALLBACK -- "transient / rate_limit\n/ auth error" --> ALT["Fallback Adapter"]
+
+    ADAPTER --> RESP["AgentResponse"]
+    ALT --> RESP
+```
+
 `FallbackRuntime` uses error classification (`transient`, `auth`, `rate_limit`, `unsupported`, `unknown`) plus configured fallback mappings.
 
 ## Prompt system
@@ -104,6 +205,31 @@ RegistryRuntime
 
 1. Embedded defaults (`go:embed`)
 2. Optional project overlay (`.praetor/prompts/*.tmpl`)
+
+```mermaid
+---
+config:
+  theme: dark
+---
+flowchart TD
+    subgraph layer1 ["Layer 1: Embedded Defaults"]
+        EMBED["go:embed templates/*.tmpl\nCompiled into binary"]
+    end
+
+    subgraph layer2 ["Layer 2: Project Overlay"]
+        OVERLAY[".praetor/prompts/*.tmpl\nOptional per-project overrides"]
+    end
+
+    EMBED --> MERGE["Template Engine\nOverlay replaces matching embedded templates"]
+    OVERLAY --> MERGE
+
+    MERGE --> EXEC_SYS["executor.system.tmpl"]
+    MERGE --> EXEC_TASK["executor.task.tmpl"]
+    MERGE --> REV_SYS["reviewer.system.tmpl"]
+    MERGE --> REV_TASK["reviewer.task.tmpl"]
+    MERGE --> PLAN_SYS["planner.system.tmpl"]
+    MERGE --> PLAN_TASK["planner.task.tmpl"]
+```
 
 Available templates:
 

@@ -352,6 +352,27 @@ Escalation policy:
 2. reduce phase budget
 3. mark task as failed (`stalled`)
 
+```mermaid
+---
+config:
+  theme: dark
+---
+flowchart TD
+    A[Fingerprint executor output] --> B{Similarity above threshold<br/>within sliding window?}
+    B -- no --> C[Continue normally]
+    B -- yes --> D[Stall detected]
+    D --> E{Fallback agent<br/>configured?}
+    E -- yes --> F[Level 1: Try fallback agent]
+    F --> G{Still stalled?}
+    G -- no --> C
+    G -- yes --> H[Level 2: Reduce phase budget]
+    E -- no --> H
+    H --> I{Still stalled?}
+    I -- no --> C
+    I -- yes --> J[Level 3: Mark task failed — stalled]
+    J --> K[Emit task_stalled event]
+```
+
 Events emitted: `task_stalled` with similarity, window size, and action.
 
 ## Backpressure via quality gates
@@ -371,6 +392,25 @@ Rules:
 - Missing required gate => review rejection.
 - Required gate with `FAIL` => review rejection.
 - Optional gates are logged (`gate_result`) but do not block completion.
+
+```mermaid
+---
+config:
+  theme: dark
+---
+flowchart TD
+    A[Executor output] --> B[Parse GATES block]
+    B --> C{All required gates<br/>present?}
+    C -- no --> D[Reviewer rejects — missing gate]
+    C -- yes --> E{All required gates<br/>PASS?}
+    E -- no --> F[Reviewer rejects — gate FAIL]
+    E -- yes --> G{Optional gates<br/>present?}
+    G -- yes --> H[Log gate_result events]
+    G -- no --> I[Reviewer approves]
+    H --> I
+    D --> J[Retry task — back to executor]
+    F --> J
+```
 
 ## Diagnostics and observability
 
