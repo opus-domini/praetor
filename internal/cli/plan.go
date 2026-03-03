@@ -870,9 +870,8 @@ func buildNoAgentPlanTemplate(brief, plannerAgent, plannerModel string) domain.P
 	name := derivePlanName(brief)
 	summary := derivePlanSummary(brief)
 	return domain.Plan{
-		SchemaVersion: 1,
-		Name:          name,
-		Summary:       summary,
+		Name:    name,
+		Summary: summary,
 		Settings: domain.PlanSettings{
 			Agents: domain.PlanAgents{
 				Planner:  domain.PlanAgentConfig{Agent: domain.Agent(plannerAgent), Model: strings.TrimSpace(plannerModel)},
@@ -897,9 +896,6 @@ func buildNoAgentPlanTemplate(brief, plannerAgent, plannerModel string) domain.P
 func finalizePlanMetadata(plan *domain.Plan, in planFinalizeInput) error {
 	if plan == nil {
 		return errors.New("plan is nil")
-	}
-	if plan.SchemaVersion == 0 {
-		plan.SchemaVersion = 1
 	}
 	plan.Name = strings.TrimSpace(plan.Name)
 	if plan.Name == "" {

@@ -53,13 +53,13 @@ func NormalizeAgent(agent Agent) Agent {
 
 // Plan describes an immutable execution plan.
 type Plan struct {
-	SchemaVersion int          `json:"schema_version"`
-	Name          string       `json:"name"`
-	Summary       string       `json:"summary,omitempty"`
-	Meta          PlanMeta     `json:"meta,omitempty"`
-	Settings      PlanSettings `json:"settings"`
-	Quality       PlanQuality  `json:"quality,omitempty"`
-	Tasks         []Task       `json:"tasks"`
+	Name      string         `json:"name"`
+	Summary   string         `json:"summary,omitempty"`
+	Meta      PlanMeta       `json:"meta,omitempty"`
+	Settings  PlanSettings   `json:"settings"`
+	Quality   PlanQuality    `json:"quality,omitempty"`
+	Cognitive *PlanCognitive `json:"cognitive,omitempty"`
+	Tasks     []Task         `json:"tasks"`
 }
 
 type PlanMeta struct {
@@ -116,13 +116,38 @@ type PlanQuality struct {
 	Optional       []string `json:"optional,omitempty"`
 }
 
+// PlanCognitive captures cognitive metadata for a plan.
+type PlanCognitive struct {
+	Assumptions   []string `json:"assumptions,omitempty"`
+	OpenQuestions []string `json:"open_questions,omitempty"`
+	FailureModes  []string `json:"failure_modes,omitempty"`
+	Decisions     []string `json:"decisions,omitempty"`
+}
+
 // Task is one plan task definition.
 type Task struct {
-	ID          string   `json:"id"`
-	Title       string   `json:"title"`
-	DependsOn   []string `json:"depends_on,omitempty"`
-	Description string   `json:"description,omitempty"`
-	Acceptance  []string `json:"acceptance"`
+	ID          string           `json:"id"`
+	Title       string           `json:"title"`
+	DependsOn   []string         `json:"depends_on,omitempty"`
+	Description string           `json:"description,omitempty"`
+	Acceptance  []string         `json:"acceptance"`
+	Constraints *TaskConstraints `json:"constraints,omitempty"`
+	Agents      *TaskAgents      `json:"agents,omitempty"`
+}
+
+// TaskConstraints defines per-task execution restrictions.
+type TaskConstraints struct {
+	AllowedTools []string `json:"allowed_tools,omitempty"`
+	DeniedTools  []string `json:"denied_tools,omitempty"`
+	Timeout      string   `json:"timeout,omitempty"`
+}
+
+// TaskAgents allows per-task agent executor/reviewer overrides.
+type TaskAgents struct {
+	Executor      string `json:"executor,omitempty"`
+	Reviewer      string `json:"reviewer,omitempty"`
+	ExecutorModel string `json:"executor_model,omitempty"`
+	ReviewerModel string `json:"reviewer_model,omitempty"`
 }
 
 // TaskStatus tracks mutable execution status for a task.

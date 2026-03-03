@@ -152,16 +152,6 @@ func LoadPlan(path string) (Plan, error) {
 		return Plan{}, fmt.Errorf("read plan file: %w", err)
 	}
 
-	hints, hintErr := legacyFieldHints(data)
-	if hintErr != nil {
-		return Plan{}, fmt.Errorf("decode plan file: %w", hintErr)
-	}
-	if len(hints) > 0 {
-		sort.Strings(hints)
-		hints = append(hints, "Recreate with: praetor plan create \"<brief>\"")
-		return Plan{}, errors.New("plan validation failed:\n- " + strings.Join(hints, "\n- "))
-	}
-
 	plan, err := decodePlanStrict(data)
 	if err != nil {
 		return Plan{}, err
@@ -198,81 +188,10 @@ func decodePlanStrict(data []byte) (Plan, error) {
 	return plan, nil
 }
 
-func legacyFieldHints(data []byte) ([]string, error) {
-	var root map[string]any
-	if err := json.Unmarshal(data, &root); err != nil {
-		return nil, err
-	}
-
-	hints := map[string]struct{}{}
-	add := func(msg string) {
-		hints[msg] = struct{}{}
-	}
-
-	if _, ok := root["title"]; ok {
-		add("Field 'title' is no longer supported. Use 'name' instead.")
-	}
-	if _, ok := root["execution"]; ok {
-		add("Field 'execution' is no longer supported. Use 'settings.execution_policy' instead.")
-	}
-	if _, ok := root["origin"]; ok {
-		add("Field 'origin' is no longer supported. Use 'meta' instead.")
-	}
-
-	settings, _ := root["settings"].(map[string]any)
-	if settings != nil {
-		if _, ok := settings["plan"]; ok {
-			add("Field 'settings.plan' is no longer supported.")
-		}
-		agents, _ := settings["agents"].(map[string]any)
-		for _, role := range []string{"planner", "executor", "reviewer"} {
-			cfg, _ := agents[role].(map[string]any)
-			if cfg == nil {
-				continue
-			}
-			if _, ok := cfg["max_iterations"]; ok {
-				add(fmt.Sprintf("Field 'settings.agents.%s.max_iterations' is no longer supported.", role))
-			}
-		}
-	}
-
-	rawTasks, _ := root["tasks"].([]any)
-	for i, rawTask := range rawTasks {
-		task, _ := rawTask.(map[string]any)
-		if task == nil {
-			continue
-		}
-		if _, ok := task["criteria"]; ok {
-			add(fmt.Sprintf("tasks[%d].criteria: Field 'criteria' is no longer supported. Use 'acceptance' (array of strings) instead.", i))
-		}
-		if _, ok := task["executor"]; ok {
-			add(fmt.Sprintf("tasks[%d].executor: Per-task agent fields are no longer supported. Use 'settings.agents' at plan level.", i))
-		}
-		if _, ok := task["reviewer"]; ok {
-			add(fmt.Sprintf("tasks[%d].reviewer: Per-task agent fields are no longer supported. Use 'settings.agents' at plan level.", i))
-		}
-		if _, ok := task["model"]; ok {
-			add(fmt.Sprintf("tasks[%d].model: Per-task agent fields are no longer supported. Use 'settings.agents' at plan level.", i))
-		}
-	}
-
-	if len(hints) == 0 {
-		return nil, nil
-	}
-	result := make([]string, 0, len(hints))
-	for msg := range hints {
-		result = append(result, msg)
-	}
-	return result, nil
-}
-
 // ValidatePlan validates logical constraints for a plan.
 func ValidatePlan(plan Plan) error {
 	errorsList := make([]string, 0)
 
-	if plan.SchemaVersion != 1 {
-		errorsList = append(errorsList, "schema_version must be 1")
-	}
 	if strings.TrimSpace(plan.Name) == "" {
 		errorsList = append(errorsList, "name is required")
 	}
@@ -350,6 +269,25 @@ func ValidatePlan(plan Plan) error {
 			}
 			if dep == id && id != "" {
 				errorsList = append(errorsList, fmt.Sprintf("tasks[%d]: depends_on cannot reference itself (%q)", idx, dep))
+			}
+		}
+		if task.Constraints != nil && strings.TrimSpace(task.Constraints.Timeout) != "" {
+			if _, err := time.ParseDuration(strings.TrimSpace(task.Constraints.Timeout)); err != nil {
+				errorsList = append(errorsList, fmt.Sprintf("tasks[%d].constraints.timeout has invalid duration %q", idx, task.Constraints.Timeout))
+			}
+		}
+		if task.Agents != nil {
+			if task.Agents.Executor != "" {
+				exec := NormalizeAgent(Agent(task.Agents.Executor))
+				if _, ok := ValidExecutors[exec]; !ok {
+					errorsList = append(errorsList, fmt.Sprintf("tasks[%d].agents.executor has invalid value %q", idx, task.Agents.Executor))
+				}
+			}
+			if task.Agents.Reviewer != "" {
+				rev := NormalizeAgent(Agent(task.Agents.Reviewer))
+				if _, ok := ValidReviewers[rev]; !ok {
+					errorsList = append(errorsList, fmt.Sprintf("tasks[%d].agents.reviewer has invalid value %q", idx, task.Agents.Reviewer))
+				}
 			}
 		}
 	}
@@ -505,9 +443,8 @@ func NewPlanFile(slug, plansDir string) (string, error) {
 	}
 
 	plan := Plan{
-		SchemaVersion: 1,
-		Name:          strings.ReplaceAll(slug, "-", " "),
-		Summary:       "TODO: describe the goal of this plan.",
+		Name:    strings.ReplaceAll(slug, "-", " "),
+		Summary: "TODO: describe the goal of this plan.",
 		Meta: PlanMeta{
 			Source:    "manual",
 			CreatedAt: time.Now().UTC().Format(time.RFC3339),

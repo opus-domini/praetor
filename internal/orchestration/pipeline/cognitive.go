@@ -153,7 +153,7 @@ func (a *runtimeCognitiveAgent) Execute(ctx context.Context, req ExecuteRequest)
 		Role:         "execute",
 		Agent:        a.id,
 		Prompt:       strings.TrimSpace(req.Prompt),
-		SystemPrompt: BuildExecutorSystemPrompt(a.promptEngine, req.ProjectContext),
+		SystemPrompt: BuildExecutorSystemPrompt(a.promptEngine, req.ProjectContext, nil, nil),
 		Model:        strings.TrimSpace(req.Model),
 		Workdir:      strings.TrimSpace(req.Workdir),
 		RunDir:       strings.TrimSpace(req.RunDir),
@@ -169,7 +169,7 @@ func (a *runtimeCognitiveAgent) Review(ctx context.Context, req ReviewRequest) (
 		Role:         "review",
 		Agent:        a.id,
 		Prompt:       strings.TrimSpace(req.Prompt),
-		SystemPrompt: BuildReviewerSystemPrompt(a.promptEngine, req.ProjectContext),
+		SystemPrompt: BuildReviewerSystemPrompt(a.promptEngine, req.ProjectContext, false),
 		Model:        strings.TrimSpace(req.Model),
 		Workdir:      strings.TrimSpace(req.Workdir),
 		RunDir:       strings.TrimSpace(req.RunDir),
@@ -199,7 +199,6 @@ func buildPlannerSystemPrompt(engine *prompt.Engine, projectContext string) stri
 	b.WriteString(`You are a planning agent.
 Return only valid JSON matching this schema:
 {
-  "schema_version": 1,
   "name": "string",
   "summary": "string",
   "meta": {
@@ -238,7 +237,6 @@ Rules:
 - Use stable TASK-XXX ids in execution order.
 - Keep each task atomic.
 - Always include at least one acceptance item per task.
-- Do not emit legacy fields like title/criteria/executor/reviewer/model at task level.
 - Return JSON only.`)
 	return b.String()
 }

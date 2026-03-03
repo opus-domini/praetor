@@ -27,8 +27,8 @@ func TestPlanCreateNoAgentDryRunDoesNotWriteFile(t *testing.T) {
 		t.Fatalf("execute: %v (stderr=%s)", err, stderr.String())
 	}
 
-	if !strings.Contains(stdout.String(), `"schema_version": 1`) {
-		t.Fatalf("expected schema_version in dry-run output, got: %s", stdout.String())
+	if !strings.Contains(stdout.String(), `"name":`) {
+		t.Fatalf("expected valid JSON in dry-run output, got: %s", stdout.String())
 	}
 	entries, err := os.ReadDir(store.PlansDir())
 	if err != nil {

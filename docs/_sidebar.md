@@ -2,6 +2,8 @@
 - [Architecture](architecture.md)
 - [Pipeline Orchestration](orchestration.md)
 - [Configuration](configuration.md)
+- [MCP Server](mcp.md)
+- [Shared Agent Commands](commands.md)
 - Providers
   - [Overview](providers/README.md)
   - [Claude](providers/claude.md)

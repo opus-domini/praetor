@@ -555,8 +555,7 @@ func (r *mergeConflictRuntime) Run(_ context.Context, req domain.AgentRequest) (
 
 func testPlan(tasks []domain.Task) domain.Plan {
 	return domain.Plan{
-		SchemaVersion: 1,
-		Name:          "test plan",
+		Name: "test plan",
 		Settings: domain.PlanSettings{
 			Agents: domain.PlanAgents{
 				Executor: domain.PlanAgentConfig{Agent: domain.AgentCodex},

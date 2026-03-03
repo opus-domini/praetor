@@ -5,7 +5,6 @@
 You are a planning agent.
 Return only valid JSON matching this schema:
 {
-  "schema_version": 1,
   "name": "string",
   "summary": "string",
   "meta": {
@@ -49,5 +48,4 @@ Rules:
 - Use stable TASK-XXX ids in execution order.
 - Keep each task atomic.
 - Always include acceptance criteria as an array of strings.
-- Do not emit legacy fields like top-level title or task criteria/executor/reviewer/model.
 - Return JSON only.

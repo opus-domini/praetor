@@ -34,8 +34,7 @@ func TestPlanResumeRestoresLatestSnapshot(t *testing.T) {
 
 	slug := "test-plan"
 	plan := domain.Plan{
-		SchemaVersion: 1,
-		Name:          "test plan",
+		Name: "test plan",
 		Settings: domain.PlanSettings{
 			Agents: domain.PlanAgents{
 				Executor: domain.PlanAgentConfig{Agent: domain.AgentCodex},

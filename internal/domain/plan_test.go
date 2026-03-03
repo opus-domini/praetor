@@ -7,13 +7,12 @@ import (
 	"testing"
 )
 
-func TestLoadPlanAcceptsMinimalV1(t *testing.T) {
+func TestLoadPlanAcceptsMinimal(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
 	planPath := filepath.Join(dir, "minimal.json")
 	if err := os.WriteFile(planPath, []byte(`{
-  "schema_version": 1,
   "name": "minimal",
   "settings": {
     "agents": {
@@ -37,57 +36,8 @@ func TestLoadPlanAcceptsMinimalV1(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load plan: %v", err)
 	}
-	if plan.SchemaVersion != 1 {
-		t.Fatalf("expected schema_version=1, got %d", plan.SchemaVersion)
-	}
 	if plan.Name != "minimal" {
 		t.Fatalf("expected name=minimal, got %q", plan.Name)
-	}
-}
-
-func TestLoadPlanRejectsLegacyFieldsWithGuidance(t *testing.T) {
-	t.Parallel()
-
-	dir := t.TempDir()
-	planPath := filepath.Join(dir, "legacy.json")
-	if err := os.WriteFile(planPath, []byte(`{
-  "schema_version": 1,
-  "name": "legacy",
-  "title": "legacy",
-  "settings": {
-    "agents": {
-      "executor": {"agent": "codex"},
-      "reviewer": {"agent": "claude"}
-    }
-  },
-  "tasks": [
-    {
-      "id": "TASK-001",
-      "title": "task",
-      "criteria": "old",
-      "executor": "codex",
-      "acceptance": ["done"]
-    }
-  ]
-}
-`), 0o644); err != nil {
-		t.Fatalf("write plan: %v", err)
-	}
-
-	_, err := LoadPlan(planPath)
-	if err == nil {
-		t.Fatal("expected legacy field error")
-	}
-	msg := err.Error()
-	for _, want := range []string{
-		"Field 'title' is no longer supported",
-		"criteria",
-		"Per-task agent fields are no longer supported",
-		"Recreate with: praetor plan create",
-	} {
-		if !strings.Contains(msg, want) {
-			t.Fatalf("expected error to contain %q, got: %s", want, msg)
-		}
 	}
 }
 
@@ -97,7 +47,6 @@ func TestLoadPlanRejectsUnknownFieldsOnSecondPass(t *testing.T) {
 	dir := t.TempDir()
 	planPath := filepath.Join(dir, "unknown.json")
 	if err := os.WriteFile(planPath, []byte(`{
-  "schema_version": 1,
   "name": "unknown",
   "settings": {
     "agents": {
@@ -130,8 +79,7 @@ func TestLoadPlanRejectsUnknownFieldsOnSecondPass(t *testing.T) {
 func TestValidatePlanRejectsInvalidTimeout(t *testing.T) {
 	t.Parallel()
 	plan := Plan{
-		SchemaVersion: 1,
-		Name:          "timeout",
+		Name: "timeout",
 		Settings: PlanSettings{
 			Agents: PlanAgents{
 				Executor: PlanAgentConfig{Agent: AgentCodex},
@@ -149,8 +97,7 @@ func TestValidatePlanRejectsInvalidTimeout(t *testing.T) {
 func TestValidatePlanRejectsDuplicateIDsAndMissingAcceptance(t *testing.T) {
 	t.Parallel()
 	plan := Plan{
-		SchemaVersion: 1,
-		Name:          "bad",
+		Name: "bad",
 		Settings: PlanSettings{
 			Agents: PlanAgents{
 				Executor: PlanAgentConfig{Agent: AgentCodex},
@@ -177,8 +124,7 @@ func TestValidatePlanRejectsDuplicateIDsAndMissingAcceptance(t *testing.T) {
 func TestValidatePlanRejectsCyclesAndSelfDependency(t *testing.T) {
 	t.Parallel()
 	plan := Plan{
-		SchemaVersion: 1,
-		Name:          "cycle",
+		Name: "cycle",
 		Settings: PlanSettings{
 			Agents: PlanAgents{
 				Executor: PlanAgentConfig{Agent: AgentCodex},
@@ -206,8 +152,7 @@ func TestValidatePlanRejectsCyclesAndSelfDependency(t *testing.T) {
 func TestStateTasksFromPlanKeepsAcceptanceOnly(t *testing.T) {
 	t.Parallel()
 	plan := Plan{
-		SchemaVersion: 1,
-		Name:          "state",
+		Name: "state",
 		Settings: PlanSettings{
 			Agents: PlanAgents{
 				Executor: PlanAgentConfig{Agent: AgentCodex},
@@ -228,18 +173,130 @@ func TestStateTasksFromPlanKeepsAcceptanceOnly(t *testing.T) {
 	}
 }
 
-func TestNewPlanFileGeneratesValidSchemaV1(t *testing.T) {
+func TestNewPlanFileGeneratesValidPlan(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	path, err := NewPlanFile("my-plan", dir)
 	if err != nil {
 		t.Fatalf("new plan file: %v", err)
 	}
-	plan, err := LoadPlan(path)
+	_, err = LoadPlan(path)
 	if err != nil {
 		t.Fatalf("load generated plan: %v", err)
 	}
-	if plan.SchemaVersion != 1 {
-		t.Fatalf("expected schema_version=1, got %d", plan.SchemaVersion)
+}
+
+func TestLoadPlanAcceptsFullFeatures(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	planPath := filepath.Join(dir, "full.json")
+	if err := os.WriteFile(planPath, []byte(`{
+  "name": "full-plan",
+  "cognitive": {
+    "assumptions": ["REST API"],
+    "open_questions": ["auth method"],
+    "failure_modes": ["rollback via snapshot"],
+    "decisions": ["use interfaces"]
+  },
+  "settings": {
+    "agents": {
+      "executor": {"agent": "codex"},
+      "reviewer": {"agent": "claude"}
+    }
+  },
+  "tasks": [
+    {
+      "id": "TASK-001",
+      "title": "task",
+      "acceptance": ["done"],
+      "constraints": {
+        "allowed_tools": ["read", "edit"],
+        "timeout": "30m"
+      },
+      "agents": {
+        "executor": "claude",
+        "reviewer": "none"
+      }
+    }
+  ]
+}
+`), 0o644); err != nil {
+		t.Fatalf("write plan: %v", err)
+	}
+
+	plan, err := LoadPlan(planPath)
+	if err != nil {
+		t.Fatalf("load plan: %v", err)
+	}
+	if plan.Cognitive == nil {
+		t.Fatal("expected cognitive to be set")
+	}
+	if len(plan.Cognitive.Assumptions) != 1 || plan.Cognitive.Assumptions[0] != "REST API" {
+		t.Fatalf("expected assumptions=[REST API], got %+v", plan.Cognitive.Assumptions)
+	}
+	if plan.Tasks[0].Constraints == nil {
+		t.Fatal("expected constraints to be set")
+	}
+	if len(plan.Tasks[0].Constraints.AllowedTools) != 2 {
+		t.Fatalf("expected 2 allowed tools, got %d", len(plan.Tasks[0].Constraints.AllowedTools))
+	}
+	if plan.Tasks[0].Agents == nil {
+		t.Fatal("expected agents to be set")
+	}
+	if plan.Tasks[0].Agents.Executor != "claude" {
+		t.Fatalf("expected per-task executor=claude, got %q", plan.Tasks[0].Agents.Executor)
+	}
+}
+
+func TestValidatePlanRejectsInvalidTaskConstraintTimeout(t *testing.T) {
+	t.Parallel()
+	plan := Plan{
+		Name: "bad-timeout",
+		Settings: PlanSettings{
+			Agents: PlanAgents{
+				Executor: PlanAgentConfig{Agent: AgentCodex},
+				Reviewer: PlanAgentConfig{Agent: AgentClaude},
+			},
+		},
+		Tasks: []Task{{
+			ID:          "TASK-001",
+			Title:       "task",
+			Acceptance:  []string{"done"},
+			Constraints: &TaskConstraints{Timeout: "invalid"},
+		}},
+	}
+	err := ValidatePlan(plan)
+	if err == nil {
+		t.Fatal("expected constraint timeout validation error")
+	}
+	if !strings.Contains(err.Error(), "constraints.timeout") {
+		t.Fatalf("expected constraints.timeout error, got: %v", err)
+	}
+}
+
+func TestValidatePlanRejectsInvalidPerTaskAgent(t *testing.T) {
+	t.Parallel()
+	plan := Plan{
+		Name: "bad-agent",
+		Settings: PlanSettings{
+			Agents: PlanAgents{
+				Executor: PlanAgentConfig{Agent: AgentCodex},
+				Reviewer: PlanAgentConfig{Agent: AgentClaude},
+			},
+		},
+		Tasks: []Task{{
+			ID:         "TASK-001",
+			Title:      "task",
+			Acceptance: []string{"done"},
+			Agents:     &TaskAgents{Executor: "invalid-agent"},
+		}},
+	}
+	err := ValidatePlan(plan)
+	if err == nil {
+		t.Fatal("expected per-task agent validation error")
+	}
+	if !strings.Contains(err.Error(), "agents.executor") {
+		t.Fatalf("expected agents.executor error, got: %v", err)
 	}
 }

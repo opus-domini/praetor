@@ -1,6 +1,6 @@
 # Task orchestration
 
-Praetor orchestrates plans with a strict JSON schema (`schema_version = 1`) and a Plan -> Execute -> Review loop.
+Praetor orchestrates plans with a strict JSON schema and a Plan -> Execute -> Review loop.
 
 ## CLI workflows
 
@@ -46,13 +46,12 @@ praetor plan diagnose my-plan --query costs
 
 Allowed queries: `errors`, `stalls`, `fallbacks`, `costs`, `all`.
 
-## Plan schema v1
+## Plan schema
 
-Canonical schema file: [`docs/schemas/plan.v1.schema.json`](schemas/plan.v1.schema.json)
+Canonical schema file: [`docs/schemas/plan.schema.json`](schemas/plan.schema.json)
 
 ```json
 {
-  "schema_version": 1,
   "name": "Implementar autenticação de usuários",
   "summary": "Adicionar fluxo de login seguro com testes e documentação mínima.",
   "meta": {
@@ -64,6 +63,12 @@ Canonical schema file: [`docs/schemas/plan.v1.schema.json`](schemas/plan.v1.sche
       "version": "0.15.0",
       "prompt_hash": "sha256:4d2f..."
     }
+  },
+  "cognitive": {
+    "assumptions": ["API is REST, not GraphQL"],
+    "open_questions": ["Auth method TBD"],
+    "failure_modes": ["If DB migration fails, rollback via snapshot"],
+    "decisions": ["Use interfaces for all agent interactions"]
   },
   "settings": {
     "agents": {
@@ -117,7 +122,6 @@ Canonical schema file: [`docs/schemas/plan.v1.schema.json`](schemas/plan.v1.sche
 
 ### Required fields
 
-- `schema_version` (must be `1`)
 - `name`
 - `settings.agents.executor.agent`
 - `settings.agents.reviewer.agent`
@@ -126,32 +130,69 @@ Canonical schema file: [`docs/schemas/plan.v1.schema.json`](schemas/plan.v1.sche
 - `tasks[].title` (non-empty)
 - `tasks[].acceptance` (non-empty array)
 
-### Rejected legacy fields
+### Cognitive metadata
 
-Top-level:
+```json
+{
+  "cognitive": {
+    "assumptions": ["API is REST, not GraphQL"],
+    "open_questions": ["Auth method TBD"],
+    "failure_modes": ["If DB migration fails, rollback via snapshot"],
+    "decisions": ["Use interfaces for all agent interactions"]
+  }
+}
+```
 
-- `title`
-- `execution`
-- `origin`
+### Per-task tool constraints
 
-Task-level:
+```json
+{
+  "tasks": [{
+    "id": "TASK-001",
+    "title": "Refactor auth module",
+    "acceptance": ["Tests pass"],
+    "constraints": {
+      "allowed_tools": ["read", "edit", "bash:test"],
+      "denied_tools": ["bash:rm", "bash:git push"],
+      "timeout": "30m"
+    }
+  }]
+}
+```
 
-- `executor`
-- `reviewer`
-- `model`
-- `criteria`
+When `allowed_tools` is set, the executor system prompt includes a `TOOL CONSTRAINTS` block restricting which tools the agent may use. When `denied_tools` is set, the executor is instructed not to use those tools. The `timeout` field overrides the plan-level timeout for that specific task.
 
-Other legacy settings:
+### Per-task agent override
 
-- `settings.plan`
-- `settings.agents.<role>.max_iterations`
+```json
+{
+  "tasks": [{
+    "id": "TASK-001",
+    "title": "Complex refactoring",
+    "acceptance": ["Tests pass"],
+    "agents": {
+      "executor": "claude",
+      "reviewer": "none",
+      "executor_model": "opus",
+      "reviewer_model": ""
+    }
+  }]
+}
+```
 
-Plan loading uses two-pass validation:
+When a task declares `agents.executor`, it overrides the plan-level executor for that task only. Same for `agents.reviewer` and their respective models. This enables mixed-agent strategies like "use Claude for refactoring, Codex for code generation".
 
-1. Legacy detection with migration-oriented errors.
-2. Strict decode with `DisallowUnknownFields()`.
+### Standards gate
 
-No compatibility mode or migration layer exists. Non-v1 plans fail fast and must be recreated.
+When `"standards"` is included in `quality.required`, the reviewer system prompt is enhanced with instructions to validate changes against project conventions (file placement, naming patterns, architecture rules). The reviewer will FAIL tasks that are functionally correct but violate project conventions.
+
+```json
+{
+  "quality": {
+    "required": ["tests", "lint", "standards"]
+  }
+}
+```
 
 ## Configuration precedence
 

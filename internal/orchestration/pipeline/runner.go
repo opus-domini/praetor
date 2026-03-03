@@ -915,9 +915,6 @@ func writeText(path, text string) error {
 }
 
 func enrichGeneratedPlan(plan domain.Plan, opts domain.RunnerOptions) domain.Plan {
-	if plan.SchemaVersion == 0 {
-		plan.SchemaVersion = 1
-	}
 	if strings.TrimSpace(plan.Name) == "" {
 		plan.Name = "generated plan"
 	}

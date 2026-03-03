@@ -31,8 +31,10 @@ internal/
 │   └── text/                     Prompt/output helpers
 ├── app/                          Bootstrap and dependency wiring
 ├── cli/                          Cobra commands and renderer
+├── commands/                     Shared agent commands (sync + templates)
 ├── config/                       Config loading and normalization
 ├── domain/                       Core types, parsing, transitions, validation
+├── mcp/                          MCP server (JSON-RPC 2.0 over stdio)
 ├── orchestration/
 │   ├── fsm/                      Generic state-function engine
 │   └── pipeline/                 Plan/Execute/Review loop + cognitive agents
@@ -46,16 +48,18 @@ internal/
 
 `internal/domain` is dependency-free and centralizes:
 
-- Plan schema v1 (`Plan`, `Task`, `PlanSettings`, `PlanQuality`, `ExecutionPolicy`)
+- Plan schema (`Plan`, `Task`, `PlanSettings`, `PlanQuality`, `ExecutionPolicy`, `PlanCognitive`, `TaskConstraints`, `TaskAgents`)
 - Mutable run state (`State`, `StateTask`, `TaskStatus`)
 - Runtime config (`RunnerOptions`)
 - Parsing contracts (`ParseExecutorResult`, `ParseReviewDecision`, `ParseGateEvidence`)
 - Transitions/graph (`Transition`, `NextRunnableTask`, blocked-dependency reporting)
 
-Plan loading is strict and two-pass:
+Plan loading uses strict decode with `DisallowUnknownFields()`.
 
-1. Detect known legacy fields and return migration-oriented errors.
-2. Strict decode with `DisallowUnknownFields()`.
+The schema includes:
+- `cognitive` — planning metadata (assumptions, open questions, failure modes, decisions)
+- `task.constraints` — per-task tool restrictions and timeout overrides
+- `task.agents` — per-task executor/reviewer agent and model overrides
 
 ## Execution flows
 
@@ -108,7 +112,7 @@ Available templates:
 | `executor.task.tmpl` | task payload, retries, acceptance, required gates |
 | `reviewer.system.tmpl` | reviewer role/system instructions |
 | `reviewer.task.tmpl` | task payload, executor output, git diff |
-| `planner.system.tmpl` | planner schema instructions (plan v1) |
+| `planner.system.tmpl` | planner schema instructions |
 | `planner.task.tmpl` | objective/brief payload |
 | `adapter.plan.tmpl` | provider-shared planning prompt |
 | `adapter.plan.claude.tmpl` | Claude-specific planning prompt |
@@ -155,7 +159,15 @@ Agent availability is probed at bootstrap. Executor routing uses plan-level defa
 1. Use configured default executor when healthy.
 2. Otherwise auto-select from available executors (CLI preferred over REST).
 
-There is no per-task agent override in plan schema v1.
+The plan schema supports per-task agent overrides via the `task.agents` field. When a task declares `agents.executor` or `agents.reviewer`, those override the plan-level defaults for that task only.
+
+## MCP server
+
+`internal/mcp` implements a [Model Context Protocol](https://modelcontextprotocol.io/) server over stdio, exposing praetor's capabilities as MCP tools and resources. See [MCP Server](mcp.md) for details.
+
+## Shared agent commands
+
+`internal/commands` generates shared agent commands in `.agents/commands/` with symlinks to `.claude/`, `.cursor/`, `.codex/`. See [Shared Agent Commands](commands.md) for details.
 
 ## Design principles
 
@@ -164,3 +176,4 @@ There is no per-task agent override in plan schema v1.
 - Filesystem as auditable source of truth
 - Context-budgeted prompts for predictable execution
 - Event-driven diagnostics without mandatory UI/dashboard
+- MCP integration for AI agent interoperability

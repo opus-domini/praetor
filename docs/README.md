@@ -20,6 +20,8 @@
 - [Architecture](architecture.md) — package boundaries, execution flow, and design rationale
 - [Pipeline orchestration](orchestration.md) — plan format, runtime model, safety mechanisms, and CLI reference
 - [Configuration](configuration.md) — config file format, CLI commands, and full key reference
+- [MCP Server](mcp.md) — Model Context Protocol server for AI agent interoperability
+- [Shared Agent Commands](commands.md) — cross-agent slash commands from a single source of truth
 - [Providers overview](providers/README.md) — agent interface, runner abstraction, registry, middleware, and fallback
 
 ## Provider documentation
