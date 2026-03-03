@@ -2,6 +2,17 @@
 
 Praetor generates shared agent commands that work across multiple AI coding agents (Claude Code, Cursor, Codex, etc.) from a single source of truth.
 
+## Quickstart
+
+```bash
+# One-step setup (also generates MCP config):
+praetor init
+
+# Or sync commands only:
+praetor commands sync
+praetor commands list
+```
+
 ## How it works
 
 Commands are stored centrally in `.agents/commands/` with symlinks from each agent's config directory:

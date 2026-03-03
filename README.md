@@ -11,7 +11,7 @@
 </div>
 
 Praetor is a Go CLI for agent orchestration with a strict Plan-and-Execute runtime.
-It orchestrates 8 AI agent providers through a single execution surface with dependency-aware plans, isolated worktrees, independent review gates, snapshot-based recovery, and structured observability.
+It orchestrates 9 AI agent providers through a single execution surface with dependency-aware plans, isolated worktrees, independent review gates, snapshot-based recovery, and structured observability.
 
 <p align="center">
   <a href="https://opus-domini.github.io/praetor/">Documentation</a> •
@@ -22,7 +22,7 @@ It orchestrates 8 AI agent providers through a single execution surface with dep
 ## Why Praetor
 
 - One CLI surface for planning, execution, review, and recovery.
-- Unified provider abstraction across 8 CLI and REST agents.
+- Unified provider abstraction across 9 CLI and REST agents.
 - Explicit finite-state orchestration with transition guard rails.
 - Worktree-first isolation to protect the main branch during task execution.
 - Automatic fallback with error-classified failover to alternate agents.
@@ -33,7 +33,7 @@ It orchestrates 8 AI agent providers through a single execution surface with dep
 ## Core Capabilities
 
 - **Plan execution** — run JSON plans with dependencies via `praetor plan run`.
-- **Agents** — 8 built-in providers: `claude`, `codex`, `copilot`, `gemini`, `kimi`, `opencode`, `openrouter`, and `ollama`.
+- **Agents** — 9 built-in providers: `claude`, `codex`, `copilot`, `gemini`, `kimi`, `lmstudio`, `opencode`, `openrouter`, and `ollama`.
 - **Plan-and-Execute** — optional planner phase (`--objective`) followed by execute/review gates.
 - **FSM runtime** — loop modeled as explicit states with `max-iterations` and `max-transitions` guard rails.
 - **Runner modes** — `tmux`, `direct`, and `pty` under a unified runtime contract.
@@ -62,6 +62,7 @@ It orchestrates 8 AI agent providers through a single execution surface with dep
 | Kimi | CLI | yes | no |
 | OpenCode | CLI | no | no |
 | OpenRouter | REST | no | yes |
+| LM Studio | REST | no | yes |
 | Ollama | REST | no | no |
 
 ## Requirements
@@ -72,6 +73,7 @@ It orchestrates 8 AI agent providers through a single execution surface with dep
 - For `--runner tmux`: `tmux` installed.
 - CLI agent binaries as needed: `codex`, `claude`, `copilot`, `gemini`, `kimi`, `opencode`.
 - For OpenRouter: `OPENROUTER_API_KEY` env var set.
+- For LM Studio: reachable REST endpoint (default `http://localhost:1234`).
 - For Ollama: reachable REST endpoint (default `http://127.0.0.1:11434`).
 
 ## Quick Start
@@ -87,6 +89,13 @@ go install github.com/opus-domini/praetor/cmd/praetor@latest
 ```bash
 make build
 ./build/praetor --help
+```
+
+### Bootstrap a project
+
+```bash
+# Initialize config, agent commands, and MCP server registration
+praetor init
 ```
 
 ### Check agent availability
@@ -169,6 +178,10 @@ praetor exec --provider openrouter --model anthropic/claude-sonnet-4 "Review thi
 | `praetor config path` | Print resolved config file path |
 | `praetor config edit` | Open config in `$EDITOR` |
 | `praetor config init` | Create a commented template config file |
+| `praetor init` | Bootstrap project (config + commands + MCP) |
+| `praetor commands sync` | Generate shared agent commands and symlinks |
+| `praetor commands list` | List available shared commands |
+| `praetor mcp` | Start MCP server over stdio |
 
 ## Configuration and State
 
@@ -185,12 +198,15 @@ praetor exec --provider openrouter --model anthropic/claude-sonnet-4 "Review thi
 - [Architecture](https://opus-domini.github.io/praetor/#/architecture)
 - [Pipeline Orchestration](https://opus-domini.github.io/praetor/#/orchestration)
 - [Configuration](https://opus-domini.github.io/praetor/#/configuration)
+- [MCP Server](https://opus-domini.github.io/praetor/#/mcp)
+- [Shared Agent Commands](https://opus-domini.github.io/praetor/#/commands)
 - [Providers Overview](https://opus-domini.github.io/praetor/#/providers/README)
 - [Claude Provider](https://opus-domini.github.io/praetor/#/providers/claude)
 - [Codex Provider](https://opus-domini.github.io/praetor/#/providers/codex)
 - [Copilot Provider](https://opus-domini.github.io/praetor/#/providers/copilot)
 - [Gemini Provider](https://opus-domini.github.io/praetor/#/providers/gemini)
 - [Kimi Provider](https://opus-domini.github.io/praetor/#/providers/kimi)
+- [LM Studio Provider](https://opus-domini.github.io/praetor/#/providers/lmstudio)
 - [OpenCode Provider](https://opus-domini.github.io/praetor/#/providers/opencode)
 - [OpenRouter Provider](https://opus-domini.github.io/praetor/#/providers/openrouter)
 - [Ollama Provider](https://opus-domini.github.io/praetor/#/providers/ollama)

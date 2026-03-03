@@ -18,7 +18,36 @@ func newMCPCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "mcp",
 		Short: "Start MCP server over stdio",
-		Long:  "Start a Model Context Protocol server over stdin/stdout for AI agent integration.",
+		Long: `Start a Model Context Protocol server over stdin/stdout.
+
+The MCP server exposes praetor capabilities (plan management, state inspection,
+diagnostics, configuration) as tools and resources that any MCP-aware AI agent
+can consume. Supported clients include Claude Code, Cursor, VS Code, and others.
+
+The server communicates using JSON-RPC 2.0, one message per line on stdio.
+Use 'praetor init' to automatically generate the MCP config for your project.`,
+		Example: `  # Add to .mcp.json (Claude Code, Cursor):
+  {
+    "mcpServers": {
+      "praetor": {
+        "command": "praetor",
+        "args": ["mcp", "--project-dir", "/path/to/project"]
+      }
+    }
+  }
+
+  # VS Code (.vscode/mcp.json):
+  {
+    "servers": {
+      "praetor": {
+        "command": "praetor",
+        "args": ["mcp", "--project-dir", "${workspaceFolder}"]
+      }
+    }
+  }
+
+  # Or bootstrap automatically:
+  praetor init`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if projectDir == "" {
 				resolved, err := workspace.ResolveProjectRoot("")

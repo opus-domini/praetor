@@ -12,7 +12,12 @@ func newCommandsCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "commands",
 		Short: "Manage shared agent commands",
-		RunE:  func(cmd *cobra.Command, _ []string) error { return cmd.Help() },
+		Long: `Generate shared agent commands (.md files with tool whitelists) and create
+symlinks so Claude Code, Cursor, and Codex can discover them from a single source.
+
+Built-in commands: plan-create, plan-run, review-task, doctor, diagnose.
+Commands are stored in .agents/commands/ with symlinks from each agent directory.`,
+		RunE: func(cmd *cobra.Command, _ []string) error { return cmd.Help() },
 	}
 	cmd.AddCommand(newCommandsSyncCmd())
 	cmd.AddCommand(newCommandsListCmd())
@@ -26,6 +31,11 @@ func newCommandsSyncCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "sync",
 		Short: "Generate shared agent commands and create symlinks",
+		Example: `  # Sync for all supported agents (claude, cursor, codex)
+  praetor commands sync
+
+  # Sync for specific agents only
+  praetor commands sync --agents claude,cursor`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cmd.SilenceUsage = true
 
@@ -61,8 +71,9 @@ func newCommandsListCmd() *cobra.Command {
 	var noColor bool
 
 	cmd := &cobra.Command{
-		Use:   "list",
-		Short: "List available shared commands",
+		Use:     "list",
+		Short:   "List available shared commands",
+		Example: "  praetor commands list",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cmd.SilenceUsage = true
 

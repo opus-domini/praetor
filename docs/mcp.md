@@ -2,6 +2,34 @@
 
 Praetor includes a built-in [Model Context Protocol](https://modelcontextprotocol.io/) server, enabling any MCP-aware AI agent (Claude Code, Cursor, etc.) to interact with plans, state, and diagnostics programmatically.
 
+## Quickstart
+
+```bash
+# 1. Install praetor
+go install github.com/opus-domini/praetor/cmd/praetor@latest
+
+# 2. Bootstrap MCP config (also sets up agent commands)
+praetor init
+
+# 3. Or manually add to your .mcp.json:
+cat .mcp.json
+```
+
+After running `praetor init`, your `.mcp.json` will contain:
+
+```json
+{
+  "mcpServers": {
+    "praetor": {
+      "command": "praetor",
+      "args": ["mcp", "--project-dir", "/path/to/your/project"]
+    }
+  }
+}
+```
+
+Verify the integration by asking your AI agent: _"list my praetor plans"_.
+
 ## Starting the server
 
 ```bash
