@@ -183,7 +183,7 @@ Rules:
 The effective runtime configuration follows this precedence (highest wins):
 
 ```
-CLI flags > plan.settings > project config section > global config > defaults
+CLI flags > project config section > global config > plan.settings > defaults
 ```
 
 ```mermaid
@@ -192,18 +192,18 @@ config:
   theme: dark
 ---
 flowchart TD
-    A[CLI flags] --> B[plan.settings]
-    B --> C[project config section]
-    C --> D[global config]
+    A[CLI flags] --> B[project config section]
+    B --> C[global config]
+    C --> D[plan.settings]
     D --> E[built-in defaults]
 ```
 
 This means:
 
 1. Explicit CLI flags always win.
-2. Plan-level settings (`settings.agents`, `settings.execution_policy`) override config.
-3. Project section `[projects."<path>"]` overrides global.
-4. Global config section overrides built-in defaults.
+2. Project section `[projects."<path>"]` overrides global config.
+3. Global config section values are applied before plan loading.
+4. Plan-level settings (`settings.agents`, `settings.execution_policy`) only apply for fields not already set by CLI or config (checked via `*Set bool` fields).
 5. Built-in defaults are the final fallback.
 
 ## Example configurations
