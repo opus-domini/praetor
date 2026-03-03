@@ -43,6 +43,10 @@ build: check-go ## Build CLI binary
 	mkdir -p build
 	$(GOCMD) build -o build/praetor ./cmd/praetor
 
+.PHONY: install
+install: check-go ## Build and install praetor to GOPATH/bin
+	$(GOCMD) install ./cmd/praetor
+
 .PHONY: run
 run: check-go ## Run CLI locally (pass args with ARGS='...')
 	$(GOCMD) run ./cmd/praetor $(ARGS)
