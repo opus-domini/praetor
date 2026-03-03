@@ -122,8 +122,8 @@ Rules:
 
 | Key | Type | Default | Description |
 |---|---|---|---|
-| `executor` | string | `codex` | Default executor agent: claude, codex, copilot, gemini, kimi, opencode, openrouter, or ollama |
-| `reviewer` | string | `claude` | Default reviewer agent: claude, codex, copilot, gemini, kimi, opencode, openrouter, ollama, or none |
+| `executor` | string | `codex` | Default executor agent: claude, codex, copilot, gemini, kimi, lmstudio, opencode, openrouter, or ollama |
+| `reviewer` | string | `claude` | Default reviewer agent: claude, codex, copilot, gemini, kimi, lmstudio, opencode, openrouter, ollama, or none |
 | `planner` | string | `claude` | Planner agent for macro-planning |
 
 ### Limits
@@ -166,6 +166,9 @@ Rules:
 | `openrouter-api-key-env` | string | `OPENROUTER_API_KEY` | Environment variable containing OpenRouter API key |
 | `ollama-url` | string | `http://127.0.0.1:11434` | Ollama base URL for REST requests |
 | `ollama-model` | string | `llama3` | Default Ollama model |
+| `lmstudio-url` | string | `http://localhost:1234` | LM Studio base URL for REST requests |
+| `lmstudio-model` | string | _(empty)_ | Default LM Studio model |
+| `lmstudio-api-key-env` | string | `LMSTUDIO_API_KEY` | Environment variable for LM Studio API key (optional) |
 
 ### Fallback
 
@@ -235,6 +238,9 @@ fallback-on-auth = "ollama"
 # Ollama local setup
 ollama-url = "http://127.0.0.1:11434"
 ollama-model = "llama3"
+
+# LM Studio local setup
+lmstudio-url = "http://localhost:1234"
 
 # Project: use Claude as executor, run lint after each task
 [projects."/home/hugo/my-app"]

@@ -14,6 +14,7 @@ Providers supported by the unified agent abstraction:
 - `copilot` (CLI)
 - `gemini` (CLI)
 - `kimi` (CLI)
+- `lmstudio` (REST)
 - `opencode` (CLI)
 - `openrouter` (REST)
 - `ollama` (REST)

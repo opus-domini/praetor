@@ -6,7 +6,7 @@
 
 # Praetor Documentation
 
-`praetor` is a Go CLI that orchestrates AI agent providers through a single execution surface. It drives 8 agents (Claude, Codex, Copilot, Gemini, Kimi, OpenCode, OpenRouter, and Ollama) through CLI and REST transports, coordinated by an executor/reviewer pipeline with:
+`praetor` is a Go CLI that orchestrates AI agent providers through a single execution surface. It drives 9 agents (Claude, Codex, Copilot, Gemini, Kimi, LM Studio, OpenCode, OpenRouter, and Ollama) through CLI and REST transports, coordinated by an executor/reviewer pipeline with:
 
 - **Automatic fallback** — error-classified failover to alternate agents
 - **Middleware pipeline** — composable logging and metrics around every invocation
@@ -31,6 +31,7 @@
 - [Copilot](providers/copilot.md) — GitHub Copilot CLI adapter
 - [Gemini](providers/gemini.md) — Gemini CLI with PTY streaming
 - [Kimi](providers/kimi.md) — Kimi CLI with stdin/PTY delivery
+- [LM Studio](providers/lmstudio.md) — local OpenAI-compatible REST API, optional auth
 - [OpenCode](providers/opencode.md) — OpenCode run --quiet adapter
 - [OpenRouter](providers/openrouter.md) — OpenAI-compatible Chat Completions REST API, 300+ models
 - [Ollama](providers/ollama.md) — local REST API for open-source models

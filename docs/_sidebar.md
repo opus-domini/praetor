@@ -11,6 +11,7 @@
   - [Copilot](providers/copilot.md)
   - [Gemini](providers/gemini.md)
   - [Kimi](providers/kimi.md)
+  - [LM Studio](providers/lmstudio.md)
   - [OpenCode](providers/opencode.md)
   - [OpenRouter](providers/openrouter.md)
   - [Ollama](providers/ollama.md)
