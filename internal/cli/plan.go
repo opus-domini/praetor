@@ -53,6 +53,7 @@ func newPlanCreateCmd() *cobra.Command {
 	var fromStdin bool
 	var dryRun bool
 	var noAgent bool
+	var noColor bool
 	var slugOverride string
 	var plannerAgent string
 	var plannerModel string
@@ -70,7 +71,7 @@ func newPlanCreateCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cmd.SilenceUsage = true
 			out := cmd.OutOrStdout()
-			render := NewRenderer(out, false)
+			render := NewRenderer(out, noColor)
 			projectRoot, err := workspace.ResolveProjectRoot(".")
 			if err != nil {
 				return err
@@ -202,6 +203,7 @@ func newPlanCreateCmd() *cobra.Command {
 	cmd.Flags().StringVar(&plannerAgent, "planner", "", "Planner agent override (default: config planner or claude)")
 	cmd.Flags().StringVar(&plannerModel, "planner-model", "", "Planner model override")
 	cmd.Flags().BoolVar(&force, "force", false, "Overwrite an existing plan file")
+	cmd.Flags().BoolVar(&noColor, "no-color", false, "Disable colored output")
 	return cmd
 }
 
@@ -273,6 +275,8 @@ func newPlanPathCmd() *cobra.Command {
 }
 
 func newPlanStatusCmd() *cobra.Command {
+	var noColor bool
+
 	cmd := &cobra.Command{
 		Use:     "status <slug>",
 		Short:   "Show execution status for a plan",
@@ -288,14 +292,18 @@ func newPlanStatusCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return printPlanStatus(cmd, status)
+			r := NewRenderer(cmd.OutOrStdout(), noColor)
+			return printPlanStatus(r, status)
 		},
 	}
 
+	cmd.Flags().BoolVar(&noColor, "no-color", false, "Disable colored output")
 	return cmd
 }
 
 func newPlanListCmd() *cobra.Command {
+	var noColor bool
+
 	cmd := &cobra.Command{
 		Use:     "list",
 		Short:   "List tracked plans for current project",
@@ -312,47 +320,29 @@ func newPlanListCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+
+			r := NewRenderer(cmd.OutOrStdout(), noColor)
 			if len(statuses) == 0 {
-				_, err := fmt.Fprintf(cmd.OutOrStdout(), "No plans found in %s\n", store.PlansDir())
-				return err
+				r.Info(fmt.Sprintf("No plans found in %s", store.PlansDir()))
+				return nil
 			}
 
-			if _, err := fmt.Fprintf(cmd.OutOrStdout(), "%-30s %5s %5s %5s %5s  %s\n", "Plan", "Done", "Fail", "Left", "Total", "Status"); err != nil {
-				return err
-			}
-			if _, err := fmt.Fprintf(cmd.OutOrStdout(), "%-30s %5s %5s %5s %5s  %s\n", "----", "----", "----", "----", "-----", "------"); err != nil {
-				return err
-			}
-
+			r.Dim(fmt.Sprintf("  %-30s %5s %5s %5s %5s  %s", "Plan", "Done", "Fail", "Left", "Total", "Status"))
 			for _, status := range statuses {
-				label := "in_progress"
-				if status.Outcome != "" {
-					label = string(status.Outcome)
-				}
-				if status.Active == 0 && status.Failed == 0 {
-					label = "completed"
-				} else if status.Active == 0 && status.Failed > 0 {
-					label = "failed"
-				}
-				if status.Running {
-					label = "running"
-				}
-				if status.StateFile == "" {
-					label = "not_started"
-				}
-				if _, err := fmt.Fprintf(cmd.OutOrStdout(), "%-30s %5d %5d %5d %5d  %s\n", status.PlanSlug, status.Done, status.Failed, status.Active, status.Total, label); err != nil {
-					return err
-				}
+				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  %-30s %5d %5d %5d %5d  %s\n",
+					status.PlanSlug, status.Done, status.Failed, status.Active, status.Total, planStatusLabel(status))
 			}
 			return nil
 		},
 	}
 
+	cmd.Flags().BoolVar(&noColor, "no-color", false, "Disable colored output")
 	return cmd
 }
 
 func newPlanResetCmd() *cobra.Command {
 	var force bool
+	var noColor bool
 
 	cmd := &cobra.Command{
 		Use:     "reset <slug>",
@@ -380,20 +370,25 @@ func newPlanResetCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+
+			r := NewRenderer(cmd.OutOrStdout(), noColor)
 			if removed == 0 {
-				_, err = fmt.Fprintf(cmd.OutOrStdout(), "Nothing to reset for: %s\n", slug)
-				return err
+				r.Info(fmt.Sprintf("Nothing to reset for: %s", slug))
+				return nil
 			}
-			_, err = fmt.Fprintf(cmd.OutOrStdout(), "Reset complete. Removed %d file(s).\n", removed)
-			return err
+			r.Success(fmt.Sprintf("Reset complete. Removed %d file(s).", removed))
+			return nil
 		},
 	}
 
 	cmd.Flags().BoolVar(&force, "force", false, "Force reset even if a running lock exists")
+	cmd.Flags().BoolVar(&noColor, "no-color", false, "Disable colored output")
 	return cmd
 }
 
 func newPlanResumeCmd() *cobra.Command {
+	var noColor bool
+
 	cmd := &cobra.Command{
 		Use:     "resume <slug>",
 		Short:   "Restore the latest local snapshot state for a plan",
@@ -422,17 +417,15 @@ func newPlanResumeCmd() *cobra.Command {
 				return fmt.Errorf("persist resumed state: %w", err)
 			}
 
-			if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Resumed from: %s\n", snapshotPath); err != nil {
-				return err
-			}
-			if _, err := fmt.Fprintf(cmd.OutOrStdout(), "State updated: %s\n", store.StateFile(slug)); err != nil {
-				return err
-			}
-			_, err = fmt.Fprintf(cmd.OutOrStdout(), "Progress: %d/%d done\n", snapshot.State.DoneCount(), len(snapshot.State.Tasks))
-			return err
+			r := NewRenderer(cmd.OutOrStdout(), noColor)
+			r.Success(fmt.Sprintf("Resumed from: %s", snapshotPath))
+			r.KV("State:", store.StateFile(slug))
+			r.KV("Progress:", fmt.Sprintf("%d/%d tasks done", snapshot.State.DoneCount(), len(snapshot.State.Tasks)))
+			return nil
 		},
 	}
 
+	cmd.Flags().BoolVar(&noColor, "no-color", false, "Disable colored output")
 	return cmd
 }
 
@@ -1048,84 +1041,68 @@ func openEditor(path string) error {
 	return cmd.Run()
 }
 
-func printPlanStatus(cmd *cobra.Command, status domain.PlanStatus) error {
-	if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Plan:     %s\n", status.PlanSlug); err != nil {
-		return err
-	}
+func printPlanStatus(r *Renderer, status domain.PlanStatus) error {
+	r.KV("Plan:", status.PlanSlug)
 	if status.StateFile == "" {
-		if _, err := fmt.Fprintln(cmd.OutOrStdout(), "State:    not started"); err != nil {
-			return err
-		}
-		if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Tasks:    %d (all pending)\n", status.Total); err != nil {
-			return err
-		}
+		r.KV("State:", "not started")
+		r.KV("Tasks:", fmt.Sprintf("%d (all pending)", status.Total))
 		return nil
 	}
 
-	if _, err := fmt.Fprintf(cmd.OutOrStdout(), "State:    %s\n", status.StateFile); err != nil {
-		return err
-	}
-	if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Updated:  %s\n", fallback(status.UpdatedAt, "-")); err != nil {
-		return err
-	}
-	if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Progress: %d/%d tasks done\n", status.Done, status.Total); err != nil {
-		return err
-	}
+	r.KV("State:", status.StateFile)
+	r.KV("Updated:", fallback(status.UpdatedAt, "-"))
+	r.KV("Progress:", fmt.Sprintf("%d/%d tasks done", status.Done, status.Total))
 	if status.Outcome != "" {
 		outcome := string(status.Outcome)
 		if status.Outcome == domain.RunSuccess {
-			outcome = "success ✓"
+			outcome = "success"
 		}
 		if status.Outcome == domain.RunPartial {
 			outcome = fmt.Sprintf("partial (%d failed)", status.Failed)
 		}
-		if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Outcome:  %s\n", outcome); err != nil {
-			return err
-		}
+		r.KV("Outcome:", outcome)
 	}
 	if status.Failed > 0 {
-		if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Failed:   %d\n", status.Failed); err != nil {
-			return err
-		}
+		r.KV("Failed:", fmt.Sprintf("%d", status.Failed))
 	}
-	stateLabel := "in progress"
-	if status.Active == 0 && status.Failed == 0 {
-		stateLabel = "completed"
-	} else if status.Active == 0 && status.Failed > 0 {
-		stateLabel = "failed"
-	}
-	if status.Running {
-		stateLabel = "running"
-	}
-	if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Status:   %s\n", stateLabel); err != nil {
-		return err
-	}
+	r.KV("Status:", planStatusLabel(status))
 
 	if len(status.Tasks) > 0 {
-		if _, err := fmt.Fprintln(cmd.OutOrStdout(), ""); err != nil {
-			return err
-		}
+		r.Blank()
 		for _, task := range status.Tasks {
-			mark := taskStatusMark(task.Status)
-			if _, err := fmt.Fprintf(cmd.OutOrStdout(), "  [%s] %s: %s\n", mark, task.ID, task.Title); err != nil {
-				return err
-			}
+			r.CheckItem(taskVariant(task.Status), task.ID, task.Title)
 		}
 	}
 	return nil
 }
 
-func taskStatusMark(status domain.TaskStatus) string {
+func taskVariant(status domain.TaskStatus) string {
 	switch status {
 	case domain.TaskDone:
-		return "x"
+		return "done"
 	case domain.TaskFailed:
-		return "!"
+		return "fail"
 	case domain.TaskExecuting, domain.TaskReviewing:
-		return ">"
+		return "active"
 	default:
-		return " "
+		return "pending"
 	}
+}
+
+func planStatusLabel(status domain.PlanStatus) string {
+	if status.StateFile == "" {
+		return "not started"
+	}
+	if status.Running {
+		return "running"
+	}
+	if status.Active == 0 && status.Failed == 0 {
+		return "completed"
+	}
+	if status.Active == 0 && status.Failed > 0 {
+		return "failed"
+	}
+	return "in progress"
 }
 
 func fallback(value, defaultValue string) string {

@@ -31,6 +31,7 @@ func newExecCmd() *cobra.Command {
 	var lmstudioKeyEnv string
 	var timeout time.Duration
 	var quiet bool
+	var noColor bool
 
 	cmd := &cobra.Command{
 		Use:   "exec [prompt]",
@@ -108,7 +109,7 @@ Pass the prompt as an argument or pipe it via stdin.`,
 			}
 
 			if !quiet {
-				r := NewRenderer(stdout, false)
+				r := NewRenderer(stdout, noColor)
 				r.Dim(formatExecMeta(provider, response.Model, response.DurationS, response.CostUSD))
 			}
 			return nil
@@ -131,6 +132,7 @@ Pass the prompt as an argument or pipe it via stdin.`,
 	cmd.Flags().StringVar(&lmstudioKeyEnv, "lmstudio-api-key-env", "LMSTUDIO_API_KEY", "Environment variable containing LM Studio API key (optional)")
 	cmd.Flags().DurationVar(&timeout, "timeout", 0, "Timeout (e.g. 30s, 5m)")
 	cmd.Flags().BoolVarP(&quiet, "quiet", "q", false, "Print only the agent output (no metadata)")
+	cmd.Flags().BoolVar(&noColor, "no-color", false, "Disable colored output")
 	return cmd
 }
 

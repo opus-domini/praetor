@@ -166,7 +166,7 @@ func newConfigEditCmd() *cobra.Command {
 				return errors.New("cannot determine config file path")
 			}
 			if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
-				r := NewRenderer(cmd.ErrOrStderr(), false)
+				r := NewRenderer(cmd.OutOrStdout(), false)
 				r.Warn("Config file not found. Run 'praetor config init' to create one.")
 				return nil
 			}

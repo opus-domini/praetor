@@ -247,7 +247,7 @@ func (r *Runner) bootstrapRun(ctx context.Context, render domain.RenderSink, slu
 		}
 		render.KV("Objective:", normalized.Objective)
 		render.KV("Planner:", string(normalized.PlannerAgent))
-		render.Warn(fmt.Sprintf("Plan generated from objective and saved to %s", planFile))
+		render.Info(fmt.Sprintf("Plan generated from objective and saved to %s", planFile))
 	}
 
 	plan, err := domain.LoadPlan(planFile)
@@ -288,7 +288,7 @@ func (r *Runner) bootstrapRun(ctx context.Context, render domain.RenderSink, slu
 		if err := store.WriteState(slug, run.state); err != nil {
 			return run, lock, cleanupRuntime, fmt.Errorf("persist recovered state: %w", err)
 		}
-		render.Warn(fmt.Sprintf("Recovered state from local snapshot: %s", path))
+		render.Info(fmt.Sprintf("Recovered state from local snapshot: %s", path))
 	}
 	if run.state.ActiveCount() > 0 {
 		if run.state.Outcome != "" {
@@ -370,7 +370,7 @@ func (r *Runner) bootstrapRun(ctx context.Context, render domain.RenderSink, slu
 		render.KV("Context:", filepath.Base(manifest.Path))
 	}
 	if sm, ok := runtime.(domain.SessionManager); ok {
-		render.KV("tmux:", sm.SessionName())
+		render.KV("Tmux:", sm.SessionName())
 	}
 	render.KV("Run:", run.runID)
 

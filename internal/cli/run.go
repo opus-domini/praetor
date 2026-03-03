@@ -264,10 +264,7 @@ isolation protects the main branch from partial changes.`,
 				return newExitError(exitCodeForOutcome(stats.Outcome), err)
 			}
 
-			_, err = fmt.Fprintf(cmd.OutOrStdout(), "State saved at: %s\n", stats.StateFile)
-			if err != nil {
-				return err
-			}
+			render.Dim(fmt.Sprintf("  State saved at: %s", stats.StateFile))
 			if code := exitCodeForOutcome(stats.Outcome); code != 0 {
 				return newExitError(code, fmt.Errorf("run outcome: %s", stats.Outcome))
 			}

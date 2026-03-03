@@ -95,7 +95,7 @@ func TestPlanResumeRestoresLatestSnapshot(t *testing.T) {
 	if !strings.Contains(out, "Resumed from:") {
 		t.Fatalf("expected resume output, got: %s", out)
 	}
-	if !strings.Contains(out, "Progress: 1/1 done") {
+	if !strings.Contains(out, "1/1 tasks done") {
 		t.Fatalf("expected progress output, got: %s", out)
 	}
 

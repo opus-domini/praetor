@@ -36,8 +36,7 @@ The command is idempotent — running it again updates everything safely.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cmd.SilenceUsage = true
 
-			w := cmd.OutOrStdout()
-			r := NewRenderer(w, noColor)
+			r := NewRenderer(cmd.OutOrStdout(), noColor)
 
 			projectRoot, err := workspace.ResolveProjectRoot("")
 			if err != nil {
@@ -48,24 +47,19 @@ The command is idempotent — running it again updates everything safely.`,
 			}
 
 			// Banner.
-			_, _ = fmt.Fprintf(w, "\n  %sPraetor%s — Installing into %s%s%s\n",
-				r.c("1;36"), r.reset(),
-				r.c("1"), projectRoot, r.reset())
+			r.Banner("Praetor", fmt.Sprintf("Installing into %s", projectRoot))
 
-			// --- Scan phase -----------------------------------------------------------
-			_, _ = fmt.Fprintf(w, "\n  %sScanning project...%s\n", r.c("2"), r.reset())
+			// --- Scan phase ---
+			r.Dim("  Scanning project...")
 
 			agents := detectAgents(projectRoot)
 			mcpTargets := detectMCPTargets(projectRoot)
 
 			if len(agents) > 0 {
-				_, _ = fmt.Fprintf(w, "  %s✔%s Detected agents: %s%s%s\n",
-					r.c("32"), r.reset(),
-					r.c("1"), strings.Join(agents, ", "), r.reset())
+				r.Info(fmt.Sprintf("Detected agents: %s", strings.Join(agents, ", ")))
 			} else {
-				_, _ = fmt.Fprintf(w, "  %s•%s No agent directories found, using defaults: %s%s%s\n",
-					r.c("2"), r.reset(),
-					r.c("1"), strings.Join(commands.SupportedAgents, ", "), r.reset())
+				r.Info(fmt.Sprintf("No agent directories found, using defaults: %s",
+					strings.Join(commands.SupportedAgents, ", ")))
 				agents = commands.SupportedAgents
 			}
 
@@ -77,35 +71,24 @@ The command is idempotent — running it again updates everything safely.`,
 				}
 				mcpLabels[i] = rel
 			}
-			_, _ = fmt.Fprintf(w, "  %s✔%s MCP targets: %s%s%s\n",
-				r.c("32"), r.reset(),
-				r.c("1"), strings.Join(mcpLabels, ", "), r.reset())
+			r.Info(fmt.Sprintf("MCP targets: %s", strings.Join(mcpLabels, ", ")))
 
-			// --- Step 1: Agent commands -----------------------------------------------
-			stepNum := 1
-			totalSteps := 2
-			_, _ = fmt.Fprintf(w, "\n  %s[%d/%d]%s %sAgent Commands%s\n",
-				r.c("1;34"), stepNum, totalSteps, r.reset(),
-				r.c("1"), r.reset())
+			// --- Step 1: Agent commands ---
+			r.Step(1, 2, "Agent Commands")
 
 			if err := commands.Sync(projectRoot, agents); err != nil {
 				return fmt.Errorf("sync commands: %w", err)
 			}
 
-			cmdNames := commands.DefaultCommands()
-			_, _ = fmt.Fprintf(w, "  %s✔%s Generated %d commands in .agents/commands/\n",
-				r.c("32"), r.reset(), len(cmdNames))
+			cmdCount := len(commands.DefaultCommands())
+			r.Success(fmt.Sprintf("Generated %d commands in .agents/commands/", cmdCount))
 
 			for _, a := range agents {
-				_, _ = fmt.Fprintf(w, "    %s.%s/commands/%s → .agents/commands/\n",
-					r.c("2"), a, r.reset())
+				r.Hint(fmt.Sprintf(".%s/commands/ -> .agents/commands/", a))
 			}
 
-			// --- Step 2: MCP server ---------------------------------------------------
-			stepNum++
-			_, _ = fmt.Fprintf(w, "\n  %s[%d/%d]%s %sMCP Server%s\n",
-				r.c("1;34"), stepNum, totalSteps, r.reset(),
-				r.c("1"), r.reset())
+			// --- Step 2: MCP server ---
+			r.Step(2, 2, "MCP Server")
 
 			entry := mcpServerEntry{
 				Command: "praetor",
@@ -119,30 +102,24 @@ The command is idempotent — running it again updates everything safely.`,
 					rel = target
 				}
 				if err != nil {
-					_, _ = fmt.Fprintf(w, "  %s✗%s %s — %v\n",
-						r.c("33"), r.reset(), rel, err)
+					r.Warn(fmt.Sprintf("%s — %v", rel, err))
 					continue
 				}
 				if wrote {
-					_, _ = fmt.Fprintf(w, "  %s✔%s Registered in %s\n",
-						r.c("32"), r.reset(), rel)
+					r.Success(fmt.Sprintf("Registered in %s", rel))
 				} else {
-					_, _ = fmt.Fprintf(w, "  %s•%s Already registered in %s\n",
-						r.c("2"), r.reset(), rel)
+					r.Info(fmt.Sprintf("Already registered in %s", rel))
 				}
 			}
 
-			// --- Done -----------------------------------------------------------------
-			_, _ = fmt.Fprintf(w, "\n  %s✔ Praetor is ready!%s\n", r.c("1;32"), r.reset())
+			// --- Done ---
+			r.Done("Praetor is ready!")
 
-			_, _ = fmt.Fprintf(w, "\n  %sNext steps:%s\n", r.c("2"), r.reset())
-			_, _ = fmt.Fprintf(w, "    praetor doctor              %sCheck agent availability%s\n",
-				r.c("2"), r.reset())
-			_, _ = fmt.Fprintf(w, "    praetor plan create %s\"...\"%s   %sCreate your first plan%s\n",
-				r.c("2"), r.reset(), r.c("2"), r.reset())
-			_, _ = fmt.Fprintf(w, "    praetor plan run %s<slug>%s     %sExecute the plan%s\n",
-				r.c("2"), r.reset(), r.c("2"), r.reset())
-			_, _ = fmt.Fprintln(w)
+			r.Dim("  Next steps:")
+			r.Hint("praetor doctor              Check agent availability")
+			r.Hint("praetor plan create \"...\"   Create your first plan")
+			r.Hint("praetor plan run <slug>     Execute the plan")
+			r.Blank()
 
 			return nil
 		},
