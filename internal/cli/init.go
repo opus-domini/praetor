@@ -5,127 +5,164 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/opus-domini/praetor/internal/commands"
-	"github.com/opus-domini/praetor/internal/config"
 	"github.com/opus-domini/praetor/internal/workspace"
 	"github.com/spf13/cobra"
 )
 
 func newInitCmd() *cobra.Command {
-	var agents []string
 	var noColor bool
 	var force bool
 
 	cmd := &cobra.Command{
 		Use:   "init",
-		Short: "Bootstrap a project for AI agent integration",
-		Long: `Initialize a project with praetor configuration, shared agent commands,
-and MCP server registration in one step.
+		Short: "Install praetor into the current project",
+		Long: `Set up praetor in an existing project by detecting installed AI agents
+and registering shared commands and MCP server configuration.
 
-This command is idempotent — running it again updates commands and MCP config
-without overwriting the global config file (unless --force is used).
+This command scans the project for agent directories (.claude/, .cursor/,
+.codex/) and editor configs (.vscode/), then:
 
-Steps performed:
-  1. Create a config file if none exists (praetor config init)
-  2. Generate shared agent commands and symlinks (praetor commands sync)
-  3. Write .mcp.json for detected MCP clients (Claude Code, Cursor, VS Code)`,
-		Example: `  # Bootstrap everything with defaults
-  praetor init
+  1. Generates shared agent commands in .agents/commands/
+  2. Creates symlinks from each detected agent directory
+  3. Registers the MCP server in .mcp.json (and .vscode/mcp.json if applicable)
 
-  # Bootstrap for specific agents only
-  praetor init --agents claude,cursor
-
-  # Overwrite existing config file
+The command is idempotent — running it again updates everything safely.`,
+		Example: `  praetor init
   praetor init --force`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cmd.SilenceUsage = true
 
-			r := NewRenderer(cmd.OutOrStdout(), noColor)
+			w := cmd.OutOrStdout()
+			r := NewRenderer(w, noColor)
 
 			projectRoot, err := workspace.ResolveProjectRoot("")
 			if err != nil {
-				// Fall back to cwd if not in a git repo.
 				projectRoot, err = os.Getwd()
 				if err != nil {
 					return fmt.Errorf("resolve project root: %w", err)
 				}
 			}
 
-			// Step 1: Config init.
-			initConfig(r, force)
+			// Banner.
+			_, _ = fmt.Fprintf(w, "\n  %sPraetor%s — Installing into %s%s%s\n",
+				r.c("1;36"), r.reset(),
+				r.c("1"), projectRoot, r.reset())
 
-			// Step 2: Commands sync.
-			if err := initCommands(r, projectRoot, agents); err != nil {
-				return err
+			// --- Scan phase -----------------------------------------------------------
+			_, _ = fmt.Fprintf(w, "\n  %sScanning project...%s\n", r.c("2"), r.reset())
+
+			agents := detectAgents(projectRoot)
+			mcpTargets := detectMCPTargets(projectRoot)
+
+			if len(agents) > 0 {
+				_, _ = fmt.Fprintf(w, "  %s✔%s Detected agents: %s%s%s\n",
+					r.c("32"), r.reset(),
+					r.c("1"), strings.Join(agents, ", "), r.reset())
+			} else {
+				_, _ = fmt.Fprintf(w, "  %s•%s No agent directories found, using defaults: %s%s%s\n",
+					r.c("2"), r.reset(),
+					r.c("1"), strings.Join(commands.SupportedAgents, ", "), r.reset())
+				agents = commands.SupportedAgents
 			}
 
-			// Step 3: MCP config.
-			if err := initMCP(r, projectRoot, force); err != nil {
-				return err
+			mcpLabels := make([]string, len(mcpTargets))
+			for i, t := range mcpTargets {
+				rel, _ := filepath.Rel(projectRoot, t)
+				if rel == "" {
+					rel = t
+				}
+				mcpLabels[i] = rel
+			}
+			_, _ = fmt.Fprintf(w, "  %s✔%s MCP targets: %s%s%s\n",
+				r.c("32"), r.reset(),
+				r.c("1"), strings.Join(mcpLabels, ", "), r.reset())
+
+			// --- Step 1: Agent commands -----------------------------------------------
+			stepNum := 1
+			totalSteps := 2
+			_, _ = fmt.Fprintf(w, "\n  %s[%d/%d]%s %sAgent Commands%s\n",
+				r.c("1;34"), stepNum, totalSteps, r.reset(),
+				r.c("1"), r.reset())
+
+			if err := commands.Sync(projectRoot, agents); err != nil {
+				return fmt.Errorf("sync commands: %w", err)
 			}
 
-			// Next steps.
-			_, _ = fmt.Fprintln(cmd.OutOrStdout())
-			r.Header("Next steps")
-			r.Info("Edit config:    praetor config edit")
-			r.Info("Check agents:   praetor doctor")
-			r.Info("Create a plan:  praetor plan create \"your objective\"")
-			r.Info("Run the plan:   praetor plan run <slug>")
+			cmdNames := commands.DefaultCommands()
+			_, _ = fmt.Fprintf(w, "  %s✔%s Generated %d commands in .agents/commands/\n",
+				r.c("32"), r.reset(), len(cmdNames))
+
+			for _, a := range agents {
+				_, _ = fmt.Fprintf(w, "    %s.%s/commands/%s → .agents/commands/\n",
+					r.c("2"), a, r.reset())
+			}
+
+			// --- Step 2: MCP server ---------------------------------------------------
+			stepNum++
+			_, _ = fmt.Fprintf(w, "\n  %s[%d/%d]%s %sMCP Server%s\n",
+				r.c("1;34"), stepNum, totalSteps, r.reset(),
+				r.c("1"), r.reset())
+
+			entry := mcpServerEntry{
+				Command: "praetor",
+				Args:    []string{"mcp", "--project-dir", projectRoot},
+			}
+
+			for _, target := range mcpTargets {
+				wrote, err := writeMCPConfig(target, entry, force)
+				rel, _ := filepath.Rel(projectRoot, target)
+				if rel == "" {
+					rel = target
+				}
+				if err != nil {
+					_, _ = fmt.Fprintf(w, "  %s✗%s %s — %v\n",
+						r.c("33"), r.reset(), rel, err)
+					continue
+				}
+				if wrote {
+					_, _ = fmt.Fprintf(w, "  %s✔%s Registered in %s\n",
+						r.c("32"), r.reset(), rel)
+				} else {
+					_, _ = fmt.Fprintf(w, "  %s•%s Already registered in %s\n",
+						r.c("2"), r.reset(), rel)
+				}
+			}
+
+			// --- Done -----------------------------------------------------------------
+			_, _ = fmt.Fprintf(w, "\n  %s✔ Praetor is ready!%s\n", r.c("1;32"), r.reset())
+
+			_, _ = fmt.Fprintf(w, "\n  %sNext steps:%s\n", r.c("2"), r.reset())
+			_, _ = fmt.Fprintf(w, "    praetor doctor              %sCheck agent availability%s\n",
+				r.c("2"), r.reset())
+			_, _ = fmt.Fprintf(w, "    praetor plan create %s\"...\"%s   %sCreate your first plan%s\n",
+				r.c("2"), r.reset(), r.c("2"), r.reset())
+			_, _ = fmt.Fprintf(w, "    praetor plan run %s<slug>%s     %sExecute the plan%s\n",
+				r.c("2"), r.reset(), r.c("2"), r.reset())
+			_, _ = fmt.Fprintln(w)
 
 			return nil
 		},
 	}
 
-	cmd.Flags().StringSliceVar(&agents, "agents", commands.SupportedAgents, "Agent directories to create symlinks for")
 	cmd.Flags().BoolVar(&noColor, "no-color", false, "Disable colored output")
-	cmd.Flags().BoolVar(&force, "force", false, "Overwrite existing config and MCP files")
+	cmd.Flags().BoolVar(&force, "force", false, "Overwrite existing MCP config entries")
 	return cmd
 }
 
-func initConfig(r *Renderer, force bool) {
-	cfgPath := config.Path()
-	if cfgPath == "" {
-		r.Warn("Cannot determine config file path, skipping config init")
-		return
-	}
-
-	if !force {
-		if _, err := os.Stat(cfgPath); err == nil {
-			r.Info(fmt.Sprintf("Config exists: %s (use --force to overwrite)", cfgPath))
-			return
+// detectAgents finds agent directories (.claude/, .cursor/, .codex/) present in the project.
+func detectAgents(projectRoot string) []string {
+	var found []string
+	for _, name := range commands.SupportedAgents {
+		dir := filepath.Join(projectRoot, "."+name)
+		if info, err := os.Stat(dir); err == nil && info.IsDir() {
+			found = append(found, name)
 		}
 	}
-
-	if err := os.MkdirAll(filepath.Dir(cfgPath), 0o755); err != nil {
-		r.Warn(fmt.Sprintf("Create config directory: %v", err))
-		return
-	}
-
-	if err := os.WriteFile(cfgPath, []byte(config.Template()), 0o644); err != nil {
-		r.Warn(fmt.Sprintf("Write config file: %v", err))
-		return
-	}
-
-	r.Success(fmt.Sprintf("Config created: %s", cfgPath))
-}
-
-func initCommands(r *Renderer, projectRoot string, agents []string) error {
-	if err := commands.Sync(projectRoot, agents); err != nil {
-		return fmt.Errorf("commands sync: %w", err)
-	}
-
-	r.Success("Commands synced to .agents/commands/")
-
-	active := agents
-	if len(active) == 0 {
-		active = commands.SupportedAgents
-	}
-	for _, a := range active {
-		r.Info(fmt.Sprintf(".%s/commands/ -> .agents/commands/", a))
-	}
-	return nil
+	return found
 }
 
 // mcpConfig represents the .mcp.json structure.
@@ -136,34 +173,6 @@ type mcpConfig struct {
 type mcpServerEntry struct {
 	Command string   `json:"command"`
 	Args    []string `json:"args"`
-}
-
-func initMCP(r *Renderer, projectRoot string, force bool) error {
-	entry := mcpServerEntry{
-		Command: "praetor",
-		Args:    []string{"mcp", "--project-dir", projectRoot},
-	}
-
-	targets := detectMCPTargets(projectRoot)
-	if len(targets) == 0 {
-		// Default: write .mcp.json at project root.
-		targets = []string{filepath.Join(projectRoot, ".mcp.json")}
-	}
-
-	for _, target := range targets {
-		if err := writeMCPConfig(target, entry, force); err != nil {
-			r.Warn(fmt.Sprintf("Write %s: %v", target, err))
-			continue
-		}
-
-		rel, _ := filepath.Rel(projectRoot, target)
-		if rel == "" {
-			rel = target
-		}
-		r.Success(fmt.Sprintf("MCP config written to %s", rel))
-	}
-
-	return nil
 }
 
 // detectMCPTargets finds MCP config locations based on present editor directories.
@@ -183,15 +192,15 @@ func detectMCPTargets(projectRoot string) []string {
 }
 
 // writeMCPConfig writes or merges an MCP server entry into the target file.
-func writeMCPConfig(target string, entry mcpServerEntry, force bool) error {
+// Returns true if the file was written, false if praetor was already registered.
+func writeMCPConfig(target string, entry mcpServerEntry, force bool) (bool, error) {
 	var cfg mcpConfig
 
-	// Try to load existing config.
 	data, err := os.ReadFile(target)
 	if err == nil {
 		if err := json.Unmarshal(data, &cfg); err != nil {
 			if !force {
-				return fmt.Errorf("parse existing file: %w (use --force to overwrite)", err)
+				return false, fmt.Errorf("parse existing file: %w (use --force to overwrite)", err)
 			}
 			cfg = mcpConfig{}
 		}
@@ -201,22 +210,21 @@ func writeMCPConfig(target string, entry mcpServerEntry, force bool) error {
 		cfg.MCPServers = make(map[string]mcpServerEntry)
 	}
 
-	// Don't overwrite an existing praetor entry unless --force.
 	if _, exists := cfg.MCPServers["praetor"]; exists && !force {
-		return nil // already configured
+		return false, nil
 	}
 
 	cfg.MCPServers["praetor"] = entry
 
 	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-		return err
+		return false, err
 	}
 
 	out, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
-		return err
+		return false, err
 	}
 	out = append(out, '\n')
 
-	return os.WriteFile(target, out, 0o644)
+	return true, os.WriteFile(target, out, 0o644)
 }

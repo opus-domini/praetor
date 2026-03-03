@@ -91,10 +91,10 @@ make build
 ./build/praetor --help
 ```
 
-### Bootstrap a project
+### Install praetor into your project
 
 ```bash
-# Initialize config, agent commands, and MCP server registration
+# Detects agents, registers MCP server, creates shared commands
 praetor init
 ```
 
@@ -178,7 +178,7 @@ praetor exec --provider openrouter --model anthropic/claude-sonnet-4 "Review thi
 | `praetor config path` | Print resolved config file path |
 | `praetor config edit` | Open config in `$EDITOR` |
 | `praetor config init` | Create a commented template config file |
-| `praetor init` | Bootstrap project (config + commands + MCP) |
+| `praetor init` | Install praetor into the current project |
 | `praetor commands sync` | Generate shared agent commands and symlinks |
 | `praetor commands list` | List available shared commands |
 | `praetor mcp` | Start MCP server over stdio |
