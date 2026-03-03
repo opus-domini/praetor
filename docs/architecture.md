@@ -52,29 +52,29 @@ config:
 ---
 flowchart TD
     subgraph entrypoints ["Entry Points"]
-        CLI["cli\nCobra commands"]
-        MCP["mcp\nJSON-RPC 2.0 server"]
+        CLI["cli<br>Cobra commands"]
+        MCP["mcp<br>JSON-RPC 2.0 server"]
     end
 
     subgraph core ["Core"]
-        DOMAIN["domain\nTypes, parsing, transitions, validation"]
+        DOMAIN["domain<br>Types, parsing, transitions, validation"]
     end
 
     subgraph orchestration ["Orchestration"]
-        PIPELINE["orchestration/pipeline\nPlan / Execute / Review loop"]
-        FSM["orchestration/fsm\nGeneric state-function engine"]
+        PIPELINE["orchestration/pipeline<br>Plan / Execute / Review loop"]
+        FSM["orchestration/fsm<br>Generic state-function engine"]
     end
 
     subgraph agent ["Agent Layer"]
-        RUNTIME["agent/runtime\nRegistry + fallback"]
-        ADAPTERS["agent/adapters\nCLI and REST providers"]
-        MIDDLEWARE["agent/middleware\nLogging, metrics, events"]
+        RUNTIME["agent/runtime<br>Registry + fallback"]
+        ADAPTERS["agent/adapters<br>CLI and REST providers"]
+        MIDDLEWARE["agent/middleware<br>Logging, metrics, events"]
     end
 
     subgraph support ["Support"]
-        PROMPT["prompt\nTemplate engine"]
-        STATE["state\nStores, locks, checkpoints"]
-        CONFIG["config\nLoading + normalization"]
+        PROMPT["prompt<br>Template engine"]
+        STATE["state<br>Stores, locks, checkpoints"]
+        CONFIG["config<br>Loading + normalization"]
     end
 
     CLI --> PIPELINE
@@ -179,19 +179,19 @@ flowchart TD
     REQ["AgentRequest"] --> METRICS
 
     subgraph stack ["Middleware Stack (outermost first)"]
-        METRICS["Metrics middleware\nlatency, token counts"]
-        LOGGING["Logging middleware\nstructured request/response logs"]
-        FALLBACK["FallbackRuntime\nerror classification + fallback mappings"]
-        REGISTRY["RegistryRuntime\nprovider lookup"]
+        METRICS["Metrics middleware<br>latency, token counts"]
+        LOGGING["Logging middleware<br>structured request/response logs"]
+        FALLBACK["FallbackRuntime<br>error classification + fallback mappings"]
+        REGISTRY["RegistryRuntime<br>provider lookup"]
     end
 
     METRICS --> LOGGING
     LOGGING --> FALLBACK
     FALLBACK --> REGISTRY
 
-    REGISTRY --> ADAPTER["Resolved Adapter\nclaude / codex / gemini / ..."]
+    REGISTRY --> ADAPTER["Resolved Adapter<br>claude / codex / gemini / ..."]
 
-    FALLBACK -- "transient / rate_limit\n/ auth error" --> ALT["Fallback Adapter"]
+    FALLBACK -- "transient / rate_limit<br>/ auth error" --> ALT["Fallback Adapter"]
 
     ADAPTER --> RESP["AgentResponse"]
     ALT --> RESP
@@ -213,14 +213,14 @@ config:
 ---
 flowchart TD
     subgraph layer1 ["Layer 1: Embedded Defaults"]
-        EMBED["go:embed templates/*.tmpl\nCompiled into binary"]
+        EMBED["go:embed templates/*.tmpl<br>Compiled into binary"]
     end
 
     subgraph layer2 ["Layer 2: Project Overlay"]
-        OVERLAY[".praetor/prompts/*.tmpl\nOptional per-project overrides"]
+        OVERLAY[".praetor/prompts/*.tmpl<br>Optional per-project overrides"]
     end
 
-    EMBED --> MERGE["Template Engine\nOverlay replaces matching embedded templates"]
+    EMBED --> MERGE["Template Engine<br>Overlay replaces matching embedded templates"]
     OVERLAY --> MERGE
 
     MERGE --> EXEC_SYS["executor.system.tmpl"]
