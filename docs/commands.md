@@ -5,13 +5,10 @@ Praetor generates shared agent commands that work across multiple AI coding agen
 ## Quickstart
 
 ```bash
-# One-step setup (also generates MCP config):
 praetor init
-
-# Or sync commands only:
-praetor commands sync
-praetor commands list
 ```
+
+`praetor init` detects installed agents, generates shared commands, and registers the MCP server — all in one step.
 
 ## How it works
 
@@ -33,25 +30,6 @@ Commands are stored centrally in `.agents/commands/` with symlinks from each age
 
 Updating one file updates all agents simultaneously. No drift between agent behaviors.
 
-## CLI workflows
-
-### Generate commands
-
-```bash
-praetor commands sync
-praetor commands sync --agents claude,cursor
-```
-
-This creates `.agents/commands/` with 5 built-in commands and creates relative symlinks from each agent's directory.
-
-### List commands
-
-```bash
-praetor commands list
-```
-
-Shows all available shared commands found in `.agents/commands/`.
-
 ## Built-in commands
 
 | Command | Description | Allowed Tools |
@@ -66,7 +44,7 @@ Each command declares which tools the agent is allowed to use, implementing a **
 
 ## Customization
 
-Override any command by editing its `.md` file in `.agents/commands/`. Running `praetor commands sync` again will overwrite the file, so maintain customizations manually.
+Override any command by editing its `.md` file in `.agents/commands/`. Running `praetor init` again will regenerate the files, so maintain customizations manually.
 
 ## Tool whitelisting pattern
 
@@ -85,7 +63,7 @@ This ensures:
 
 ## Supported agents
 
-By default, symlinks are created for: `claude`, `cursor`, `codex`. Use the `--agents` flag to customize.
+`praetor init` detects agent directories (`.claude/`, `.cursor/`, `.codex/`) present in the project. When none are found, it creates symlinks for all supported agents by default.
 
 ## Implementation
 

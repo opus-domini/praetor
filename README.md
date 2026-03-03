@@ -179,8 +179,6 @@ praetor exec --provider openrouter --model anthropic/claude-sonnet-4 "Review thi
 | `praetor config edit` | Open config in `$EDITOR` |
 | `praetor config init` | Create a commented template config file |
 | `praetor init` | Install praetor into the current project |
-| `praetor commands sync` | Generate shared agent commands and symlinks |
-| `praetor commands list` | List available shared commands |
 | `praetor mcp` | Start MCP server over stdio |
 
 ## Configuration and State
