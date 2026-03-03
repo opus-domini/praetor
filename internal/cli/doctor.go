@@ -194,5 +194,8 @@ func buildRESTEndpoints(cfg config.Config) map[agent.ID]string {
 	if cfg.OllamaURL != "" {
 		endpoints[agent.Ollama] = cfg.OllamaURL
 	}
+	if cfg.LMStudioURL != "" {
+		endpoints[agent.LMStudio] = cfg.LMStudioURL
+	}
 	return endpoints
 }

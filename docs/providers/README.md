@@ -45,6 +45,7 @@ type Capabilities struct {
 | [OpenCode](opencode.md) | CLI | `opencode` | no | no | `go install github.com/opencode-ai/opencode@latest` |
 | [OpenRouter](openrouter.md) | REST | `https://openrouter.ai/api/v1` | no | yes | API key via `OPENROUTER_API_KEY` |
 | [Ollama](ollama.md) | REST | `http://127.0.0.1:11434` | no | no | https://ollama.com |
+| [LM Studio](lmstudio.md) | REST | `http://localhost:1234` | no | yes | https://lmstudio.ai |
 
 ## Runner abstraction
 
@@ -87,6 +88,7 @@ registry.Register(adapters.NewKimiCLI(kimiBin, runner))
 registry.Register(adapters.NewOpenCodeCLI(opencodeBin, runner))
 registry.Register(adapters.NewOpenRouterREST(url, model, keyEnv, httpClient))
 registry.Register(adapters.NewOllamaREST(url, model, httpClient))
+registry.Register(adapters.NewLMStudioREST(url, model, keyEnv, httpClient))
 ```
 
 Binary paths, URLs, and models are all configurable via CLI flags or config file.

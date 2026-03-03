@@ -18,6 +18,7 @@ const (
 	AgentOpenCode   Agent = "opencode"
 	AgentOpenRouter Agent = "openrouter"
 	AgentOllama     Agent = "ollama"
+	AgentLMStudio   Agent = "lmstudio"
 	AgentNone       Agent = "none"
 )
 
@@ -31,6 +32,7 @@ var ValidExecutors = map[Agent]struct{}{
 	AgentOpenCode:   {},
 	AgentOpenRouter: {},
 	AgentOllama:     {},
+	AgentLMStudio:   {},
 }
 
 // ValidReviewers lists agents that may review tasks.
@@ -43,6 +45,7 @@ var ValidReviewers = map[Agent]struct{}{
 	AgentOpenCode:   {},
 	AgentOpenRouter: {},
 	AgentOllama:     {},
+	AgentLMStudio:   {},
 	AgentNone:       {},
 }
 
@@ -259,6 +262,9 @@ type RunnerOptions struct {
 	OpenRouterKeyEnv    string
 	OllamaURL           string
 	OllamaModel         string
+	LMStudioURL         string
+	LMStudioModel       string
+	LMStudioKeyEnv      string
 	TMUXSession         string
 	Verbose             bool
 	NoColor             bool
@@ -327,6 +333,9 @@ type AgentRequest struct {
 	OpenRouterURL    string
 	OpenRouterModel  string
 	OpenRouterKeyEnv string
+	LMStudioURL      string
+	LMStudioModel    string
+	LMStudioKeyEnv   string
 	Verbose          bool
 }
 

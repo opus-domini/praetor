@@ -170,11 +170,11 @@
             "properties": {
               "executor": {
                 "type": "string",
-                "enum": ["claude", "codex", "copilot", "gemini", "kimi", "opencode", "openrouter", "ollama"]
+                "enum": ["claude", "codex", "copilot", "gemini", "kimi", "opencode", "openrouter", "ollama", "lmstudio"]
               },
               "reviewer": {
                 "type": "string",
-                "enum": ["claude", "codex", "copilot", "gemini", "kimi", "opencode", "openrouter", "ollama", "none"]
+                "enum": ["claude", "codex", "copilot", "gemini", "kimi", "opencode", "openrouter", "ollama", "lmstudio", "none"]
               },
               "executor_model": {
                 "type": "string"
@@ -196,7 +196,7 @@
       "properties": {
         "agent": {
           "type": "string",
-          "enum": ["claude", "codex", "copilot", "gemini", "kimi", "opencode", "openrouter", "ollama"]
+          "enum": ["claude", "codex", "copilot", "gemini", "kimi", "opencode", "openrouter", "ollama", "lmstudio"]
         },
         "model": {"type": "string"}
       }
@@ -208,7 +208,7 @@
       "properties": {
         "agent": {
           "type": "string",
-          "enum": ["claude", "codex", "copilot", "gemini", "kimi", "opencode", "openrouter", "ollama"]
+          "enum": ["claude", "codex", "copilot", "gemini", "kimi", "opencode", "openrouter", "ollama", "lmstudio"]
         },
         "model": {"type": "string"}
       }
@@ -220,7 +220,7 @@
       "properties": {
         "agent": {
           "type": "string",
-          "enum": ["claude", "codex", "copilot", "gemini", "kimi", "opencode", "openrouter", "ollama", "none"]
+          "enum": ["claude", "codex", "copilot", "gemini", "kimi", "opencode", "openrouter", "ollama", "lmstudio", "none"]
         },
         "model": {"type": "string"}
       }

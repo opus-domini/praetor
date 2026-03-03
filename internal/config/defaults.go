@@ -76,6 +76,9 @@ var Registry = []KeyMeta{
 	{Key: "openrouter-api-key-env", DefaultValue: "OPENROUTER_API_KEY", Type: KeyTypeString, Category: CategoryREST, Description: "Env var containing OpenRouter API key"},
 	{Key: "ollama-url", DefaultValue: "http://127.0.0.1:11434", Type: KeyTypeString, Category: CategoryREST, Description: "Ollama base URL for REST requests"},
 	{Key: "ollama-model", DefaultValue: "llama3", Type: KeyTypeString, Category: CategoryREST, Description: "Default Ollama model"},
+	{Key: "lmstudio-url", DefaultValue: "http://localhost:1234", Type: KeyTypeString, Category: CategoryREST, Description: "LM Studio base URL for REST requests"},
+	{Key: "lmstudio-model", DefaultValue: "", Type: KeyTypeString, Category: CategoryREST, Description: "Default LM Studio model"},
+	{Key: "lmstudio-api-key-env", DefaultValue: "LMSTUDIO_API_KEY", Type: KeyTypeString, Category: CategoryREST, Description: "Env var containing LM Studio API key (optional)"},
 
 	// Fallback
 	{Key: "fallback", DefaultValue: "", Type: KeyTypeString, Category: CategoryFallback, Description: "Per-agent fallback (primary -> fallback)"},

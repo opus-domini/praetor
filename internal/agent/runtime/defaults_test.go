@@ -25,7 +25,7 @@ func TestDefaultRegistryIncludesBuiltins(t *testing.T) {
 	})
 
 	got := registry.IDs()
-	want := []agent.ID{agent.Claude, agent.Codex, agent.Copilot, agent.Gemini, agent.Kimi, agent.Ollama, agent.OpenCode, agent.OpenRouter}
+	want := []agent.ID{agent.Claude, agent.Codex, agent.Copilot, agent.Gemini, agent.Kimi, agent.LMStudio, agent.Ollama, agent.OpenCode, agent.OpenRouter}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("unexpected default registry IDs:\n got: %v\nwant: %v", got, want)
 	}

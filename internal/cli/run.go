@@ -40,6 +40,9 @@ func newRunCmd() *cobra.Command {
 	var openrouterKeyEnv string
 	var ollamaURL string
 	var ollamaModel string
+	var lmstudioURL string
+	var lmstudioModel string
+	var lmstudioKeyEnv string
 	var tmuxSession string
 	var runnerMode string
 	var noColor bool
@@ -155,6 +158,15 @@ isolation protects the main branch from partial changes.`,
 			if !f.Changed("ollama-model") && cfg.OllamaModel != "" {
 				ollamaModel = cfg.OllamaModel
 			}
+			if !f.Changed("lmstudio-url") && cfg.LMStudioURL != "" {
+				lmstudioURL = cfg.LMStudioURL
+			}
+			if !f.Changed("lmstudio-model") && cfg.LMStudioModel != "" {
+				lmstudioModel = cfg.LMStudioModel
+			}
+			if !f.Changed("lmstudio-api-key-env") && cfg.LMStudioKeyEnv != "" {
+				lmstudioKeyEnv = cfg.LMStudioKeyEnv
+			}
 			if !f.Changed("hook") && cfg.Hook != "" {
 				postTaskHook = cfg.Hook
 			}
@@ -227,6 +239,9 @@ isolation protects the main branch from partial changes.`,
 				OpenRouterKeyEnv:    openrouterKeyEnv,
 				OllamaURL:           ollamaURL,
 				OllamaModel:         ollamaModel,
+				LMStudioURL:         lmstudioURL,
+				LMStudioModel:       lmstudioModel,
+				LMStudioKeyEnv:      lmstudioKeyEnv,
 				TMUXSession:         tmuxSession,
 				NoColor:             noColor,
 				Isolation:           domain.IsolationMode(strings.ToLower(strings.TrimSpace(isolation))),
@@ -260,9 +275,9 @@ isolation protects the main branch from partial changes.`,
 		},
 	}
 
-	cmd.Flags().StringVar(&executor, "executor", string(domain.AgentCodex), "Default executor agent: claude, codex, copilot, gemini, kimi, opencode, openrouter, or ollama")
-	cmd.Flags().StringVar(&reviewer, "reviewer", string(domain.AgentClaude), "Default reviewer agent: claude, codex, copilot, gemini, kimi, opencode, openrouter, ollama, or none")
-	cmd.Flags().StringVar(&planner, "planner", string(domain.AgentClaude), "Planner agent when --objective is provided: claude, codex, copilot, gemini, kimi, opencode, openrouter, or ollama")
+	cmd.Flags().StringVar(&executor, "executor", string(domain.AgentCodex), "Default executor agent: claude, codex, copilot, gemini, kimi, opencode, openrouter, ollama, or lmstudio")
+	cmd.Flags().StringVar(&reviewer, "reviewer", string(domain.AgentClaude), "Default reviewer agent: claude, codex, copilot, gemini, kimi, opencode, openrouter, ollama, lmstudio, or none")
+	cmd.Flags().StringVar(&planner, "planner", string(domain.AgentClaude), "Planner agent when --objective is provided: claude, codex, copilot, gemini, kimi, opencode, openrouter, ollama, or lmstudio")
 	cmd.Flags().StringVar(&executorModel, "executor-model", "", "Model override for executor agent")
 	cmd.Flags().StringVar(&reviewerModel, "reviewer-model", "", "Model override for reviewer agent")
 	cmd.Flags().StringVar(&plannerModel, "planner-model", "", "Model override for planner agent")
@@ -284,6 +299,9 @@ isolation protects the main branch from partial changes.`,
 	cmd.Flags().StringVar(&openrouterKeyEnv, "openrouter-api-key-env", "OPENROUTER_API_KEY", "Environment variable containing OpenRouter API key")
 	cmd.Flags().StringVar(&ollamaURL, "ollama-url", "http://127.0.0.1:11434", "Ollama base URL for REST requests")
 	cmd.Flags().StringVar(&ollamaModel, "ollama-model", "llama3", "Default Ollama model for planner/executor/reviewer when agent=ollama")
+	cmd.Flags().StringVar(&lmstudioURL, "lmstudio-url", "http://localhost:1234", "LM Studio base URL for REST requests")
+	cmd.Flags().StringVar(&lmstudioModel, "lmstudio-model", "", "Default LM Studio model for planner/executor/reviewer when agent=lmstudio")
+	cmd.Flags().StringVar(&lmstudioKeyEnv, "lmstudio-api-key-env", "LMSTUDIO_API_KEY", "Environment variable containing LM Studio API key (optional)")
 	cmd.Flags().StringVar(&tmuxSession, "tmux-session", "", "tmux session name (default: praetor-<project-hash>)")
 	cmd.Flags().StringVar(&runnerMode, "runner", string(domain.RunnerTMUX), "Runner mode: tmux, pty, or direct")
 	cmd.Flags().StringVar(&workdir, "workdir", ".", "Working directory for agents")

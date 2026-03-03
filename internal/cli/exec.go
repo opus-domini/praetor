@@ -27,6 +27,8 @@ func newExecCmd() *cobra.Command {
 	var openrouterModel string
 	var openrouterKeyEnv string
 	var ollamaURL string
+	var lmstudioURL string
+	var lmstudioKeyEnv string
 	var timeout time.Duration
 	var quiet bool
 
@@ -72,11 +74,14 @@ Pass the prompt as an argument or pipe it via stdin.`,
 				OpenRouterKeyEnv: openrouterKeyEnv,
 				OllamaURL:        ollamaURL,
 				OllamaModel:      model,
+				LMStudioURL:      lmstudioURL,
+				LMStudioModel:    model,
+				LMStudioKeyEnv:   lmstudioKeyEnv,
 			})
 			agentID := agent.Normalize(provider)
 			providerAgent, ok := registry.Get(agentID)
 			if !ok {
-				return fmt.Errorf("unknown provider %q (supported: claude, codex, copilot, gemini, kimi, opencode, openrouter, ollama)", provider)
+				return fmt.Errorf("unknown provider %q (supported: claude, codex, copilot, gemini, kimi, opencode, openrouter, ollama, lmstudio)", provider)
 			}
 
 			ctx := cmd.Context()
@@ -110,7 +115,7 @@ Pass the prompt as an argument or pipe it via stdin.`,
 		},
 	}
 
-	cmd.Flags().StringVar(&provider, "provider", string(agent.Codex), "Provider: claude, codex, copilot, gemini, kimi, opencode, openrouter, or ollama")
+	cmd.Flags().StringVar(&provider, "provider", string(agent.Codex), "Provider: claude, codex, copilot, gemini, kimi, opencode, openrouter, ollama, or lmstudio")
 	cmd.Flags().StringVar(&model, "model", "", "Model name (provider-specific)")
 	cmd.Flags().StringVar(&codexBin, "codex-bin", "codex", "Codex binary path or name")
 	cmd.Flags().StringVar(&claudeBin, "claude-bin", "claude", "Claude binary path or name")
@@ -122,6 +127,8 @@ Pass the prompt as an argument or pipe it via stdin.`,
 	cmd.Flags().StringVar(&openrouterModel, "openrouter-model", "openai/gpt-4o-mini", "Default OpenRouter model when --provider openrouter and --model is empty")
 	cmd.Flags().StringVar(&openrouterKeyEnv, "openrouter-api-key-env", "OPENROUTER_API_KEY", "Environment variable containing OpenRouter API key")
 	cmd.Flags().StringVar(&ollamaURL, "ollama-url", "http://127.0.0.1:11434", "Ollama base URL when --provider ollama")
+	cmd.Flags().StringVar(&lmstudioURL, "lmstudio-url", "http://localhost:1234", "LM Studio base URL when --provider lmstudio")
+	cmd.Flags().StringVar(&lmstudioKeyEnv, "lmstudio-api-key-env", "LMSTUDIO_API_KEY", "Environment variable containing LM Studio API key (optional)")
 	cmd.Flags().DurationVar(&timeout, "timeout", 0, "Timeout (e.g. 30s, 5m)")
 	cmd.Flags().BoolVarP(&quiet, "quiet", "q", false, "Print only the agent output (no metadata)")
 	return cmd

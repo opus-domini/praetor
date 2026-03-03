@@ -633,6 +633,12 @@ func normalizeRunnerOptions(options domain.RunnerOptions) (domain.RunnerOptions,
 	if strings.TrimSpace(normalized.OllamaModel) == "" {
 		normalized.OllamaModel = "llama3"
 	}
+	if strings.TrimSpace(normalized.LMStudioURL) == "" {
+		normalized.LMStudioURL = "http://localhost:1234"
+	}
+	if strings.TrimSpace(normalized.LMStudioKeyEnv) == "" {
+		normalized.LMStudioKeyEnv = "LMSTUDIO_API_KEY"
+	}
 	if normalized.BudgetExecute <= 0 {
 		normalized.BudgetExecute = 120000
 	}
@@ -1104,6 +1110,9 @@ func restEndpointsFromOpts(opts domain.RunnerOptions) map[agent.ID]string {
 	}
 	if opts.OllamaURL != "" {
 		m[agent.Ollama] = opts.OllamaURL
+	}
+	if opts.LMStudioURL != "" {
+		m[agent.LMStudio] = opts.LMStudioURL
 	}
 	return m
 }

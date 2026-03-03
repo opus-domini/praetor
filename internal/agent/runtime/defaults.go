@@ -21,6 +21,9 @@ type DefaultOptions struct {
 	OpenRouterKeyEnv string
 	OllamaURL        string
 	OllamaModel      string
+	LMStudioURL      string
+	LMStudioModel    string
+	LMStudioKeyEnv   string
 	Runner           runner.CommandRunner
 	HTTPClient       *http.Client
 }
@@ -41,5 +44,6 @@ func NewDefaultRegistry(opts DefaultOptions) *agent.Registry {
 	_ = registry.Register(adapters.NewOpenCodeCLI(opts.OpenCodeBin, commandRunner))
 	_ = registry.Register(adapters.NewOpenRouterREST(opts.OpenRouterURL, opts.OpenRouterModel, opts.OpenRouterKeyEnv, opts.HTTPClient))
 	_ = registry.Register(adapters.NewOllamaREST(opts.OllamaURL, opts.OllamaModel, opts.HTTPClient))
+	_ = registry.Register(adapters.NewLMStudioREST(opts.LMStudioURL, opts.LMStudioModel, opts.LMStudioKeyEnv, opts.HTTPClient))
 	return registry
 }

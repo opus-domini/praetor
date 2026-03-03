@@ -208,15 +208,15 @@ Return only valid JSON matching this schema:
   "settings": {
     "agents": {
       "executor": {
-        "agent": "claude|codex|copilot|gemini|kimi|opencode|openrouter|ollama",
+        "agent": "claude|codex|copilot|gemini|kimi|opencode|openrouter|ollama|lmstudio",
         "model": "string optional"
       },
       "reviewer": {
-        "agent": "claude|codex|copilot|gemini|kimi|opencode|openrouter|ollama|none",
+        "agent": "claude|codex|copilot|gemini|kimi|opencode|openrouter|ollama|lmstudio|none",
         "model": "string optional"
       },
       "planner": {
-        "agent": "claude|codex|copilot|gemini|kimi|opencode|openrouter|ollama",
+        "agent": "claude|codex|copilot|gemini|kimi|opencode|openrouter|ollama|lmstudio",
         "model": "string optional"
       }
     }

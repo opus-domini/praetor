@@ -816,6 +816,9 @@ func createPlanWithAgent(ctx context.Context, req planCreateAgentRequest) (domai
 		OpenRouterKeyEnv: firstNonEmpty(req.Config.OpenRouterKeyEnv, "OPENROUTER_API_KEY"),
 		OllamaURL:        firstNonEmpty(req.Config.OllamaURL, "http://127.0.0.1:11434"),
 		OllamaModel:      firstNonEmpty(req.Config.OllamaModel, "llama3"),
+		LMStudioURL:      firstNonEmpty(req.Config.LMStudioURL, "http://localhost:1234"),
+		LMStudioModel:    req.Config.LMStudioModel,
+		LMStudioKeyEnv:   firstNonEmpty(req.Config.LMStudioKeyEnv, "LMSTUDIO_API_KEY"),
 	}, pipeline.RuntimeDeps{})
 	if err != nil {
 		return domain.Plan{}, fmt.Errorf("build planner runtime: %w", err)

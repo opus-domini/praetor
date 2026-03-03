@@ -236,6 +236,9 @@ func iterationStateExecuteTask(ctx context.Context, machine *iterationMachine) (
 		OpenRouterURL:    run.options.OpenRouterURL,
 		OpenRouterModel:  run.options.OpenRouterModel,
 		OpenRouterKeyEnv: run.options.OpenRouterKeyEnv,
+		LMStudioURL:      run.options.LMStudioURL,
+		LMStudioModel:    run.options.LMStudioModel,
+		LMStudioKeyEnv:   run.options.LMStudioKeyEnv,
 		Verbose:          run.options.Verbose,
 	})
 	machine.executorOutput = execResult.Output
@@ -418,6 +421,9 @@ func iterationStateReviewTask(ctx context.Context, machine *iterationMachine) (i
 		OpenRouterURL:    run.options.OpenRouterURL,
 		OpenRouterModel:  run.options.OpenRouterModel,
 		OpenRouterKeyEnv: run.options.OpenRouterKeyEnv,
+		LMStudioURL:      run.options.LMStudioURL,
+		LMStudioModel:    run.options.LMStudioModel,
+		LMStudioKeyEnv:   run.options.LMStudioKeyEnv,
 		Verbose:          run.options.Verbose,
 	})
 	reviewerOutput := reviewResult.Output

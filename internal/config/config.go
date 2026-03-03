@@ -37,6 +37,9 @@ type Config struct {
 	OpenRouterKeyEnv    string
 	OllamaURL           string
 	OllamaModel         string
+	LMStudioURL         string
+	LMStudioModel       string
+	LMStudioKeyEnv      string
 	Hook                string
 	Timeout             string
 	Fallback            string
@@ -216,6 +219,15 @@ func configFromMap(section string, m map[string]string) (Config, error) {
 	if v, ok := m["ollama-model"]; ok {
 		cfg.OllamaModel = strings.TrimSpace(v)
 	}
+	if v, ok := m["lmstudio-url"]; ok {
+		cfg.LMStudioURL = strings.TrimSpace(v)
+	}
+	if v, ok := m["lmstudio-model"]; ok {
+		cfg.LMStudioModel = strings.TrimSpace(v)
+	}
+	if v, ok := m["lmstudio-api-key-env"]; ok {
+		cfg.LMStudioKeyEnv = strings.TrimSpace(v)
+	}
 	if v, ok := m["hook"]; ok {
 		cfg.Hook = strings.TrimSpace(v)
 	}
@@ -311,6 +323,15 @@ func mergeConfig(global, project Config) Config {
 	}
 	if project.OllamaModel != "" {
 		merged.OllamaModel = project.OllamaModel
+	}
+	if project.LMStudioURL != "" {
+		merged.LMStudioURL = project.LMStudioURL
+	}
+	if project.LMStudioModel != "" {
+		merged.LMStudioModel = project.LMStudioModel
+	}
+	if project.LMStudioKeyEnv != "" {
+		merged.LMStudioKeyEnv = project.LMStudioKeyEnv
 	}
 	if project.Hook != "" {
 		merged.Hook = project.Hook

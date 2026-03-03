@@ -19,6 +19,7 @@ const (
 	OpenCode   ID = "opencode"
 	OpenRouter ID = "openrouter"
 	Ollama     ID = "ollama"
+	LMStudio   ID = "lmstudio"
 )
 
 // Transport identifies how the backend is reached.

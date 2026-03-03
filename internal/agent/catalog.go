@@ -167,6 +167,25 @@ var catalog = map[ID]CatalogEntry{
 			StructuredOutput: false,
 		},
 	},
+	LMStudio: {
+		ID:             LMStudio,
+		DisplayName:    "LM Studio",
+		Transport:      TransportREST,
+		Binary:         "",
+		PackageManager: "",
+		PackageName:    "",
+		InstallHint:    "See https://lmstudio.ai for installation",
+		HealthEndpoint: "/v1/models",
+		DefaultBaseURL: "http://localhost:1234",
+		Capabilities: Capabilities{
+			Transport:        TransportREST,
+			SupportsPlan:     true,
+			SupportsExecute:  true,
+			SupportsReview:   true,
+			RequiresTTY:      false,
+			StructuredOutput: true,
+		},
+	},
 }
 
 // CatalogEntry returns the metadata for a specific agent.

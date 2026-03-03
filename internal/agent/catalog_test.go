@@ -7,7 +7,7 @@ import (
 func TestAllCatalogEntriesCoversAllKnownAgents(t *testing.T) {
 	t.Parallel()
 
-	expected := []ID{Claude, Codex, Copilot, Gemini, Kimi, Ollama, OpenCode, OpenRouter}
+	expected := []ID{Claude, Codex, Copilot, Gemini, Kimi, LMStudio, Ollama, OpenCode, OpenRouter}
 	entries := AllCatalogEntries()
 
 	if len(entries) != len(expected) {
@@ -99,7 +99,7 @@ func TestRESTCatalogEntriesOnlyContainsREST(t *testing.T) {
 		}
 	}
 
-	expectedREST := map[ID]bool{Ollama: true, OpenRouter: true}
+	expectedREST := map[ID]bool{Ollama: true, OpenRouter: true, LMStudio: true}
 	for _, entry := range entries {
 		if !expectedREST[entry.ID] {
 			t.Errorf("unexpected REST entry: %s", entry.ID)
@@ -114,8 +114,8 @@ func TestCatalogIDsSorted(t *testing.T) {
 	t.Parallel()
 
 	ids := CatalogIDs()
-	if len(ids) != 8 {
-		t.Fatalf("expected 8 catalog IDs, got %d", len(ids))
+	if len(ids) != 9 {
+		t.Fatalf("expected 9 catalog IDs, got %d", len(ids))
 	}
 	for i := 1; i < len(ids); i++ {
 		if ids[i] <= ids[i-1] {
@@ -182,7 +182,7 @@ func TestCatalogCapabilitiesMatchTransport(t *testing.T) {
 func TestIsSupportedUsesTheCatalog(t *testing.T) {
 	t.Parallel()
 
-	supported := []ID{Claude, Codex, Copilot, Gemini, Kimi, OpenCode, OpenRouter, Ollama}
+	supported := []ID{Claude, Codex, Copilot, Gemini, Kimi, OpenCode, OpenRouter, Ollama, LMStudio}
 	for _, id := range supported {
 		if !IsSupported(id) {
 			t.Errorf("expected %q to be supported", id)
