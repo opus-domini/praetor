@@ -9,10 +9,12 @@ import (
 )
 
 // BuildExecutorSystemPrompt constructs the system prompt for the executor agent.
-func BuildExecutorSystemPrompt(engine *prompt.Engine, projectContext string) string {
+func BuildExecutorSystemPrompt(engine *prompt.Engine, projectContext string, allowedTools, deniedTools []string) string {
 	if engine != nil {
 		if s, err := engine.Render("executor.system", prompt.ExecutorSystemData{
 			ProjectContext: projectContext,
+			AllowedTools:   allowedTools,
+			DeniedTools:    deniedTools,
 		}); err == nil {
 			return s
 		}
@@ -37,6 +39,15 @@ SUMMARY: <brief summary>
 TESTS: <commands and outcomes>
 
 If not completed, use RESULT: FAIL and explain why.`)
+	if len(allowedTools) > 0 || len(deniedTools) > 0 {
+		b.WriteString("\n\nTOOL CONSTRAINTS\n")
+		if len(allowedTools) > 0 {
+			b.WriteString("You may ONLY use these tools: " + strings.Join(allowedTools, ", ") + "\n")
+		}
+		if len(deniedTools) > 0 {
+			b.WriteString("You must NOT use these tools: " + strings.Join(deniedTools, ", ") + "\n")
+		}
+	}
 	return strings.TrimSpace(b.String())
 }
 
@@ -126,10 +137,11 @@ func BuildExecutorTaskPrompt(engine *prompt.Engine, planFile string, taskIndex i
 }
 
 // BuildReviewerSystemPrompt constructs the system prompt for the reviewer agent.
-func BuildReviewerSystemPrompt(engine *prompt.Engine, projectContext string) string {
+func BuildReviewerSystemPrompt(engine *prompt.Engine, projectContext string, standardsGate bool) string {
 	if engine != nil {
 		if s, err := engine.Render("reviewer.system", prompt.ReviewerSystemData{
-			ProjectContext: projectContext,
+			ProjectContext:       projectContext,
+			StandardsGateEnabled: standardsGate,
 		}); err == nil {
 			return s
 		}
@@ -149,6 +161,12 @@ Review principles:
 - PASS if task requirements are met.
 - FAIL if requirements were not met or output is invalid.
 - Prefer concise, actionable feedback.`)
+	if standardsGate {
+		b.WriteString("\n\nStandards validation:\n")
+		b.WriteString("- Verify changes follow project architecture and conventions.\n")
+		b.WriteString("- Check for naming patterns, file placement, and coding standards.\n")
+		b.WriteString("- FAIL if conventions are violated, even if the code is functionally correct.\n")
+	}
 	return strings.TrimSpace(b.String())
 }
 

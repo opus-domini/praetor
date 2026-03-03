@@ -3,6 +3,8 @@ package prompt
 // ExecutorSystemData holds template data for the executor system prompt.
 type ExecutorSystemData struct {
 	ProjectContext string
+	AllowedTools   []string
+	DeniedTools    []string
 }
 
 // ExecutorTaskData holds template data for the executor task prompt.
@@ -26,7 +28,8 @@ type ExecutorTaskData struct {
 
 // ReviewerSystemData holds template data for the reviewer system prompt.
 type ReviewerSystemData struct {
-	ProjectContext string
+	ProjectContext       string
+	StandardsGateEnabled bool
 }
 
 // ReviewerTaskData holds template data for the reviewer task prompt.

@@ -13,3 +13,10 @@ Review principles:
 - PASS if task requirements are met.
 - FAIL if requirements were not met or output is invalid.
 - Prefer concise, actionable feedback.
+{{- if .StandardsGateEnabled }}
+
+Standards validation:
+- Verify changes follow project architecture and conventions.
+- Check for naming patterns, file placement, and coding standards.
+- FAIL if conventions are violated, even if the code is functionally correct.
+{{- end }}

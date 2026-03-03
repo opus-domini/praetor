@@ -18,3 +18,13 @@ SUMMARY: <brief summary>
 TESTS: <commands and outcomes>
 
 If not completed, use RESULT: FAIL and explain why.
+{{- if or .AllowedTools .DeniedTools }}
+
+TOOL CONSTRAINTS
+{{- if .AllowedTools }}
+You may ONLY use these tools: {{- range $i, $v := .AllowedTools }}{{ if $i }},{{ end }} {{ $v }}{{ end }}
+{{- end }}
+{{- if .DeniedTools }}
+You must NOT use these tools: {{- range $i, $v := .DeniedTools }}{{ if $i }},{{ end }} {{ $v }}{{ end }}
+{{- end }}
+{{- end }}

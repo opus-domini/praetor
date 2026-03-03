@@ -102,11 +102,25 @@ func iterationStateSelectTask(ctx context.Context, machine *iterationMachine) (i
 		return nil, fmt.Errorf("plan is blocked by dependencies:\n- %s", strings.Join(report, "\n- "))
 	}
 
-	executor, err := resolveExecutorWithRouting(run.options.DefaultExecutor, run.availableAgents)
+	// Per-task agent override (schema v2): if the plan task declares agents, use them.
+	executorAgent := run.options.DefaultExecutor
+	reviewerAgent := run.options.DefaultReviewer
+	if index < len(run.plan.Tasks) {
+		planTask := run.plan.Tasks[index]
+		if planTask.Agents != nil {
+			if planTask.Agents.Executor != "" {
+				executorAgent = domain.NormalizeAgent(domain.Agent(planTask.Agents.Executor))
+			}
+			if planTask.Agents.Reviewer != "" {
+				reviewerAgent = domain.NormalizeAgent(domain.Agent(planTask.Agents.Reviewer))
+			}
+		}
+	}
+	executor, err := resolveExecutorWithRouting(executorAgent, run.availableAgents)
 	if err != nil {
 		return nil, fmt.Errorf("task %s: %w", task.ID, err)
 	}
-	reviewer, err := resolveReviewer(run.options.DefaultReviewer, run.options.SkipReview)
+	reviewer, err := resolveReviewer(reviewerAgent, run.options.SkipReview)
 	if err != nil {
 		return nil, fmt.Errorf("task %s: %w", task.ID, err)
 	}
@@ -169,7 +183,15 @@ func iterationStateExecuteTask(ctx context.Context, machine *iterationMachine) (
 	selected := machine.selected
 	runDir := filepath.Join(run.store.LogsDir(), machine.runID)
 
-	executorSystemPrompt := BuildExecutorSystemPrompt(run.promptEngine, run.projectContext)
+	// Resolve per-task tool constraints from the plan task.
+	var allowedTools, deniedTools []string
+	if selected.index < len(run.plan.Tasks) {
+		if c := run.plan.Tasks[selected.index].Constraints; c != nil {
+			allowedTools = c.AllowedTools
+			deniedTools = c.DeniedTools
+		}
+	}
+	executorSystemPrompt := BuildExecutorSystemPrompt(run.promptEngine, run.projectContext, allowedTools, deniedTools)
 	feedback := selected.feedback
 	truncatedSections := make([]string, 0)
 	if run.budgetManager != nil && strings.TrimSpace(feedback) != "" {
@@ -188,12 +210,19 @@ func iterationStateExecuteTask(ctx context.Context, machine *iterationMachine) (
 	_ = writeText(filepath.Join(runDir, "executor.system.txt"), executorSystemPrompt)
 	_ = writeText(filepath.Join(runDir, "executor.prompt.txt"), executorTaskPrompt)
 
+	// Per-task model override (schema v2).
+	executorModel := run.options.ExecutorModel
+	if selected.index < len(run.plan.Tasks) {
+		if a := run.plan.Tasks[selected.index].Agents; a != nil && a.ExecutorModel != "" {
+			executorModel = a.ExecutorModel
+		}
+	}
 	execResult, execErr := run.runtime.Run(ctx, domain.AgentRequest{
 		Role:             "execute",
 		Agent:            selected.executor,
 		Prompt:           executorTaskPrompt,
 		SystemPrompt:     executorSystemPrompt,
-		Model:            strings.TrimSpace(run.options.ExecutorModel),
+		Model:            strings.TrimSpace(executorModel),
 		Workdir:          machine.taskWorkdir,
 		RunDir:           runDir,
 		OutputPrefix:     "executor",
@@ -350,7 +379,9 @@ func iterationStateReviewTask(ctx context.Context, machine *iterationMachine) (i
 		truncatedSections = append(truncatedSections, truncated...)
 	}
 
-	reviewerSystemPrompt := BuildReviewerSystemPrompt(run.promptEngine, run.projectContext)
+	// Check if "standards" is among the required quality gates.
+	standardsGate := hasGate(run.plan.Quality.Required, "standards")
+	reviewerSystemPrompt := BuildReviewerSystemPrompt(run.promptEngine, run.projectContext, standardsGate)
 	reviewerTaskPrompt := BuildReviewerTaskPrompt(run.promptEngine, run.slug, selected.task, executorOutputForPrompt, machine.taskWorkdir, run.plan.Name, selected.progress, gitDiffForPrompt)
 	if err := run.appendPerformanceEntry(promptPhaseReview, reviewerTaskPrompt, truncatedSections); err != nil {
 		run.render.Warn(fmt.Sprintf("failed to write performance metric: %v", err))
@@ -361,12 +392,19 @@ func iterationStateReviewTask(ctx context.Context, machine *iterationMachine) (i
 	_ = writeText(filepath.Join(runDir, "reviewer.system.txt"), reviewerSystemPrompt)
 	_ = writeText(filepath.Join(runDir, "reviewer.prompt.txt"), reviewerTaskPrompt)
 
+	// Per-task reviewer model override (schema v2).
+	reviewerModel := run.options.ReviewerModel
+	if selected.index < len(run.plan.Tasks) {
+		if a := run.plan.Tasks[selected.index].Agents; a != nil && a.ReviewerModel != "" {
+			reviewerModel = a.ReviewerModel
+		}
+	}
 	reviewResult, reviewErr := run.runtime.Run(ctx, domain.AgentRequest{
 		Role:             "review",
 		Agent:            selected.reviewer,
 		Prompt:           reviewerTaskPrompt,
 		SystemPrompt:     reviewerSystemPrompt,
-		Model:            strings.TrimSpace(run.options.ReviewerModel),
+		Model:            strings.TrimSpace(reviewerModel),
 		Workdir:          machine.taskWorkdir,
 		RunDir:           runDir,
 		OutputPrefix:     "reviewer",
@@ -698,6 +736,15 @@ func enforceRequiredGates(run *activeRun, taskID, executorOutput string) (string
 	}
 
 	return "", false
+}
+
+func hasGate(gates []string, name string) bool {
+	for _, g := range gates {
+		if strings.EqualFold(strings.TrimSpace(g), name) {
+			return true
+		}
+	}
+	return false
 }
 
 func emitGateResultEvent(run *activeRun, taskID, gateName, status, detail string, required bool) {
