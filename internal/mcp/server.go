@@ -20,8 +20,8 @@ type Server struct {
 // NewServer creates a new MCP server for the given project directory.
 func NewServer(projectDir string) *Server {
 	s := &Server{
-		tools:     newToolRegistry(),
-		resources: newResourceRegistry(),
+		tools:      newToolRegistry(),
+		resources:  newResourceRegistry(),
 		projectDir: projectDir,
 	}
 	registerPlanTools(s)

@@ -15,18 +15,9 @@ func TestServerInitialize(t *testing.T) {
 	input := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}` + "\n"
 	var out bytes.Buffer
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	go func() {
-		_ = s.Run(ctx, strings.NewReader(input), &out)
-	}()
-
-	// Give it a moment to process.
-	for out.Len() == 0 {
-		// busy wait is fine in test
+	if err := s.Run(context.Background(), strings.NewReader(input), &out); err != nil {
+		t.Fatalf("run: %v", err)
 	}
-	cancel()
 
 	var resp jsonRPCResponse
 	if err := json.NewDecoder(&out).Decode(&resp); err != nil {
@@ -53,17 +44,9 @@ func TestServerToolsList(t *testing.T) {
 `
 	var out bytes.Buffer
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	go func() {
-		_ = s.Run(ctx, strings.NewReader(input), &out)
-	}()
-
-	// Wait for at least 2 responses.
-	for strings.Count(out.String(), "\n") < 2 {
+	if err := s.Run(context.Background(), strings.NewReader(input), &out); err != nil {
+		t.Fatalf("run: %v", err)
 	}
-	cancel()
 
 	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
 	if len(lines) < 2 {
@@ -86,16 +69,9 @@ func TestServerPing(t *testing.T) {
 	input := `{"jsonrpc":"2.0","id":1,"method":"ping"}` + "\n"
 	var out bytes.Buffer
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	go func() {
-		_ = s.Run(ctx, strings.NewReader(input), &out)
-	}()
-
-	for out.Len() == 0 {
+	if err := s.Run(context.Background(), strings.NewReader(input), &out); err != nil {
+		t.Fatalf("run: %v", err)
 	}
-	cancel()
 
 	var resp jsonRPCResponse
 	if err := json.NewDecoder(&out).Decode(&resp); err != nil {
@@ -113,16 +89,9 @@ func TestServerUnknownMethod(t *testing.T) {
 	input := `{"jsonrpc":"2.0","id":1,"method":"unknown/method"}` + "\n"
 	var out bytes.Buffer
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	go func() {
-		_ = s.Run(ctx, strings.NewReader(input), &out)
-	}()
-
-	for out.Len() == 0 {
+	if err := s.Run(context.Background(), strings.NewReader(input), &out); err != nil {
+		t.Fatalf("run: %v", err)
 	}
-	cancel()
 
 	var resp jsonRPCResponse
 	if err := json.NewDecoder(&out).Decode(&resp); err != nil {

@@ -95,4 +95,3 @@ func newCommandsListCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&noColor, "no-color", false, "Disable colored output")
 	return cmd
 }
-

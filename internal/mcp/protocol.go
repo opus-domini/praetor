@@ -22,24 +22,7 @@ type jsonRPCError struct {
 	Data    any    `json:"data,omitempty"`
 }
 
-type jsonRPCNotification struct {
-	JSONRPC string `json:"jsonrpc"`
-	Method  string `json:"method"`
-	Params  any    `json:"params,omitempty"`
-}
-
 // MCP-specific types.
-
-type initializeParams struct {
-	ProtocolVersion string         `json:"protocolVersion"`
-	Capabilities    map[string]any `json:"capabilities"`
-	ClientInfo      clientInfo     `json:"clientInfo"`
-}
-
-type clientInfo struct {
-	Name    string `json:"name"`
-	Version string `json:"version"`
-}
 
 type serverInfo struct {
 	Name    string `json:"name"`

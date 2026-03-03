@@ -54,7 +54,7 @@ func Sync(projectRoot string, agents []string) error {
 		// Remove existing symlink or directory.
 		if info, err := os.Lstat(agentDir); err == nil {
 			if info.Mode()&os.ModeSymlink != 0 {
-				os.Remove(agentDir)
+				_ = os.Remove(agentDir)
 			}
 		}
 
