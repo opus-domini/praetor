@@ -977,6 +977,8 @@ type planCreateAgentRequest struct {
 	Render         *Renderer
 }
 
+const plannerCreateMaxAttempts = 2
+
 type planFinalizeInput struct {
 	Brief        string
 	Source       string
@@ -1088,6 +1090,7 @@ func readInteractiveBrief(stdin io.Reader) (string, error) {
 }
 
 func createPlanWithAgent(ctx context.Context, req planCreateAgentRequest) (domain.Plan, error) {
+	started := time.Now()
 	runtime, err := pipeline.BuildAgentRuntimeWithDeps(domain.RunnerOptions{
 		RunnerMode:       domain.RunnerDirect,
 		CodexBin:         firstNonEmpty(req.Config.CodexBin, "codex"),
@@ -1133,8 +1136,11 @@ func createPlanWithAgent(ctx context.Context, req planCreateAgentRequest) (domai
 		CodexBin:       firstNonEmpty(req.Config.CodexBin, "codex"),
 		ClaudeBin:      firstNonEmpty(req.Config.ClaudeBin, "claude"),
 	}
-	plan, err := runPlannerWithProgress(plannerCtx, planner, planReq, req.Render)
+	plan, firstElapsed, err := runPlannerWithProgress(plannerCtx, planner, planReq, req.Render, 1, plannerCreateMaxAttempts)
 	if err == nil {
+		if req.Render != nil {
+			req.Render.Info(plannerTotalDurationMessage(time.Since(started), 1))
+		}
 		return plan, nil
 	}
 	if timeoutErr := plannerTimeoutError(err, req.PlannerTimeout); timeoutErr != nil {
@@ -1143,15 +1149,20 @@ func createPlanWithAgent(ctx context.Context, req planCreateAgentRequest) (domai
 
 	var outputErr *pipeline.PlannerOutputError
 	if errors.As(err, &outputErr) && strings.EqualFold(strings.TrimSpace(outputErr.Class), "recoverable_format") {
+		logPath, logErr := writePlannerFailureLog(req.Store.LogsDir(), outputErr.RawOutput)
 		if req.Render != nil {
-			req.Render.Warn("Planner output was not valid JSON. Retrying once with strict JSON instructions...")
+			req.Render.Warn(plannerRetryWarningMessage(1, plannerCreateMaxAttempts, firstElapsed, logPath))
+			if logErr != nil {
+				req.Render.Warn(fmt.Sprintf("Planner %s raw output could not be logged: %v", plannerAttemptTag(1, plannerCreateMaxAttempts), logErr))
+			}
 		}
 		retryReq := planReq
 		retryReq.Objective = buildPlannerRecoveryObjective(planReq.Objective, outputErr.RawOutput)
-		plan, retryErr := runPlannerWithProgress(plannerCtx, planner, retryReq, req.Render)
+		plan, _, retryErr := runPlannerWithProgress(plannerCtx, planner, retryReq, req.Render, 2, plannerCreateMaxAttempts)
 		if retryErr == nil {
 			if req.Render != nil {
-				req.Render.Info("Planner recovered on retry and returned a valid plan.")
+				req.Render.Info(fmt.Sprintf("Planner recovered on %s and returned a valid plan.", plannerAttemptTag(2, plannerCreateMaxAttempts)))
+				req.Render.Info(plannerTotalDurationMessage(time.Since(started), 2))
 			}
 			return plan, nil
 		}
@@ -1187,15 +1198,20 @@ func createPlanWithAgent(ctx context.Context, req planCreateAgentRequest) (domai
 	return domain.Plan{}, fmt.Errorf("planner failed: %w. Retry with --dry-run or --no-agent", err)
 }
 
-func runPlannerWithProgress(ctx context.Context, planner pipeline.CognitiveAgent, req pipeline.PlanRequest, render *Renderer) (domain.Plan, error) {
+func runPlannerWithProgress(ctx context.Context, planner pipeline.CognitiveAgent, req pipeline.PlanRequest, render *Renderer, attempt, totalAttempts int) (domain.Plan, time.Duration, error) {
+	started := time.Now()
+	elapsed := func() time.Duration {
+		return time.Since(started)
+	}
 	if planner == nil {
-		return domain.Plan{}, errors.New("planner is required")
+		return domain.Plan{}, elapsed(), errors.New("planner is required")
 	}
 	if render == nil {
-		return planner.Plan(ctx, req)
+		plan, err := planner.Plan(ctx, req)
+		return plan, elapsed(), err
 	}
 
-	started := time.Now()
+	render.Info(plannerStartMessage(attempt, totalAttempts))
 	done := make(chan struct{})
 	firstUpdate := time.NewTimer(20 * time.Second)
 	ticker := time.NewTicker(40 * time.Second)
@@ -1211,23 +1227,22 @@ func runPlannerWithProgress(ctx context.Context, planner pipeline.CognitiveAgent
 			case <-ctx.Done():
 				return
 			case <-firstUpdate.C:
-				elapsed := time.Since(started).Round(time.Second)
+				elapsed := elapsed()
 				if firstHint {
-					render.Info(fmt.Sprintf("Planner still running... elapsed %s (Ctrl+C to cancel)", elapsed))
+					render.Info(plannerProgressMessage(attempt, totalAttempts, elapsed, true))
 					firstHint = false
 					continue
 				}
-				render.Info(fmt.Sprintf("Planner still running... elapsed %s", elapsed))
+				render.Info(plannerProgressMessage(attempt, totalAttempts, elapsed, false))
 			case <-ticker.C:
-				elapsed := time.Since(started).Round(time.Second)
-				render.Info(fmt.Sprintf("Planner still running... elapsed %s", elapsed))
+				render.Info(plannerProgressMessage(attempt, totalAttempts, elapsed(), false))
 			}
 		}
 	}()
 
 	plan, err := planner.Plan(ctx, req)
 	close(done)
-	return plan, err
+	return plan, elapsed(), err
 }
 
 func plannerTimeoutError(err error, timeout time.Duration) error {
@@ -1238,6 +1253,50 @@ func plannerTimeoutError(err error, timeout time.Duration) error {
 		return fmt.Errorf("planner timed out after %s; retry with --planner-timeout <duration>, simplify the brief, or use --no-agent", timeout)
 	}
 	return nil
+}
+
+func plannerAttemptTag(attempt, totalAttempts int) string {
+	if totalAttempts <= 1 {
+		return fmt.Sprintf("attempt %d", attempt)
+	}
+	return fmt.Sprintf("attempt %d/%d", attempt, totalAttempts)
+}
+
+func plannerStartMessage(attempt, totalAttempts int) string {
+	return fmt.Sprintf("Starting planner %s...", plannerAttemptTag(attempt, totalAttempts))
+}
+
+func plannerProgressMessage(attempt, totalAttempts int, elapsed time.Duration, allowCancel bool) string {
+	message := fmt.Sprintf("Planner %s still running... elapsed %s", plannerAttemptTag(attempt, totalAttempts), plannerDurationString(elapsed))
+	if allowCancel {
+		message += " (Ctrl+C to cancel)"
+	}
+	return message
+}
+
+func plannerRetryWarningMessage(attempt, totalAttempts int, elapsed time.Duration, logPath string) string {
+	message := fmt.Sprintf("Planner %s returned output without a valid JSON object after %s.", plannerAttemptTag(attempt, totalAttempts), plannerDurationString(elapsed))
+	if strings.TrimSpace(logPath) != "" {
+		message += fmt.Sprintf(" Raw output logged at %s.", logPath)
+	}
+	message += " Retrying once with strict JSON instructions..."
+	return message
+}
+
+func plannerTotalDurationMessage(totalElapsed time.Duration, attemptsUsed int) string {
+	label := "attempt"
+	if attemptsUsed != 1 {
+		label = "attempts"
+	}
+	return fmt.Sprintf("Planner total duration: %s across %d %s.", plannerDurationString(totalElapsed), attemptsUsed, label)
+}
+
+func plannerDurationString(elapsed time.Duration) string {
+	elapsed = elapsed.Round(time.Second)
+	if elapsed < 0 {
+		return "0s"
+	}
+	return elapsed.String()
 }
 
 func buildPlannerRecoveryObjective(objective, previousOutput string) string {
@@ -1285,7 +1344,11 @@ func writePlannerFailureLog(logRoot, output string) (string, error) {
 		return "", err
 	}
 	path := filepath.Join(dir, fmt.Sprintf("%s.log", ts))
-	if err := os.WriteFile(path, []byte(strings.TrimSpace(output)+"\n"), 0o644); err != nil {
+	content := strings.TrimSpace(output)
+	if content == "" {
+		content = "<empty output>"
+	}
+	if err := os.WriteFile(path, []byte(content+"\n"), 0o644); err != nil {
 		return "", err
 	}
 	return path, nil

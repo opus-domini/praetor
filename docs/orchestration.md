@@ -260,18 +260,25 @@ flowchart TD
     C -- yes --> D[Build minimal template]
     C -- no --> E[Planner agent]
     E --> F{Planner output valid?}
-    F -- no --> G[Persist planner failure log + return error]
     F -- yes --> H[Finalize plan metadata<br>normalize + enrich meta/settings]
+    F -- no --> G{Recoverable format error?<br>empty output / no JSON object}
+    G -- yes --> I[Persist first invalid output log<br>+ retry once with stricter JSON prompt]
+    I --> J{Retry output valid?}
+    J -- yes --> H
+    G -- no --> K[Persist planner failure log + return error]
+    J -- no --> K
     D --> H
-    H --> I[Validate plan schema]
-    I --> J[Generate slug]
-    J --> K{--dry-run?}
-    K -- yes --> L[Print JSON to stdout]
-    K -- no --> M{File exists<br>and no --force?}
-    M -- yes --> N[Return error: plan exists]
-    M -- no --> O[Write plans/slug.json]
-    O --> P[Print slug/path/task count]
+    H --> L[Validate plan schema]
+    L --> M[Generate slug]
+    M --> N{--dry-run?}
+    N -- yes --> O[Print JSON to stdout]
+    N -- no --> P{File exists<br>and no --force?}
+    P -- yes --> Q[Return error: plan exists]
+    P -- no --> R[Write plans/slug.json]
+    R --> S[Print slug/path/task count]
 ```
+
+Recoverable planner format errors are retried once with a stricter recovery prompt. If `--planner-timeout` is set, the timeout applies to the whole planner session, including the retry.
 
 ## `plan run` flow
 
