@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -44,6 +45,7 @@ Use "praetor plan run <slug>" to execute a plan.`,
 	cmd.AddCommand(newPlanResetCmd())
 	cmd.AddCommand(newPlanResumeCmd())
 	cmd.AddCommand(newPlanPathCmd())
+	cmd.AddCommand(newPlanEvalCmd())
 	cmd.AddCommand(newPlanDiagnoseCmd())
 	return cmd
 }
@@ -57,6 +59,7 @@ func newPlanCreateCmd() *cobra.Command {
 	var slugOverride string
 	var plannerAgent string
 	var plannerModel string
+	var plannerTimeout time.Duration
 	var force bool
 
 	cmd := &cobra.Command{
@@ -121,12 +124,14 @@ func newPlanCreateCmd() *cobra.Command {
 				render.KV("Model:", plannerModelLabel)
 				render.Info("Brief captured. Starting planner generation...")
 				plan, err = createPlanWithAgent(cmd.Context(), planCreateAgentRequest{
-					Brief:        brief,
-					PlannerAgent: domain.Agent(effectivePlanner),
-					PlannerModel: effectivePlannerModel,
-					ProjectRoot:  projectRoot,
-					Config:       cfg,
-					Store:        store,
+					Brief:          brief,
+					PlannerAgent:   domain.Agent(effectivePlanner),
+					PlannerModel:   effectivePlannerModel,
+					PlannerTimeout: plannerTimeout,
+					ProjectRoot:    projectRoot,
+					Config:         cfg,
+					Store:          store,
+					Render:         render,
 				})
 				if err != nil {
 					return err
@@ -202,6 +207,7 @@ func newPlanCreateCmd() *cobra.Command {
 	cmd.Flags().StringVar(&slugOverride, "slug", "", "Explicit slug override (default: auto-generated from plan name)")
 	cmd.Flags().StringVar(&plannerAgent, "planner", "", "Planner agent override (default: config planner or claude)")
 	cmd.Flags().StringVar(&plannerModel, "planner-model", "", "Planner model override")
+	cmd.Flags().DurationVar(&plannerTimeout, "planner-timeout", 0, "Planner generation timeout (e.g. 3m, 10m); 0 disables timeout")
 	cmd.Flags().BoolVar(&force, "force", false, "Overwrite an existing plan file")
 	cmd.Flags().BoolVar(&noColor, "no-color", false, "Disable colored output")
 	return cmd
@@ -433,11 +439,12 @@ func newPlanDiagnoseCmd() *cobra.Command {
 	var runID string
 	var query string
 	var format string
+	var baseline string
 
 	cmd := &cobra.Command{
 		Use:     "diagnose <slug>",
 		Short:   "Inspect runtime diagnostics for a plan run",
-		Example: "  praetor plan diagnose my-plan --query errors\n  praetor plan diagnose my-plan --query costs --format json",
+		Example: "  praetor plan diagnose my-plan --query errors\n  praetor plan diagnose my-plan --query summary --format json\n  praetor plan diagnose my-plan --query regressions --baseline .local-plans/baseline.json",
 		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cmd.SilenceUsage = true
@@ -480,15 +487,35 @@ func newPlanDiagnoseCmd() *cobra.Command {
 					return printJSONL(cmd, perf)
 				}
 				return printCostsTable(cmd, perf)
+			case "summary":
+				summary := buildDiagnoseSummary(events, perf)
+				if strings.EqualFold(format, "json") {
+					return printJSONObject(cmd, summary)
+				}
+				return printSummaryTable(cmd, summary)
+			case "regressions":
+				if strings.TrimSpace(baseline) == "" {
+					return errors.New("query regressions requires --baseline <path>")
+				}
+				current := buildDiagnoseSummary(events, perf)
+				regression, err := buildDiagnoseRegression(strings.TrimSpace(baseline), current)
+				if err != nil {
+					return err
+				}
+				if strings.EqualFold(format, "json") {
+					return printJSONObject(cmd, regression)
+				}
+				return printRegressionTable(cmd, regression)
 			default:
-				return fmt.Errorf("unsupported query %q (allowed: errors, stalls, fallbacks, costs, all)", query)
+				return fmt.Errorf("unsupported query %q (allowed: errors, stalls, fallbacks, costs, summary, regressions, all)", query)
 			}
 		},
 	}
 
 	cmd.Flags().StringVar(&runID, "run-id", "", "Inspect a specific run id (default: latest run for the plan)")
-	cmd.Flags().StringVar(&query, "query", "all", "Diagnostic query: errors, stalls, fallbacks, costs, all")
+	cmd.Flags().StringVar(&query, "query", "all", "Diagnostic query: errors, stalls, fallbacks, costs, summary, regressions, all")
 	cmd.Flags().StringVar(&format, "format", "table", "Output format: table or json")
+	cmd.Flags().StringVar(&baseline, "baseline", "", "Baseline JSON file path for regressions query")
 	return cmd
 }
 
@@ -634,6 +661,237 @@ func printCostsTable(cmd *cobra.Command, records []map[string]any) error {
 	return nil
 }
 
+type diagnoseSummary struct {
+	EventsTotal          int            `json:"events_total"`
+	Errors               int            `json:"errors"`
+	Stalls               int            `json:"stalls"`
+	Fallbacks            int            `json:"fallbacks"`
+	GateFailures         int            `json:"gate_failures"`
+	TotalCostUSD         float64        `json:"total_cost_usd"`
+	AvgPromptChars       float64        `json:"avg_prompt_chars"`
+	AvgEstimatedTokens   float64        `json:"avg_estimated_tokens"`
+	TopFailureCategories map[string]int `json:"top_failure_categories"`
+}
+
+type diagnoseRegressionCheck struct {
+	Metric    string  `json:"metric"`
+	Baseline  float64 `json:"baseline"`
+	Current   float64 `json:"current"`
+	Delta     float64 `json:"delta"`
+	Threshold float64 `json:"threshold"`
+	Status    string  `json:"status"`
+	Message   string  `json:"message,omitempty"`
+}
+
+type diagnoseRegression struct {
+	BaselinePath string                    `json:"baseline_path"`
+	Verdict      string                    `json:"verdict"`
+	Checks       []diagnoseRegressionCheck `json:"checks"`
+}
+
+func buildDiagnoseSummary(events, perf []map[string]any) diagnoseSummary {
+	summary := diagnoseSummary{
+		EventsTotal:          len(events),
+		TopFailureCategories: make(map[string]int),
+	}
+	for _, event := range events {
+		eventType := strings.ToLower(strings.TrimSpace(eventTypeName(event)))
+		if strings.Contains(eventType, "error") {
+			summary.Errors++
+			summary.TopFailureCategories[eventType]++
+		}
+		if eventType == "task_stalled" {
+			summary.Stalls++
+			summary.TopFailureCategories[eventType]++
+		}
+		if eventType == "agent_fallback" {
+			summary.Fallbacks++
+		}
+		if eventType == "gate_result" {
+			action := strings.ToLower(strings.TrimSpace(stringValue(event["action"])))
+			if action == "fail" {
+				summary.GateFailures++
+				summary.TopFailureCategories["gate_fail"]++
+			}
+		}
+		summary.TotalCostUSD += anyFloat(event["cost_usd"])
+	}
+	if len(perf) > 0 {
+		var promptChars float64
+		var tokens float64
+		for _, item := range perf {
+			promptChars += anyFloat(item["prompt_chars"])
+			tokens += anyFloat(item["estimated_tokens"])
+		}
+		summary.AvgPromptChars = promptChars / float64(len(perf))
+		summary.AvgEstimatedTokens = tokens / float64(len(perf))
+	}
+	return summary
+}
+
+func buildDiagnoseRegression(baselinePath string, current diagnoseSummary) (diagnoseRegression, error) {
+	baselinePath = strings.TrimSpace(baselinePath)
+	data, err := os.ReadFile(baselinePath)
+	if err != nil {
+		return diagnoseRegression{}, fmt.Errorf("read baseline file: %w", err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return diagnoseRegression{}, fmt.Errorf("decode baseline file: %w", err)
+	}
+
+	baselineMap := payload
+	if summaryValue, ok := payload["summary"]; ok {
+		if nested, ok := summaryValue.(map[string]any); ok {
+			baselineMap = nested
+		}
+	}
+
+	baseline := diagnoseSummary{
+		Errors:             anyInt(baselineMap["errors"]),
+		Stalls:             anyInt(baselineMap["stalls"]),
+		GateFailures:       anyInt(baselineMap["gate_failures"]),
+		TotalCostUSD:       anyFloat(baselineMap["total_cost_usd"]),
+		AvgPromptChars:     anyFloat(baselineMap["avg_prompt_chars"]),
+		AvgEstimatedTokens: anyFloat(baselineMap["avg_estimated_tokens"]),
+	}
+
+	result := diagnoseRegression{
+		BaselinePath: baselinePath,
+		Verdict:      "pass",
+		Checks: []diagnoseRegressionCheck{
+			makeDiagnoseIncreaseCheck("errors", float64(baseline.Errors), float64(current.Errors), 0),
+			makeDiagnoseIncreaseCheck("stalls", float64(baseline.Stalls), float64(current.Stalls), 0),
+			makeDiagnoseIncreaseCheck("gate_failures", float64(baseline.GateFailures), float64(current.GateFailures), 0),
+			makeDiagnoseIncreaseCheck("avg_prompt_chars", baseline.AvgPromptChars, current.AvgPromptChars, baseline.AvgPromptChars*0.20),
+			makeDiagnoseIncreaseCheck("avg_estimated_tokens", baseline.AvgEstimatedTokens, current.AvgEstimatedTokens, baseline.AvgEstimatedTokens*0.20),
+		},
+	}
+
+	costCheck := diagnoseRegressionCheck{
+		Metric:    "total_cost_usd_pct",
+		Baseline:  baseline.TotalCostUSD,
+		Current:   current.TotalCostUSD,
+		Threshold: 20,
+		Status:    "pass",
+	}
+	if baseline.TotalCostUSD > 0 {
+		costCheck.Delta = ((current.TotalCostUSD - baseline.TotalCostUSD) / baseline.TotalCostUSD) * 100
+		if costCheck.Delta > costCheck.Threshold {
+			costCheck.Status = "fail"
+			costCheck.Message = fmt.Sprintf("cost increase %.2f%% exceeds %.2f%%", costCheck.Delta, costCheck.Threshold)
+		}
+	} else if current.TotalCostUSD > 0 {
+		costCheck.Status = "warn"
+		costCheck.Message = "baseline total_cost_usd is zero; percentage comparison skipped"
+	}
+	result.Checks = append(result.Checks, costCheck)
+
+	hasFail := false
+	hasWarn := false
+	for _, check := range result.Checks {
+		status := strings.ToLower(strings.TrimSpace(check.Status))
+		if status == "fail" {
+			hasFail = true
+		}
+		if status == "warn" {
+			hasWarn = true
+		}
+	}
+	if hasFail {
+		result.Verdict = "fail"
+	} else if hasWarn {
+		result.Verdict = "warn"
+	}
+	return result, nil
+}
+
+func makeDiagnoseIncreaseCheck(metric string, baseline, current, threshold float64) diagnoseRegressionCheck {
+	check := diagnoseRegressionCheck{
+		Metric:    metric,
+		Baseline:  baseline,
+		Current:   current,
+		Delta:     current - baseline,
+		Threshold: threshold,
+		Status:    "pass",
+	}
+	if check.Delta > check.Threshold {
+		check.Status = "fail"
+		check.Message = fmt.Sprintf("delta %.4f exceeds threshold %.4f", check.Delta, check.Threshold)
+	}
+	return check
+}
+
+func printJSONObject(cmd *cobra.Command, value any) error {
+	encoded, err := json.MarshalIndent(value, "", "  ")
+	if err != nil {
+		return err
+	}
+	encoded = append(encoded, '\n')
+	_, err = cmd.OutOrStdout().Write(encoded)
+	return err
+}
+
+func printSummaryTable(cmd *cobra.Command, summary diagnoseSummary) error {
+	out := cmd.OutOrStdout()
+	if _, err := fmt.Fprintf(out, "Events: %d\n", summary.EventsTotal); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(out, "Errors: %d  Stalls: %d  Fallbacks: %d  Gate failures: %d\n", summary.Errors, summary.Stalls, summary.Fallbacks, summary.GateFailures); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(out, "Total cost: $%.4f  Avg prompt chars: %.2f  Avg est tokens: %.2f\n", summary.TotalCostUSD, summary.AvgPromptChars, summary.AvgEstimatedTokens); err != nil {
+		return err
+	}
+	if len(summary.TopFailureCategories) > 0 {
+		if _, err := fmt.Fprintln(out, "Top failure categories:"); err != nil {
+			return err
+		}
+		keys := make([]string, 0, len(summary.TopFailureCategories))
+		for key := range summary.TopFailureCategories {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			if _, err := fmt.Fprintf(out, "- %s: %d\n", key, summary.TopFailureCategories[key]); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func printRegressionTable(cmd *cobra.Command, regression diagnoseRegression) error {
+	out := cmd.OutOrStdout()
+	if _, err := fmt.Fprintf(out, "Baseline: %s\n", regression.BaselinePath); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(out, "Verdict: %s\n", strings.ToUpper(strings.TrimSpace(regression.Verdict))); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(out, "%-24s %-10s %-10s %-10s %-10s %s\n", "Metric", "Baseline", "Current", "Delta", "Threshold", "Status"); err != nil {
+		return err
+	}
+	for _, check := range regression.Checks {
+		if _, err := fmt.Fprintf(out, "%-24s %-10.4f %-10.4f %-10.4f %-10.4f %s\n",
+			check.Metric,
+			check.Baseline,
+			check.Current,
+			check.Delta,
+			check.Threshold,
+			strings.ToUpper(strings.TrimSpace(check.Status)),
+		); err != nil {
+			return err
+		}
+		if strings.TrimSpace(check.Message) != "" {
+			if _, err := fmt.Fprintf(out, "  %s\n", strings.TrimSpace(check.Message)); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 func stringValue(value any) string {
 	switch v := value.(type) {
 	case string:
@@ -668,6 +926,38 @@ func joinAnyArray(value any) string {
 	return strings.Join(parts, ",")
 }
 
+func anyFloat(value any) float64 {
+	switch v := value.(type) {
+	case float64:
+		return v
+	case int:
+		return float64(v)
+	case int64:
+		return float64(v)
+	default:
+		return 0
+	}
+}
+
+func anyInt(value any) int {
+	switch v := value.(type) {
+	case int:
+		return v
+	case int64:
+		return int(v)
+	case float64:
+		return int(v)
+	case string:
+		parsed, err := strconv.Atoi(strings.TrimSpace(v))
+		if err == nil {
+			return parsed
+		}
+		return 0
+	default:
+		return 0
+	}
+}
+
 func resolveStore(projectDir string) (*localstate.Store, error) {
 	root, err := localstate.ResolveProjectHome("", projectDir)
 	if err != nil {
@@ -677,12 +967,14 @@ func resolveStore(projectDir string) (*localstate.Store, error) {
 }
 
 type planCreateAgentRequest struct {
-	Brief        string
-	PlannerAgent domain.Agent
-	PlannerModel string
-	ProjectRoot  string
-	Config       config.Config
-	Store        *localstate.Store
+	Brief          string
+	PlannerAgent   domain.Agent
+	PlannerModel   string
+	PlannerTimeout time.Duration
+	ProjectRoot    string
+	Config         config.Config
+	Store          *localstate.Store
+	Render         *Renderer
 }
 
 type planFinalizeInput struct {
@@ -826,27 +1118,164 @@ func createPlanWithAgent(ctx context.Context, req planCreateAgentRequest) (domai
 	if manifest, manifestErr := workspace.ReadManifest(req.ProjectRoot); manifestErr == nil {
 		projectContext = manifest.Context
 	}
+	plannerCtx := ctx
+	var cancel context.CancelFunc
+	if req.PlannerTimeout > 0 {
+		plannerCtx, cancel = context.WithTimeout(ctx, req.PlannerTimeout)
+		defer cancel()
+	}
 
-	plan, err := planner.Plan(ctx, pipeline.PlanRequest{
+	planReq := pipeline.PlanRequest{
 		Objective:      strings.TrimSpace(req.Brief),
 		ProjectContext: projectContext,
 		Workdir:        req.ProjectRoot,
 		Model:          strings.TrimSpace(req.PlannerModel),
 		CodexBin:       firstNonEmpty(req.Config.CodexBin, "codex"),
 		ClaudeBin:      firstNonEmpty(req.Config.ClaudeBin, "claude"),
-	})
-	if err != nil {
-		var outputErr *pipeline.PlannerOutputError
-		if errors.As(err, &outputErr) && strings.TrimSpace(outputErr.RawOutput) != "" {
-			logPath, logErr := writePlannerFailureLog(req.Store.LogsDir(), outputErr.RawOutput)
-			if logErr == nil {
-				return domain.Plan{}, fmt.Errorf("planner generated invalid plan (output logged at %s): %w. Retry with --dry-run or --no-agent", logPath, err)
-			}
-		}
-		return domain.Plan{}, fmt.Errorf("planner failed: %w. Retry with --dry-run or --no-agent", err)
+	}
+	plan, err := runPlannerWithProgress(plannerCtx, planner, planReq, req.Render)
+	if err == nil {
+		return plan, nil
+	}
+	if timeoutErr := plannerTimeoutError(err, req.PlannerTimeout); timeoutErr != nil {
+		return domain.Plan{}, timeoutErr
 	}
 
-	return plan, nil
+	var outputErr *pipeline.PlannerOutputError
+	if errors.As(err, &outputErr) && strings.EqualFold(strings.TrimSpace(outputErr.Class), "recoverable_format") {
+		if req.Render != nil {
+			req.Render.Warn("Planner output was not valid JSON. Retrying once with strict JSON instructions...")
+		}
+		retryReq := planReq
+		retryReq.Objective = buildPlannerRecoveryObjective(planReq.Objective, outputErr.RawOutput)
+		plan, retryErr := runPlannerWithProgress(plannerCtx, planner, retryReq, req.Render)
+		if retryErr == nil {
+			if req.Render != nil {
+				req.Render.Info("Planner recovered on retry and returned a valid plan.")
+			}
+			return plan, nil
+		}
+		err = retryErr
+		if timeoutErr := plannerTimeoutError(err, req.PlannerTimeout); timeoutErr != nil {
+			return domain.Plan{}, timeoutErr
+		}
+		if errors.As(retryErr, &outputErr) && strings.TrimSpace(outputErr.RawOutput) != "" {
+			preview := plannerOutputPreview(outputErr.RawOutput)
+			logPath, logErr := writePlannerFailureLog(req.Store.LogsDir(), outputErr.RawOutput)
+			if logErr == nil {
+				parseClass := strings.TrimSpace(outputErr.Class)
+				if parseClass != "" {
+					return domain.Plan{}, fmt.Errorf("planner generated invalid plan (%s, output logged at %s): %w. Output preview: %q. Retry with --dry-run or --no-agent", parseClass, logPath, err, preview)
+				}
+				return domain.Plan{}, fmt.Errorf("planner generated invalid plan (output logged at %s): %w. Output preview: %q. Retry with --dry-run or --no-agent", logPath, err, preview)
+			}
+		}
+		return domain.Plan{}, fmt.Errorf("planner failed after retry: %w. Retry with --dry-run or --no-agent", err)
+	}
+
+	if errors.As(err, &outputErr) && strings.TrimSpace(outputErr.RawOutput) != "" {
+		preview := plannerOutputPreview(outputErr.RawOutput)
+		logPath, logErr := writePlannerFailureLog(req.Store.LogsDir(), outputErr.RawOutput)
+		if logErr == nil {
+			parseClass := strings.TrimSpace(outputErr.Class)
+			if parseClass != "" {
+				return domain.Plan{}, fmt.Errorf("planner generated invalid plan (%s, output logged at %s): %w. Output preview: %q. Retry with --dry-run or --no-agent", parseClass, logPath, err, preview)
+			}
+			return domain.Plan{}, fmt.Errorf("planner generated invalid plan (output logged at %s): %w. Output preview: %q. Retry with --dry-run or --no-agent", logPath, err, preview)
+		}
+	}
+	return domain.Plan{}, fmt.Errorf("planner failed: %w. Retry with --dry-run or --no-agent", err)
+}
+
+func runPlannerWithProgress(ctx context.Context, planner pipeline.CognitiveAgent, req pipeline.PlanRequest, render *Renderer) (domain.Plan, error) {
+	if planner == nil {
+		return domain.Plan{}, errors.New("planner is required")
+	}
+	if render == nil {
+		return planner.Plan(ctx, req)
+	}
+
+	started := time.Now()
+	done := make(chan struct{})
+	firstUpdate := time.NewTimer(20 * time.Second)
+	ticker := time.NewTicker(40 * time.Second)
+	defer firstUpdate.Stop()
+	defer ticker.Stop()
+
+	go func() {
+		firstHint := true
+		for {
+			select {
+			case <-done:
+				return
+			case <-ctx.Done():
+				return
+			case <-firstUpdate.C:
+				elapsed := time.Since(started).Round(time.Second)
+				if firstHint {
+					render.Info(fmt.Sprintf("Planner still running... elapsed %s (Ctrl+C to cancel)", elapsed))
+					firstHint = false
+					continue
+				}
+				render.Info(fmt.Sprintf("Planner still running... elapsed %s", elapsed))
+			case <-ticker.C:
+				elapsed := time.Since(started).Round(time.Second)
+				render.Info(fmt.Sprintf("Planner still running... elapsed %s", elapsed))
+			}
+		}
+	}()
+
+	plan, err := planner.Plan(ctx, req)
+	close(done)
+	return plan, err
+}
+
+func plannerTimeoutError(err error, timeout time.Duration) error {
+	if timeout <= 0 {
+		return nil
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return fmt.Errorf("planner timed out after %s; retry with --planner-timeout <duration>, simplify the brief, or use --no-agent", timeout)
+	}
+	return nil
+}
+
+func buildPlannerRecoveryObjective(objective, previousOutput string) string {
+	objective = strings.TrimSpace(objective)
+	previousOutput = strings.TrimSpace(previousOutput)
+	if len(previousOutput) > 1500 {
+		previousOutput = previousOutput[:1500] + "\n...[truncated]"
+	}
+
+	return strings.TrimSpace(fmt.Sprintf(`The previous planner response was invalid because it did not return a valid JSON plan.
+
+STRICT RULES:
+- Return ONE JSON object only.
+- Do not execute actions.
+- Do not claim files were created.
+- Do not include markdown fences or explanations.
+
+Original objective:
+%s
+
+Previous invalid response:
+%s`, objective, previousOutput))
+}
+
+func plannerOutputPreview(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	line := raw
+	if idx := strings.IndexRune(raw, '\n'); idx >= 0 {
+		line = raw[:idx]
+	}
+	line = strings.TrimSpace(line)
+	if len(line) > 180 {
+		line = line[:180] + "..."
+	}
+	return line
 }
 
 func writePlannerFailureLog(logRoot, output string) (string, error) {

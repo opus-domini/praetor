@@ -682,3 +682,17 @@ func TestParseReviewDecisionPipeInReason(t *testing.T) {
 		t.Fatalf("Reason = %q, want %q", d.Reason, "looks good | formatting ok")
 	}
 }
+
+func TestIsReviewerDecisionParseFailure(t *testing.T) {
+	t.Parallel()
+
+	parseErr := ParseReviewDecision("MAYBE|something")
+	if !IsReviewerDecisionParseFailure(parseErr) {
+		t.Fatal("expected parse failure for invalid reviewer contract")
+	}
+
+	semanticFail := ParseReviewDecision("FAIL|needs tests")
+	if IsReviewerDecisionParseFailure(semanticFail) {
+		t.Fatal("did not expect parse failure for valid FAIL decision")
+	}
+}

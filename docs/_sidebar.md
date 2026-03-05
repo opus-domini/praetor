@@ -4,6 +4,7 @@
 - [Configuration](configuration.md)
 - [MCP Server](mcp.md)
 - [Shared Agent Commands](commands.md)
+- [Operations Runbook](operations-runbook.md)
 - Providers
   - [Overview](providers/README.md)
   - [Claude](providers/claude.md)

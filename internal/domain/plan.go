@@ -15,6 +15,12 @@ import (
 	"time"
 )
 
+var supportedQualityCommandGates = map[string]struct{}{
+	"tests":     {},
+	"lint":      {},
+	"standards": {},
+}
+
 // CanonicalTaskID returns the stable identifier for a plan task.
 func CanonicalTaskID(task Task, _ int) string {
 	return strings.TrimSpace(task.ID)
@@ -174,6 +180,18 @@ func ParsePlanLenient(data []byte) (Plan, error) {
 	return plan, nil
 }
 
+// ParsePlanStrict decodes planner output with strict unknown-field checks.
+func ParsePlanStrict(data []byte) (Plan, error) {
+	plan, err := decodePlanStrict(data)
+	if err != nil {
+		return Plan{}, err
+	}
+	if err := ValidatePlan(plan); err != nil {
+		return Plan{}, err
+	}
+	return plan, nil
+}
+
 func decodePlanStrict(data []byte) (Plan, error) {
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.DisallowUnknownFields()
@@ -289,6 +307,17 @@ func ValidatePlan(plan Plan) error {
 					errorsList = append(errorsList, fmt.Sprintf("tasks[%d].agents.reviewer has invalid value %q", idx, task.Agents.Reviewer))
 				}
 			}
+		}
+	}
+
+	for gate, command := range plan.Quality.Commands {
+		name := strings.ToLower(strings.TrimSpace(gate))
+		if _, ok := supportedQualityCommandGates[name]; !ok {
+			errorsList = append(errorsList, fmt.Sprintf("quality.commands contains unsupported gate %q (allowed: tests, lint, standards)", gate))
+			continue
+		}
+		if strings.TrimSpace(command) == "" {
+			errorsList = append(errorsList, fmt.Sprintf("quality.commands.%s cannot be empty", name))
 		}
 	}
 

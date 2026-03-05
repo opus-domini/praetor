@@ -10,21 +10,37 @@ import (
 // SupportedAgents lists agent config directories that can receive command symlinks.
 var SupportedAgents = []string{"claude", "cursor", "codex"}
 
+const commandPrefix = "praetor-"
+
 // Command describes a generated agent command.
 type Command struct {
 	Name    string
 	Content string
 }
 
+type commandDefinition struct {
+	BaseName string
+	Content  string
+}
+
+var defaultCommandDefinitions = []commandDefinition{
+	{BaseName: "plan-create", Content: planCreateContent},
+	{BaseName: "plan-run", Content: planRunContent},
+	{BaseName: "review-task", Content: reviewTaskContent},
+	{BaseName: "doctor", Content: doctorContent},
+	{BaseName: "diagnose", Content: diagnoseContent},
+}
+
 // DefaultCommands returns the built-in command set.
 func DefaultCommands() []Command {
-	return []Command{
-		{Name: "plan-create", Content: planCreateContent},
-		{Name: "plan-run", Content: planRunContent},
-		{Name: "review-task", Content: reviewTaskContent},
-		{Name: "doctor", Content: doctorContent},
-		{Name: "diagnose", Content: diagnoseContent},
+	commands := make([]Command, 0, len(defaultCommandDefinitions))
+	for _, def := range defaultCommandDefinitions {
+		commands = append(commands, Command{
+			Name:    commandPrefix + def.BaseName,
+			Content: def.Content,
+		})
 	}
+	return commands
 }
 
 // Sync writes commands to .agents/commands/ and creates symlinks for each agent.

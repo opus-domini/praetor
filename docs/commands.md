@@ -17,11 +17,11 @@ Commands are stored centrally in `.agents/commands/` with symlinks from each age
 ```text
 .agents/
   commands/
-    plan-create.md      <- single definition
-    plan-run.md
-    review-task.md
-    doctor.md
-    diagnose.md
+    praetor-plan-create.md      <- single definition
+    praetor-plan-run.md
+    praetor-review-task.md
+    praetor-doctor.md
+    praetor-diagnose.md
 
 .claude/commands/  ->  ../.agents/commands/   (symlink)
 .cursor/commands/  ->  ../.agents/commands/   (symlink)
@@ -34,11 +34,11 @@ Updating one file updates all agents simultaneously. No drift between agent beha
 
 | Command | Description | Allowed Tools |
 |---|---|---|
-| `plan-create` | Create a structured execution plan | Read, Glob, Grep, git |
-| `plan-run` | Execute an existing praetor plan | praetor CLI only |
-| `review-task` | Review executor output against criteria | Read, Grep, make test/lint |
-| `doctor` | Check agent provider health | praetor doctor |
-| `diagnose` | Debug a plan run | praetor CLI, Read |
+| `praetor-plan-create` | Create a structured execution plan | Read, Glob, Grep, git |
+| `praetor-plan-run` | Execute an existing praetor plan | praetor CLI only |
+| `praetor-review-task` | Review executor output against criteria | Read, Grep, make test/lint |
+| `praetor-doctor` | Check agent provider health | praetor doctor |
+| `praetor-diagnose` | Debug a plan run | praetor CLI, Read |
 
 Each command declares which tools the agent is allowed to use, implementing a **least-privilege model** for AI agents.
 

@@ -284,15 +284,23 @@ func iterationStateExecuteTask(ctx context.Context, machine *iterationMachine) (
 	result := domain.ParseExecutorResult(machine.executorOutput)
 	if result != domain.ExecutorResultPass {
 		feedback := "executor self-reported RESULT: FAIL"
+		status := "executor_fail"
+		forceFailed := false
+		parseClass := string(domain.ParseErrorRecoverable)
 		if result == domain.ExecutorResultUnknown {
 			feedback = "executor output missing or invalid RESULT line"
+			status = "executor_parse_error"
+			forceFailed = true
+			parseClass = string(domain.ParseErrorNonRecoverable)
 		}
+		emitParseErrorClassEvent(run, selected.task.ID, promptPhaseExecute, parseClass, feedback)
 		machine.setOutcome(taskOutcome{
 			kind:         taskOutcomeRetry,
-			status:       "executor_fail",
+			status:       status,
 			message:      fmt.Sprintf("executor reported RESULT: %s", result),
 			feedback:     feedback,
 			rollback:     true,
+			forceFailed:  forceFailed,
 			renderLevel:  "error",
 			renderFormat: "Executor reported %s (retry %d/%d)",
 			renderArgs:   []any{result},
@@ -395,6 +403,20 @@ func iterationStateReviewTask(ctx context.Context, machine *iterationMachine) (i
 	_ = writeText(filepath.Join(runDir, "reviewer.system.txt"), reviewerSystemPrompt)
 	_ = writeText(filepath.Join(runDir, "reviewer.prompt.txt"), reviewerTaskPrompt)
 
+	if gateReason, blocked := executeHostGates(ctx, run, selected.task.ID, machine.taskWorkdir, machine.executorOutput); blocked {
+		machine.setOutcome(taskOutcome{
+			kind:         taskOutcomeRetry,
+			status:       "review_rejected",
+			message:      gateReason,
+			feedback:     gateReason,
+			rollback:     true,
+			renderLevel:  "warn",
+			renderFormat: "Review rejected: %s (retry %d/%d)",
+			renderArgs:   []any{gateReason},
+		})
+		return iterationStateApplyOutcome, nil
+	}
+
 	// Per-task reviewer model override (schema v2).
 	reviewerModel := run.options.ReviewerModel
 	if selected.index < len(run.plan.Tasks) {
@@ -478,28 +500,25 @@ func iterationStateReviewTask(ctx context.Context, machine *iterationMachine) (i
 		machine.setOutcome(stalledOutcome)
 		return iterationStateApplyOutcome, nil
 	}
-	if gateReason, blocked := enforceRequiredGates(run, selected.task.ID, machine.executorOutput); blocked {
-		machine.setOutcome(taskOutcome{
-			kind:         taskOutcomeRetry,
-			status:       "review_rejected",
-			message:      gateReason,
-			feedback:     gateReason,
-			rollback:     true,
-			renderLevel:  "warn",
-			renderFormat: "Review rejected: %s (retry %d/%d)",
-			renderArgs:   []any{gateReason},
-		})
-		return iterationStateApplyOutcome, nil
-	}
 
 	decision := domain.ParseReviewDecision(reviewerOutput)
 	if !decision.Pass {
+		status := "review_rejected"
+		forceFailed := false
+		parseClass := string(domain.ParseErrorRecoverable)
+		if domain.IsReviewerDecisionParseFailure(decision) {
+			status = "reviewer_parse_error"
+			forceFailed = true
+			parseClass = string(domain.ParseErrorNonRecoverable)
+		}
+		emitParseErrorClassEvent(run, selected.task.ID, promptPhaseReview, parseClass, decision.Reason)
 		machine.setOutcome(taskOutcome{
 			kind:         taskOutcomeRetry,
-			status:       "review_rejected",
+			status:       status,
 			message:      decision.Reason,
 			feedback:     decision.Reason,
 			rollback:     true,
+			forceFailed:  forceFailed,
 			renderLevel:  "warn",
 			renderFormat: "Review rejected: %s (retry %d/%d)",
 			renderArgs:   []any{decision.Reason},
@@ -699,51 +718,6 @@ func maxInt(a, b int) int {
 	return b
 }
 
-func enforceRequiredGates(run *activeRun, taskID, executorOutput string) (string, bool) {
-	if run == nil || len(run.plan.Quality.Required) == 0 {
-		return "", false
-	}
-	evidence := domain.ParseGateEvidence(executorOutput)
-
-	for _, gate := range run.plan.Quality.Required {
-		name := strings.ToLower(strings.TrimSpace(gate))
-		if name == "" {
-			continue
-		}
-		result, ok := evidence[name]
-		if !ok {
-			reason := fmt.Sprintf("missing gate: %s", name)
-			emitGateResultEvent(run, taskID, name, "FAIL", reason, true)
-			return reason, true
-		}
-		if strings.ToUpper(strings.TrimSpace(result.Status)) != "PASS" {
-			reason := fmt.Sprintf("gate failed: %s", name)
-			emitGateResultEvent(run, taskID, name, "FAIL", strings.TrimSpace(result.Detail), true)
-			return reason, true
-		}
-		emitGateResultEvent(run, taskID, name, "PASS", strings.TrimSpace(result.Detail), true)
-	}
-
-	for _, gate := range run.plan.Quality.Optional {
-		name := strings.ToLower(strings.TrimSpace(gate))
-		if name == "" {
-			continue
-		}
-		result, ok := evidence[name]
-		if !ok {
-			emitGateResultEvent(run, taskID, name, "MISSING", "optional gate not reported", false)
-			continue
-		}
-		status := strings.ToUpper(strings.TrimSpace(result.Status))
-		if status == "" {
-			status = "UNKNOWN"
-		}
-		emitGateResultEvent(run, taskID, name, status, strings.TrimSpace(result.Detail), false)
-	}
-
-	return "", false
-}
-
 func hasGate(gates []string, name string) bool {
 	for _, g := range gates {
 		if strings.EqualFold(strings.TrimSpace(g), name) {
@@ -751,6 +725,94 @@ func hasGate(gates []string, name string) bool {
 		}
 	}
 	return false
+}
+
+func executeHostGates(ctx context.Context, run *activeRun, taskID, workdir, executorOutput string) (string, bool) {
+	if run == nil {
+		return "", false
+	}
+	required := run.plan.Quality.Required
+	optional := run.plan.Quality.Optional
+	if len(required) == 0 && len(optional) == 0 {
+		return "", false
+	}
+
+	commandMap := map[string]string{
+		"tests":     strings.TrimSpace(run.options.GateTestsCmd),
+		"lint":      strings.TrimSpace(run.options.GateLintCmd),
+		"standards": strings.TrimSpace(run.options.GateStandardsCmd),
+	}
+	for gate, cmd := range run.plan.Quality.Commands {
+		name := strings.ToLower(strings.TrimSpace(gate))
+		if name == "" {
+			continue
+		}
+		commandMap[name] = strings.TrimSpace(cmd)
+	}
+
+	timeout := run.options.Timeout
+	gateRunner := NewHostGateRunner(commandMap)
+	results := gateRunner.Run(ctx, strings.TrimSpace(workdir), required, optional, timeout)
+	reported := domain.ParseGateEvidence(executorOutput)
+
+	for _, result := range results {
+		if strings.TrimSpace(result.Name) == "" {
+			continue
+		}
+		status := strings.ToUpper(strings.TrimSpace(string(result.Status)))
+		detail := strings.TrimSpace(result.Detail)
+
+		// Backward compatibility: if host command is not configured, use executor-reported
+		// evidence as auxiliary fallback for that gate.
+		if result.Status == gateStatusMissing {
+			if evidence, ok := reported[result.Name]; ok {
+				status = strings.ToUpper(strings.TrimSpace(evidence.Status))
+				if strings.TrimSpace(detail) == "" {
+					detail = strings.TrimSpace(evidence.Detail)
+				}
+				if detail == "" {
+					detail = "fallback to executor-reported evidence"
+				}
+			}
+		}
+
+		emitGateResultEvent(run, taskID, result.Name, status, detail, result.Required)
+		if result.Required && status != "PASS" {
+			reason := fmt.Sprintf("gate failed: %s", strings.TrimSpace(result.Name))
+			if strings.TrimSpace(detail) != "" {
+				reason = fmt.Sprintf("%s (%s)", reason, strings.TrimSpace(detail))
+			}
+			return reason, true
+		}
+	}
+
+	return "", false
+}
+
+func emitParseErrorClassEvent(run *activeRun, taskID, phase, class, message string) {
+	if run == nil || run.eventSink == nil {
+		return
+	}
+	class = strings.TrimSpace(class)
+	if class == "" {
+		return
+	}
+	run.eventSink.Emit(middleware.ExecutionEvent{
+		SchemaVersion: 1,
+		Timestamp:     time.Now().UTC().Format(time.RFC3339),
+		Type:          middleware.EventAgentError,
+		EventType:     string(middleware.EventAgentError),
+		RunID:         run.runID,
+		TaskID:        strings.TrimSpace(taskID),
+		Phase:         strings.TrimSpace(phase),
+		Error:         strings.TrimSpace(message),
+		Data: map[string]any{
+			"task_id":           strings.TrimSpace(taskID),
+			"phase":             strings.TrimSpace(phase),
+			"parse_error_class": class,
+			"message":           strings.TrimSpace(message),
+		},
+	})
 }
 
 func emitGateResultEvent(run *activeRun, taskID, gateName, status, detail string, required bool) {

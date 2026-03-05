@@ -42,6 +42,8 @@ It orchestrates 9 AI agent providers through a single execution surface with dep
 - **Context budget** — character-level prompt truncation for executor and reviewer phases.
 - **Intelligent routing** — live health-probe-based auto-selection when the preferred agent is unavailable.
 - **Quality gates** — required and optional gate enforcement in plan execution.
+- **Host-executed gates** — `tests`, `lint`, `standards` run locally with structured results and diagnostics.
+- **Operational evals** — local flow analysis via `praetor plan eval` (plan level) and `praetor eval` (project level).
 - **Workspace context** — automatic manifest discovery from `praetor.yaml` / `praetor.md`.
 - **Prompt templates** — 8 embedded templates with project-level overlay via `.praetor/prompts/`.
 - **Post-task hooks** — arbitrary script execution after executor, before reviewer (`--hook`).
@@ -146,6 +148,18 @@ praetor plan resume my-plan
 ```bash
 praetor plan diagnose my-plan
 praetor plan diagnose my-plan --query errors --format json
+praetor plan diagnose my-plan --query summary
+```
+
+### Evaluate quality (local)
+
+```bash
+praetor plan eval my-plan
+praetor plan eval my-plan --run-id <run-id> --format json
+praetor eval
+praetor eval --window 168h --format json
+make eval-plan PLAN_SLUG=my-plan
+make eval
 ```
 
 ### Single prompt mode
@@ -171,6 +185,8 @@ praetor exec --provider openrouter --model anthropic/claude-sonnet-4 "Review thi
 | `praetor plan reset <slug>` | Clear runtime state for one plan |
 | `praetor plan resume <slug>` | Restore latest valid local snapshot |
 | `praetor plan diagnose <slug>` | Inspect structured diagnostics |
+| `praetor plan eval <slug>` | Evaluate one local plan run (acceptance, gates, parse errors, stalls, retries, cost) |
+| `praetor eval` | Aggregate latest local plan evaluations at project level |
 | `praetor exec [prompt]` | Run a single prompt against one provider |
 | `praetor doctor` | Check agent availability and health |
 | `praetor config show` | Show effective config with source annotations |
@@ -198,6 +214,7 @@ praetor exec --provider openrouter --model anthropic/claude-sonnet-4 "Review thi
 - [Configuration](https://opus-domini.github.io/praetor/#/configuration)
 - [MCP Server](https://opus-domini.github.io/praetor/#/mcp)
 - [Shared Agent Commands](https://opus-domini.github.io/praetor/#/commands)
+- [Operations Runbook](https://opus-domini.github.io/praetor/#/operations-runbook)
 - [Providers Overview](https://opus-domini.github.io/praetor/#/providers/README)
 - [Claude Provider](https://opus-domini.github.io/praetor/#/providers/claude)
 - [Codex Provider](https://opus-domini.github.io/praetor/#/providers/codex)

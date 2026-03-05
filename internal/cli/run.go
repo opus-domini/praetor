@@ -57,6 +57,9 @@ func newRunCmd() *cobra.Command {
 	var stallEnabled bool
 	var stallWindow int
 	var stallThreshold float64
+	var gateTestsCmd string
+	var gateLintCmd string
+	var gateStandardsCmd string
 
 	cmd := &cobra.Command{
 		Use:   "run <slug>",
@@ -179,6 +182,15 @@ isolation protects the main branch from partial changes.`,
 			if !f.Changed("fallback-on-auth") && cfg.FallbackOnAuth != "" {
 				fallbackOnAuth = cfg.FallbackOnAuth
 			}
+			if !f.Changed("gate-tests-cmd") && cfg.GateTestsCmd != "" {
+				gateTestsCmd = cfg.GateTestsCmd
+			}
+			if !f.Changed("gate-lint-cmd") && cfg.GateLintCmd != "" {
+				gateLintCmd = cfg.GateLintCmd
+			}
+			if !f.Changed("gate-standards-cmd") && cfg.GateStandardsCmd != "" {
+				gateStandardsCmd = cfg.GateStandardsCmd
+			}
 			if !f.Changed("timeout") && cfg.Timeout != "" {
 				d, parseErr := time.ParseDuration(cfg.Timeout)
 				if parseErr != nil {
@@ -226,6 +238,9 @@ isolation protects the main branch from partial changes.`,
 				StallDetectionSet:   f.Changed("stall-enabled"),
 				StallWindowSet:      f.Changed("stall-window"),
 				StallThresholdSet:   f.Changed("stall-threshold"),
+				GateTestsCmdSet:     f.Changed("gate-tests-cmd"),
+				GateLintCmdSet:      f.Changed("gate-lint-cmd"),
+				GateStandardsCmdSet: f.Changed("gate-standards-cmd"),
 				SkipReview:          noReview,
 				Force:               force,
 				CodexBin:            codexBin,
@@ -249,6 +264,9 @@ isolation protects the main branch from partial changes.`,
 				FallbackAgent:       domain.Agent(fallbackAgent),
 				FallbackOnTransient: domain.Agent(fallbackOnTransient),
 				FallbackOnAuth:      domain.Agent(fallbackOnAuth),
+				GateTestsCmd:        gateTestsCmd,
+				GateLintCmd:         gateLintCmd,
+				GateStandardsCmd:    gateStandardsCmd,
 			}
 
 			ctx := cmd.Context()
@@ -314,5 +332,8 @@ isolation protects the main branch from partial changes.`,
 	cmd.Flags().BoolVar(&stallEnabled, "stall-enabled", false, "Enable stall detection")
 	cmd.Flags().IntVar(&stallWindow, "stall-window", 0, "Stall detection sliding window size")
 	cmd.Flags().Float64Var(&stallThreshold, "stall-threshold", 0, "Stall detection similarity threshold (0..1)")
+	cmd.Flags().StringVar(&gateTestsCmd, "gate-tests-cmd", "go test ./...", "Host command for tests quality gate")
+	cmd.Flags().StringVar(&gateLintCmd, "gate-lint-cmd", "golangci-lint run", "Host command for lint quality gate")
+	cmd.Flags().StringVar(&gateStandardsCmd, "gate-standards-cmd", "go test ./... && golangci-lint run", "Host command for standards quality gate")
 	return cmd
 }

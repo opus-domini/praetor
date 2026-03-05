@@ -3,6 +3,9 @@ LINT          = golangci-lint
 VULNCHECK     = govulncheck
 LINT_GOCACHE ?= /tmp/go-cache
 LINT_CACHE   ?= /tmp/golangci-lint-cache
+PLAN_SLUG    ?=
+EVAL_RUN_ID  ?=
+EVAL_WINDOW  ?= 168h
 
 .DEFAULT_GOAL := help
 
@@ -19,6 +22,15 @@ test-coverage: check-go ## Run tests with race detection and coverage
 .PHONY: benchmark
 benchmark: check-go ## Run benchmarks
 	$(GOCMD) test -run=^$$ -bench=. -benchmem ./...
+
+.PHONY: eval
+eval: check-go ## Evaluate project-level local execution quality
+	$(GOCMD) run ./cmd/praetor eval --window $(EVAL_WINDOW)
+
+.PHONY: eval-plan
+eval-plan: check-go ## Evaluate one local plan run (set PLAN_SLUG=<slug> and optional EVAL_RUN_ID=<run-id>)
+	@test -n "$(PLAN_SLUG)" || (echo "error: PLAN_SLUG is required (e.g. make eval-plan PLAN_SLUG=my-plan)"; exit 1)
+	$(GOCMD) run ./cmd/praetor plan eval $(PLAN_SLUG) $(if $(EVAL_RUN_ID),--run-id $(EVAL_RUN_ID),)
 
 .PHONY: fmt
 fmt: check-go check-lint ## Format code

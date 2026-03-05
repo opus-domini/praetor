@@ -15,6 +15,7 @@ cat brief.md | praetor plan create --stdin
 Useful flags:
 
 - `--planner <agent>` and `--planner-model <model>`: override planner defaults.
+- `--planner-timeout <duration>`: cap total planner generation time (e.g. `5m`, `12m`); `0` disables timeout.
 - `--slug <slug>`: force a specific slug.
 - `--dry-run`: print generated JSON without writing a file.
 - `--no-agent`: generate a minimal valid template without calling a planner.
@@ -44,7 +45,32 @@ praetor plan diagnose my-plan --query stalls --format json
 praetor plan diagnose my-plan --query costs
 ```
 
-Allowed queries: `errors`, `stalls`, `fallbacks`, `costs`, `all`.
+Allowed queries: `errors`, `stalls`, `fallbacks`, `costs`, `summary`, `regressions`, `all`.
+
+### Evaluate local execution quality
+
+```bash
+# Plan-level quality evaluation (latest run)
+praetor plan eval my-plan
+
+# Plan-level quality evaluation for one specific run
+praetor plan eval my-plan --run-id run-123 --format json
+
+# Project-level aggregation (latest run per plan, last 7 days by default)
+praetor eval
+
+# Project-level aggregation with explicit window and JSON output
+praetor eval --window 168h --format json
+```
+
+`praetor plan eval` inspects the complete local flow for the selected run:
+
+- task acceptance (`done` + quality evidence)
+- required gate outcomes (`tests`, `lint`, `standards`, or plan-defined gates)
+- parser/contract failures (`executor_parse_error`, `reviewer_parse_error`)
+- stalls, retries, cost, and duration
+
+`praetor eval` aggregates plan-level results for the project and emits a global verdict (`pass|warn|fail`).
 
 ## Plan schema
 
@@ -103,7 +129,12 @@ Canonical schema file: [`docs/schemas/plan.schema.json`](schemas/plan.schema.jso
   "quality": {
     "evidence_format": "gates_v1",
     "required": ["tests", "lint"],
-    "optional": ["coverage>=80"]
+    "optional": ["coverage>=80"],
+    "commands": {
+      "tests": "go test ./...",
+      "lint": "golangci-lint run",
+      "standards": "go test ./... && golangci-lint run"
+    }
   },
   "tasks": [
     {
@@ -447,9 +478,22 @@ flowchart TD
 
 ## Backpressure via quality gates
 
-`quality.required` enforces evidence-based completion.
+`quality.required` enforces completion through **host-executed** gate commands.
 
-Executor output format:
+Default gate commands:
+
+- `tests` -> `go test ./...`
+- `lint` -> `golangci-lint run`
+- `standards` -> `go test ./... && golangci-lint run`
+
+Overrides are supported in two places:
+
+- config keys: `gate-tests-cmd`, `gate-lint-cmd`, `gate-standards-cmd`
+- plan quality overrides: `quality.commands.tests|lint|standards`
+
+Executor-reported `GATES:` evidence remains auxiliary fallback when a host gate command is missing.
+
+Executor evidence format (auxiliary fallback):
 
 ```text
 GATES:
@@ -459,11 +503,9 @@ GATES:
 
 Rules:
 
-- Missing required gate => review rejection.
-- Required gate with `FAIL` => review rejection.
-- Optional gates are logged (`gate_result`) but do not block completion.
-
-Gate enforcement is performed by the **pipeline** (`enforceRequiredGates`), not by the reviewer agent. Gates are checked before the reviewer's decision is parsed. If gates pass, the reviewer agent's own PASS/FAIL decision is then evaluated independently.
+- Required host gate `FAIL|ERROR|MISSING` => review rejection.
+- Optional gate failures are logged (`gate_result`) but do not block completion.
+- Reviewer PASS/FAIL is still evaluated independently after host gates pass.
 
 ```mermaid
 ---
@@ -471,19 +513,16 @@ config:
   theme: dark
 ---
 flowchart TD
-    A[Executor output] --> B[Parse GATES block]
-    B --> C{All required gates<br>present?}
-    C -- no --> D[Pipeline rejects — missing gate]
-    C -- yes --> E{All required gates<br>PASS?}
-    E -- no --> F[Pipeline rejects — gate FAIL]
-    E -- yes --> G[Log gate_result events<br>required + optional]
-    G --> H[Invoke reviewer agent]
-    H --> I{Reviewer decision?}
-    I -- PASS --> J[Task approved — done]
-    I -- FAIL --> K[Reviewer rejects]
-    D --> L[Retry task — back to executor]
-    F --> L
-    K --> L
+    A[Executor finished] --> B[Run host gate commands]
+    B --> C{Required gates PASS?}
+    C -- no --> D[Pipeline rejects — gate failure]
+    C -- yes --> E[Log gate_result events<br>required + optional]
+    E --> F[Invoke reviewer agent]
+    F --> G{Reviewer decision?}
+    G -- PASS --> H[Task approved — done]
+    G -- FAIL --> I[Reviewer rejects]
+    D --> J[Retry task — back to executor]
+    I --> J
 ```
 
 ## Diagnostics and observability

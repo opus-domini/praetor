@@ -124,6 +124,15 @@
         "optional": {
           "type": "array",
           "items": {"type": "string"}
+        },
+        "commands": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "tests": {"type": "string", "minLength": 1},
+            "lint": {"type": "string", "minLength": 1},
+            "standards": {"type": "string", "minLength": 1}
+          }
         }
       }
     },

@@ -3,6 +3,7 @@ package commands
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -22,6 +23,12 @@ func TestSyncCreatesCommandsAndSymlinks(t *testing.T) {
 	}
 	if len(entries) != 5 {
 		t.Fatalf("expected 5 commands, got %d", len(entries))
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		if !strings.HasPrefix(name, "praetor-") {
+			t.Fatalf("expected prefixed command file, got %q", name)
+		}
 	}
 
 	// Check symlinks.
@@ -54,6 +61,11 @@ func TestSyncIsIdempotent(t *testing.T) {
 	}
 	if len(names) != 5 {
 		t.Fatalf("expected 5 commands, got %d", len(names))
+	}
+	for _, name := range names {
+		if !strings.HasPrefix(name, "praetor-") {
+			t.Fatalf("expected prefixed command name, got %q", name)
+		}
 	}
 }
 

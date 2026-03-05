@@ -236,6 +236,10 @@ func (r *Runner) bootstrapRun(ctx context.Context, render domain.RenderSink, slu
 			ClaudeBin:      normalized.ClaudeBin,
 		})
 		if planErr != nil {
+			var outputErr *PlannerOutputError
+			if errors.As(planErr, &outputErr) && strings.TrimSpace(outputErr.Class) != "" {
+				return run, localstate.RunLock{}, cleanupRuntime, fmt.Errorf("planner failed (%s): %w", strings.TrimSpace(outputErr.Class), planErr)
+			}
 			return run, localstate.RunLock{}, cleanupRuntime, fmt.Errorf("planner failed: %w", planErr)
 		}
 		planned = enrichGeneratedPlan(planned, normalized)
@@ -676,6 +680,19 @@ func normalizeRunnerOptions(options domain.RunnerOptions) (domain.RunnerOptions,
 		}
 	}
 
+	normalized.GateTestsCmd = strings.TrimSpace(normalized.GateTestsCmd)
+	if normalized.GateTestsCmd == "" {
+		normalized.GateTestsCmd = "go test ./..."
+	}
+	normalized.GateLintCmd = strings.TrimSpace(normalized.GateLintCmd)
+	if normalized.GateLintCmd == "" {
+		normalized.GateLintCmd = "golangci-lint run"
+	}
+	normalized.GateStandardsCmd = strings.TrimSpace(normalized.GateStandardsCmd)
+	if normalized.GateStandardsCmd == "" {
+		normalized.GateStandardsCmd = "go test ./... && golangci-lint run"
+	}
+
 	return normalized, nil
 }
 
@@ -741,6 +758,23 @@ func mergeRunnerOptionsWithPlan(options domain.RunnerOptions, plan domain.Plan) 
 	}
 	if !options.StallThresholdSet && policy.StallDetection.Threshold > 0 {
 		merged.StallThreshold = policy.StallDetection.Threshold
+	}
+	if plan.Quality.Commands != nil {
+		if !options.GateTestsCmdSet {
+			if cmd := strings.TrimSpace(plan.Quality.Commands["tests"]); cmd != "" {
+				merged.GateTestsCmd = cmd
+			}
+		}
+		if !options.GateLintCmdSet {
+			if cmd := strings.TrimSpace(plan.Quality.Commands["lint"]); cmd != "" {
+				merged.GateLintCmd = cmd
+			}
+		}
+		if !options.GateStandardsCmdSet {
+			if cmd := strings.TrimSpace(plan.Quality.Commands["standards"]); cmd != "" {
+				merged.GateStandardsCmd = cmd
+			}
+		}
 	}
 
 	return normalizeRunnerOptions(merged)

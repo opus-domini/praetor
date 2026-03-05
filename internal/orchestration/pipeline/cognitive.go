@@ -62,16 +62,25 @@ func WithPromptEngine(e *prompt.Engine) CognitiveOption {
 	}
 }
 
+// WithPlannerStrictMode toggles strict planner JSON parsing.
+func WithPlannerStrictMode(strict bool) CognitiveOption {
+	return func(a *runtimeCognitiveAgent) {
+		a.plannerStrict = strict
+	}
+}
+
 type runtimeCognitiveAgent struct {
-	id           domain.Agent
-	runtime      domain.AgentRuntime
-	promptEngine *prompt.Engine
+	id            domain.Agent
+	runtime       domain.AgentRuntime
+	promptEngine  *prompt.Engine
+	plannerStrict bool
 }
 
 // PlannerOutputError carries the raw planner output when parsing/validation fails.
 type PlannerOutputError struct {
 	Err       error
 	RawOutput string
+	Class     string
 }
 
 func (e *PlannerOutputError) Error() string {
@@ -97,7 +106,7 @@ func NewCognitiveAgent(id domain.Agent, runtime domain.AgentRuntime, opts ...Cog
 	if runtime == nil {
 		return nil, errors.New("runtime is required")
 	}
-	a := &runtimeCognitiveAgent{id: id, runtime: runtime}
+	a := &runtimeCognitiveAgent{id: id, runtime: runtime, plannerStrict: true}
 	for _, opt := range opts {
 		opt(a)
 	}
@@ -136,13 +145,20 @@ func (a *runtimeCognitiveAgent) Plan(ctx context.Context, req PlanRequest) (doma
 		return domain.Plan{}, &PlannerOutputError{
 			Err:       fmt.Errorf("extract planner json payload: %w", err),
 			RawOutput: result.Output,
+			Class:     classifyPlannerParseError(err),
 		}
 	}
-	plan, err := domain.ParsePlanLenient([]byte(payload))
+	var plan domain.Plan
+	if a.plannerStrict {
+		plan, err = domain.ParsePlanStrict([]byte(payload))
+	} else {
+		plan, err = domain.ParsePlanLenient([]byte(payload))
+	}
 	if err != nil {
 		return domain.Plan{}, &PlannerOutputError{
 			Err:       fmt.Errorf("decode planner output: %w", err),
 			RawOutput: result.Output,
+			Class:     classifyPlannerParseError(err),
 		}
 	}
 	return plan, nil
@@ -237,6 +253,10 @@ Rules:
 - Use stable TASK-XXX ids in execution order.
 - Keep each task atomic.
 - Always include at least one acceptance item per task.
+- Do not execute actions.
+- Do not create files.
+- Do not claim implementation is complete.
+- Do not include markdown fences or commentary.
 - Return JSON only.`)
 	return b.String()
 }
@@ -264,4 +284,19 @@ func ExtractJSONObject(input string) (string, error) {
 		return "", errors.New("json object not found")
 	}
 	return strings.TrimSpace(input[start : end+1]), nil
+}
+
+func classifyPlannerParseError(err error) string {
+	if err == nil {
+		return ""
+	}
+	msg := strings.ToLower(strings.TrimSpace(err.Error()))
+	switch {
+	case strings.Contains(msg, "empty output"), strings.Contains(msg, "json object not found"):
+		return "recoverable_format"
+	case strings.Contains(msg, "unknown field"), strings.Contains(msg, "validation failed"), strings.Contains(msg, "decode plan file"):
+		return "non_recoverable_schema"
+	default:
+		return "unknown"
+	}
 }

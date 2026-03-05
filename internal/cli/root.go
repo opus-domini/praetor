@@ -28,6 +28,7 @@ func NewRootCmd() *cobra.Command {
 	root.CompletionOptions.DisableDefaultCmd = true
 
 	root.AddCommand(newPlanCmd())
+	root.AddCommand(newEvalCmd())
 	root.AddCommand(newExecCmd())
 	root.AddCommand(newDoctorCmd())
 	root.AddCommand(newFmtCmd())

@@ -14,6 +14,14 @@ const (
 	ExecutorResultUnknown ExecutorResult = "UNKNOWN"
 )
 
+// ParseErrorClass categorizes output-parse failures by retry semantics.
+type ParseErrorClass string
+
+const (
+	ParseErrorRecoverable    ParseErrorClass = "recoverable"
+	ParseErrorNonRecoverable ParseErrorClass = "non_recoverable"
+)
+
 // ParseExecutorResult parses the RESULT line from executor output.
 func ParseExecutorResult(output string) ExecutorResult {
 	for _, line := range strings.Split(output, "\n") {
@@ -72,6 +80,13 @@ func ParseReviewDecision(output string) ReviewDecision {
 	}
 
 	return ReviewDecision{Pass: false, Reason: "reviewer output was empty"}
+}
+
+// IsReviewerDecisionParseFailure reports whether the reviewer output failed the contract parser.
+func IsReviewerDecisionParseFailure(decision ReviewDecision) bool {
+	reason := strings.ToLower(strings.TrimSpace(decision.Reason))
+	return strings.Contains(reason, "reviewer output must use pass|") ||
+		strings.Contains(reason, "reviewer output was empty")
 }
 
 // GateResult is one parsed gate evidence line from executor output.

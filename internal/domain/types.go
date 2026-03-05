@@ -114,9 +114,10 @@ type StallPolicy struct {
 }
 
 type PlanQuality struct {
-	EvidenceFormat string   `json:"evidence_format,omitempty"`
-	Required       []string `json:"required,omitempty"`
-	Optional       []string `json:"optional,omitempty"`
+	EvidenceFormat string            `json:"evidence_format,omitempty"`
+	Required       []string          `json:"required,omitempty"`
+	Optional       []string          `json:"optional,omitempty"`
+	Commands       map[string]string `json:"commands,omitempty"`
 }
 
 // PlanCognitive captures cognitive metadata for a plan.
@@ -249,6 +250,9 @@ type RunnerOptions struct {
 	StallDetectionSet   bool
 	StallWindowSet      bool
 	StallThresholdSet   bool
+	GateTestsCmdSet     bool
+	GateLintCmdSet      bool
+	GateStandardsCmdSet bool
 	SkipReview          bool
 	Force               bool
 	CodexBin            string
@@ -273,6 +277,9 @@ type RunnerOptions struct {
 	FallbackAgent       Agent
 	FallbackOnTransient Agent
 	FallbackOnAuth      Agent
+	GateTestsCmd        string
+	GateLintCmd         string
+	GateStandardsCmd    string
 }
 
 // RunnerMode controls how external agent commands are executed.

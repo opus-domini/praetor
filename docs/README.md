@@ -22,6 +22,7 @@
 - [Configuration](configuration.md) — config file format, CLI commands, and full key reference
 - [MCP Server](mcp.md) — Model Context Protocol server for AI agent interoperability
 - [Shared Agent Commands](commands.md) — cross-agent slash commands from a single source of truth
+- [Operations Runbook](operations-runbook.md) — local operational triage flow using `plan eval` and project `eval`
 - [Providers overview](providers/README.md) — agent interface, runner abstraction, registry, middleware, and fallback
 
 ## Provider documentation

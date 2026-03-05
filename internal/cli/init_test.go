@@ -64,6 +64,11 @@ func TestInitCreatesCommandsAndMCP(t *testing.T) {
 	if len(entries) == 0 {
 		t.Error("no commands generated")
 	}
+	for _, entry := range entries {
+		if !strings.HasPrefix(entry.Name(), "praetor-") {
+			t.Errorf("expected prefixed command file, got %q", entry.Name())
+		}
+	}
 
 	// Verify .mcp.json was created.
 	mcpPath := filepath.Join(dir, ".mcp.json")

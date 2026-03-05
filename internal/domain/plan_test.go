@@ -275,6 +275,59 @@ func TestValidatePlanRejectsInvalidTaskConstraintTimeout(t *testing.T) {
 	}
 }
 
+func TestParsePlanStrictRejectsUnknownFields(t *testing.T) {
+	t.Parallel()
+
+	_, err := ParsePlanStrict([]byte(`{
+  "name": "strict-plan",
+  "settings": {
+    "agents": {
+      "executor": {"agent":"codex"},
+      "reviewer": {"agent":"claude"}
+    }
+  },
+  "tasks": [
+    {"id":"TASK-001","title":"x","acceptance":["ok"],"mystery":"field"}
+  ]
+}`))
+	if err == nil {
+		t.Fatal("expected strict parse error")
+	}
+	if !strings.Contains(err.Error(), "unknown field") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestValidatePlanRejectsUnsupportedQualityCommandGate(t *testing.T) {
+	t.Parallel()
+
+	plan := Plan{
+		Name: "bad-gate-cmd",
+		Settings: PlanSettings{
+			Agents: PlanAgents{
+				Executor: PlanAgentConfig{Agent: AgentCodex},
+				Reviewer: PlanAgentConfig{Agent: AgentClaude},
+			},
+		},
+		Quality: PlanQuality{
+			Commands: map[string]string{
+				"custom": "echo custom",
+			},
+		},
+		Tasks: []Task{
+			{ID: "TASK-001", Title: "task", Acceptance: []string{"done"}},
+		},
+	}
+
+	err := ValidatePlan(plan)
+	if err == nil {
+		t.Fatal("expected validation error")
+	}
+	if !strings.Contains(err.Error(), "quality.commands contains unsupported gate") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestValidatePlanRejectsInvalidPerTaskAgent(t *testing.T) {
 	t.Parallel()
 	plan := Plan{

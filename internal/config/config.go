@@ -45,6 +45,9 @@ type Config struct {
 	Fallback            string
 	FallbackOnTransient string
 	FallbackOnAuth      string
+	GateTestsCmd        string
+	GateLintCmd         string
+	GateStandardsCmd    string
 }
 
 // Path returns the config file path, respecting $PRAETOR_CONFIG.
@@ -251,6 +254,15 @@ func configFromMap(section string, m map[string]string) (Config, error) {
 	if v, ok := m["fallback-on-auth"]; ok {
 		cfg.FallbackOnAuth = strings.TrimSpace(v)
 	}
+	if v, ok := m["gate-tests-cmd"]; ok {
+		cfg.GateTestsCmd = strings.TrimSpace(v)
+	}
+	if v, ok := m["gate-lint-cmd"]; ok {
+		cfg.GateLintCmd = strings.TrimSpace(v)
+	}
+	if v, ok := m["gate-standards-cmd"]; ok {
+		cfg.GateStandardsCmd = strings.TrimSpace(v)
+	}
 	return cfg, nil
 }
 
@@ -347,6 +359,15 @@ func mergeConfig(global, project Config) Config {
 	}
 	if project.FallbackOnAuth != "" {
 		merged.FallbackOnAuth = project.FallbackOnAuth
+	}
+	if project.GateTestsCmd != "" {
+		merged.GateTestsCmd = project.GateTestsCmd
+	}
+	if project.GateLintCmd != "" {
+		merged.GateLintCmd = project.GateLintCmd
+	}
+	if project.GateStandardsCmd != "" {
+		merged.GateStandardsCmd = project.GateStandardsCmd
 	}
 	return merged
 }

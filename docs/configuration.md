@@ -145,6 +145,9 @@ Rules:
 | `no-review` | bool | `false` | Skip the reviewer gate and auto-approve executor outputs |
 | `no-color` | bool | `false` | Disable colored output |
 | `hook` | string | _(empty)_ | Script to run after executor, before reviewer |
+| `gate-tests-cmd` | string | `go test ./...` | Host command for `tests` quality gate |
+| `gate-lint-cmd` | string | `golangci-lint run` | Host command for `lint` quality gate |
+| `gate-standards-cmd` | string | `go test ./... && golangci-lint run` | Host command for `standards` quality gate |
 
 ### Binaries
 
@@ -234,6 +237,11 @@ claude-bin = "/usr/local/bin/claude"
 # Fallback chain
 fallback-on-transient = "gemini"
 fallback-on-auth = "ollama"
+
+# Host quality gates
+gate-tests-cmd = "go test ./..."
+gate-lint-cmd = "golangci-lint run"
+gate-standards-cmd = "go test ./... && golangci-lint run"
 
 # Ollama local setup
 ollama-url = "http://127.0.0.1:11434"

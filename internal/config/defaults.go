@@ -61,6 +61,9 @@ var Registry = []KeyMeta{
 	{Key: "no-review", DefaultValue: "false", Type: KeyTypeBool, Category: CategoryRuntime, Description: "Skip the reviewer gate and auto-approve"},
 	{Key: "no-color", DefaultValue: "false", Type: KeyTypeBool, Category: CategoryRuntime, Description: "Disable colored output"},
 	{Key: "hook", DefaultValue: "", Type: KeyTypeString, Category: CategoryRuntime, Description: "Script to run after executor, before reviewer"},
+	{Key: "gate-tests-cmd", DefaultValue: "go test ./...", Type: KeyTypeString, Category: CategoryRuntime, Description: "Host command for tests quality gate"},
+	{Key: "gate-lint-cmd", DefaultValue: "golangci-lint run", Type: KeyTypeString, Category: CategoryRuntime, Description: "Host command for lint quality gate"},
+	{Key: "gate-standards-cmd", DefaultValue: "go test ./... && golangci-lint run", Type: KeyTypeString, Category: CategoryRuntime, Description: "Host command for standards quality gate"},
 
 	// Binaries
 	{Key: "codex-bin", DefaultValue: "codex", Type: KeyTypeString, Category: CategoryBinaries, Description: "Codex binary path or name"},
