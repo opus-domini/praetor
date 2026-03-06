@@ -7,6 +7,9 @@
 # Ignore everything
 *
 
+# Local strategic plans (never version)
+.local-plans/
+
 # But not these files...
 !/.gitignore
 
