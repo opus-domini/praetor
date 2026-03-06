@@ -1,6 +1,9 @@
 package adapters
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestParseClaudeOutputJSON(t *testing.T) {
 	t.Parallel()
@@ -16,6 +19,54 @@ func TestParseClaudeOutputJSON(t *testing.T) {
 	}
 	if got.CostUSD != 0.0042 {
 		t.Errorf("CostUSD = %v, want %v", got.CostUSD, 0.0042)
+	}
+}
+
+func TestParseClaudeOutputStructuredOutputEnvelope(t *testing.T) {
+	t.Parallel()
+
+	stdout := `{"type":"result","cost_usd":0.0042,"structured_output":{"name":"test-plan","settings":{"agents":{"executor":{"agent":"codex"},"reviewer":{"agent":"claude"}}},"tasks":[{"id":"TASK-001","title":"Task","acceptance":["done"]}]}}`
+
+	got := parseClaudeOutput(stdout)
+	if got.Output == stdout {
+		t.Fatal("expected structured_output to be extracted from envelope")
+	}
+	if got.CostUSD != 0.0042 {
+		t.Errorf("CostUSD = %v, want %v", got.CostUSD, 0.0042)
+	}
+	if want := `"name":"test-plan"`; !strings.Contains(got.Output, want) {
+		t.Fatalf("Output = %q, want to contain %q", got.Output, want)
+	}
+}
+
+func TestParseClaudeOutputPrefersStructuredOutputOverResultText(t *testing.T) {
+	t.Parallel()
+
+	stdout := `{"type":"result","result":"I made assumptions and here is a summary.","cost_usd":0.0042,"structured_output":{"name":"test-plan","settings":{"agents":{"executor":{"agent":"codex"},"reviewer":{"agent":"claude"}}},"tasks":[{"id":"TASK-001","title":"Task","acceptance":["done"]}]}}`
+
+	got := parseClaudeOutput(stdout)
+	if strings.Contains(got.Output, "summary") {
+		t.Fatalf("Output should prefer structured_output over result text, got %q", got.Output)
+	}
+	if want := `"name":"test-plan"`; !strings.Contains(got.Output, want) {
+		t.Fatalf("Output = %q, want to contain %q", got.Output, want)
+	}
+}
+
+func TestParseClaudeOutputEventArrayUsesStructuredOutputFromResult(t *testing.T) {
+	t.Parallel()
+
+	stdout := `[{"type":"system","subtype":"init"},{"type":"assistant","message":{"content":[{"type":"text","text":"ignore me"}]}},{"type":"result","cost_usd":0.0042,"structured_output":{"name":"test-plan","settings":{"agents":{"executor":{"agent":"codex"},"reviewer":{"agent":"claude"}}},"tasks":[{"id":"TASK-001","title":"Task","acceptance":["done"]}]}}]`
+
+	got := parseClaudeOutput(stdout)
+	if got.Output == stdout {
+		t.Fatal("expected result event to be extracted from event array")
+	}
+	if got.CostUSD != 0.0042 {
+		t.Errorf("CostUSD = %v, want %v", got.CostUSD, 0.0042)
+	}
+	if want := `"name":"test-plan"`; !strings.Contains(got.Output, want) {
+		t.Fatalf("Output = %q, want to contain %q", got.Output, want)
 	}
 }
 

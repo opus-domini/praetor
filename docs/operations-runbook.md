@@ -103,7 +103,7 @@ praetor plan diagnose <slug> --query stalls
 - `parse error event(s)`
   - Action: inspect executor/reviewer output contract and retry policy.
 - `task stalled`
-  - Action: inspect feedback loop, fallback behavior, and budget truncation.
+  - Action: inspect feedback loop, fallback behavior, prompt budget truncation, and cost budget events.
 
 ## Operational rule
 

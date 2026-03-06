@@ -17,6 +17,7 @@
 !*.tmpl
 !/go.sum
 !/go.mod
+!/.mise.toml
 
 !/.README.md
 !/CONTRIBUTING.md

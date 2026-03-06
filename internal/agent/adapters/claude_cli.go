@@ -13,8 +13,9 @@ import (
 )
 
 // ClaudeCLI is a CLI-backed Agent implementation using the `claude` CLI.
-// Execute uses `claude -p --output-format json` (one-shot, no PTY).
-// Plan and Review use `claude -p --output-format stream-json` (streaming, PTY).
+// Plan uses `claude -p --output-format json` with `--json-schema`.
+// Execute uses `claude -p --output-format json` for one-shot and `stream-json` in the pipeline.
+// Review uses `claude -p --output-format stream-json` (streaming, PTY).
 type ClaudeCLI struct {
 	Binary string
 	Runner runner.CommandRunner
@@ -49,7 +50,7 @@ func (a *ClaudeCLI) Plan(ctx context.Context, req agent.PlanRequest) (agent.Plan
 	if objective == "" {
 		return agent.PlanResponse{}, errors.New("objective is required")
 	}
-	systemPrompt := "You are a planning agent. Return only valid JSON."
+	systemPrompt := "You are a planning agent. Return only one valid JSON object matching the requested schema. Never ask follow-up questions. If context is ambiguous, make reasonable assumptions and encode unresolved items in the JSON instead of asking."
 	prompt := "Create a dependency-aware execution plan for:\n\n" + objective
 	if req.PromptEngine != nil {
 		if s, err := req.PromptEngine.Render("adapter.plan.claude", adapterPlanData(objective, req.WorkspaceContext)); err == nil {
@@ -63,12 +64,16 @@ func (a *ClaudeCLI) Plan(ctx context.Context, req agent.PlanRequest) (agent.Plan
 			systemPrompt = "Project context:\n" + c + "\n\n" + systemPrompt
 		}
 	}
-	resp, err := a.run(ctx, req.Workdir, req.Model, systemPrompt, prompt, req.RunDir, req.OutputPrefix, req.TaskLabel)
+	resp, err := a.plan(ctx, req.Workdir, req.Model, systemPrompt, prompt, req.RunDir, req.OutputPrefix, req.TaskLabel)
 	if err != nil {
 		return agent.PlanResponse{}, err
 	}
+	if manifest := plannerManifest(resp.Output); len(manifest) > 0 {
+		resp.Manifest = manifest
+		return resp, nil
+	}
 	obj, err := ExtractJSONObject(resp.Output)
-	if err == nil {
+	if err == nil && json.Valid([]byte(obj)) {
 		resp.Manifest = json.RawMessage(obj)
 	}
 	return resp, nil
@@ -187,29 +192,148 @@ func (a *ClaudeCLI) run(ctx context.Context, workdir, model, systemPrompt, promp
 	}, nil
 }
 
-// parseClaudeOutput parses the single JSON object from `claude -p --output-format json`.
+func (a *ClaudeCLI) plan(ctx context.Context, workdir, model, systemPrompt, prompt, runDir, outputPrefix, taskLabel string) (agent.PlanResponse, error) {
+	start := time.Now()
+	args := []string{a.Binary, "-p",
+		"--no-session-persistence",
+		"--verbose",
+		"--output-format", "json",
+		"--tools", "",
+		"--disable-slash-commands",
+		"--json-schema", plannerOutputSchema(),
+	}
+	if model = strings.TrimSpace(model); model != "" {
+		args = append(args, "--model", model)
+	}
+	if systemPrompt = strings.TrimSpace(systemPrompt); systemPrompt != "" {
+		args = append(args, "--system-prompt", systemPrompt)
+	}
+	args = append(args, strings.TrimSpace(prompt))
+
+	result, err := a.Runner.Run(ctx, runner.CommandSpec{
+		Args:         args,
+		Dir:          strings.TrimSpace(workdir),
+		UsePTY:       false,
+		RunDir:       strings.TrimSpace(runDir),
+		OutputPrefix: strings.TrimSpace(outputPrefix),
+		WindowHint:   strings.TrimSpace(taskLabel),
+	})
+	if err != nil {
+		return agent.PlanResponse{DurationS: time.Since(start).Seconds()}, err
+	}
+	if result.ExitCode != 0 {
+		return agent.PlanResponse{DurationS: time.Since(start).Seconds()}, fmt.Errorf("claude exit code %d: %s", result.ExitCode, TailText(result.Stderr, 20))
+	}
+	parsed := parseClaudeOutput(result.Stdout)
+	if parsed.Model != "" {
+		model = parsed.Model
+	}
+	return agent.PlanResponse{
+		Output:    parsed.Output,
+		Model:     model,
+		CostUSD:   parsed.CostUSD,
+		DurationS: time.Since(start).Seconds(),
+		Strategy:  result.Strategy,
+	}, nil
+}
+
+// parseClaudeOutput parses JSON emitted by `claude -p --output-format json`.
 func parseClaudeOutput(stdout string) claudeParsed {
 	stdout = strings.TrimSpace(stdout)
 	if stdout == "" {
 		return claudeParsed{}
 	}
-	var resp struct {
-		Result  string  `json:"result"`
-		Model   string  `json:"model"`
-		CostUSD float64 `json:"cost_usd"`
+	type contentBlock struct {
+		Type string `json:"type"`
+		Text string `json:"text,omitempty"`
 	}
+	type messageEnvelope struct {
+		Model   string         `json:"model,omitempty"`
+		Content []contentBlock `json:"content,omitempty"`
+	}
+	type resultEnvelope struct {
+		Type             string          `json:"type,omitempty"`
+		Result           string          `json:"result,omitempty"`
+		Model            string          `json:"model,omitempty"`
+		CostUSD          float64         `json:"cost_usd,omitempty"`
+		StructuredOutput json.RawMessage `json:"structured_output,omitempty"`
+		Message          messageEnvelope `json:"message,omitempty"`
+	}
+
+	parseEnvelope := func(resp resultEnvelope, fallback string) claudeParsed {
+		output := ""
+		if len(resp.StructuredOutput) > 0 && json.Valid(resp.StructuredOutput) {
+			output = string(resp.StructuredOutput)
+		}
+		if output == "" {
+			output = strings.TrimSpace(resp.Result)
+		}
+		if output == "" && len(resp.Message.Content) > 0 {
+			var parts []string
+			for _, block := range resp.Message.Content {
+				if block.Type == "text" && strings.TrimSpace(block.Text) != "" {
+					parts = append(parts, strings.TrimSpace(block.Text))
+				}
+			}
+			if len(parts) > 0 {
+				output = strings.Join(parts, "\n")
+			}
+		}
+		if output == "" {
+			output = fallback
+		}
+		model := strings.TrimSpace(resp.Model)
+		if model == "" {
+			model = strings.TrimSpace(resp.Message.Model)
+		}
+		return claudeParsed{
+			Output:  output,
+			Model:   model,
+			CostUSD: resp.CostUSD,
+		}
+	}
+
+	if strings.HasPrefix(stdout, "[") {
+		var events []resultEnvelope
+		if err := json.Unmarshal([]byte(stdout), &events); err == nil {
+			var (
+				lastResult    resultEnvelope
+				hasResult     bool
+				assistantText []string
+			)
+			for _, event := range events {
+				if event.Type == "result" {
+					lastResult = event
+					hasResult = true
+					continue
+				}
+				if event.Type == "assistant" {
+					for _, block := range event.Message.Content {
+						if block.Type == "text" && strings.TrimSpace(block.Text) != "" {
+							assistantText = append(assistantText, strings.TrimSpace(block.Text))
+						}
+					}
+				}
+			}
+			if hasResult {
+				parsed := parseEnvelope(lastResult, stdout)
+				if strings.TrimSpace(parsed.Output) == stdout && len(assistantText) > 0 {
+					parsed.Output = strings.Join(assistantText, "\n")
+				}
+				return parsed
+			}
+			if len(assistantText) > 0 {
+				return claudeParsed{Output: strings.Join(assistantText, "\n")}
+			}
+		}
+		return claudeParsed{Output: stdout}
+	}
+
+	var resp resultEnvelope
 	if err := json.Unmarshal([]byte(stdout), &resp); err != nil {
 		return claudeParsed{Output: stdout}
 	}
-	output := strings.TrimSpace(resp.Result)
-	if output == "" {
-		output = stdout
-	}
-	return claudeParsed{
-		Output:  output,
-		Model:   strings.TrimSpace(resp.Model),
-		CostUSD: resp.CostUSD,
-	}
+	return parseEnvelope(resp, stdout)
 }
 
 type claudeParsed struct {

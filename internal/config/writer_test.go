@@ -236,6 +236,66 @@ func TestSetValueBoolFormat(t *testing.T) {
 	}
 }
 
+func TestSetValueFloatFormat(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.toml")
+
+	if err := SetValue(cfgPath, "", "plan-cost-budget-usd", "12.5"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if err := SetValue(cfgPath, "", "cost-budget-warn-threshold", "0.9"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	data, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(data)
+	if !strings.Contains(content, "plan-cost-budget-usd = 12.5") {
+		t.Errorf("expected bare float plan budget, got:\n%s", content)
+	}
+	if !strings.Contains(content, "cost-budget-warn-threshold = 0.9") {
+		t.Errorf("expected bare float warn threshold, got:\n%s", content)
+	}
+}
+
+func TestSetValueCostPolicyRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.toml")
+	t.Setenv("PRAETOR_CONFIG", cfgPath)
+
+	if err := SetValue(cfgPath, "", "plan-cost-budget-usd", "10"); err != nil {
+		t.Fatalf("SetValue: %v", err)
+	}
+	if err := SetValue(cfgPath, "", "task-cost-budget-usd", "2.5"); err != nil {
+		t.Fatalf("SetValue: %v", err)
+	}
+	if err := SetValue(cfgPath, "", "cost-budget-warn-threshold", "0.85"); err != nil {
+		t.Fatalf("SetValue: %v", err)
+	}
+	if err := SetValue(cfgPath, "", "cost-budget-enforce", "false"); err != nil {
+		t.Fatalf("SetValue: %v", err)
+	}
+
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.PlanCostBudgetUSD == nil || *cfg.PlanCostBudgetUSD != 10 {
+		t.Errorf("expected plan-cost-budget-usd=10, got %#v", cfg.PlanCostBudgetUSD)
+	}
+	if cfg.TaskCostBudgetUSD == nil || *cfg.TaskCostBudgetUSD != 2.5 {
+		t.Errorf("expected task-cost-budget-usd=2.5, got %#v", cfg.TaskCostBudgetUSD)
+	}
+	if cfg.CostWarnThreshold == nil || *cfg.CostWarnThreshold != 0.85 {
+		t.Errorf("expected cost-budget-warn-threshold=0.85, got %#v", cfg.CostWarnThreshold)
+	}
+	if cfg.CostBudgetEnforce == nil || *cfg.CostBudgetEnforce {
+		t.Errorf("expected cost-budget-enforce=false, got %#v", cfg.CostBudgetEnforce)
+	}
+}
+
 func TestValidateValueRejectsNegativeRetries(t *testing.T) {
 	t.Parallel()
 
@@ -267,5 +327,23 @@ func TestValidateValueAcceptsString(t *testing.T) {
 
 	if err := ValidateValue("executor", "any-value"); err != nil {
 		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestValidateValueRejectsNegativeCostBudget(t *testing.T) {
+	t.Parallel()
+
+	err := ValidateValue("plan-cost-budget-usd", "-1")
+	if err == nil {
+		t.Fatal("expected error for negative cost budget")
+	}
+}
+
+func TestValidateValueRejectsInvalidCostWarnThreshold(t *testing.T) {
+	t.Parallel()
+
+	err := ValidateValue("cost-budget-warn-threshold", "1.1")
+	if err == nil {
+		t.Fatal("expected error for warn threshold above 1")
 	}
 }

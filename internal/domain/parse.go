@@ -46,9 +46,10 @@ func ParseExecutorResult(output string) ExecutorResult {
 type ReviewDecision struct {
 	Pass   bool
 	Reason string
+	Hints  []string
 }
 
-// ParseReviewDecision parses reviewer output in PASS|reason or FAIL|reason format.
+// ParseReviewDecision parses reviewer output in PASS|reason or FAIL|reason|HINT:... format.
 func ParseReviewDecision(output string) ReviewDecision {
 	for _, line := range strings.Split(output, "\n") {
 		trimmed := strings.TrimSpace(strings.TrimSuffix(line, "\r"))
@@ -56,11 +57,27 @@ func ParseReviewDecision(output string) ReviewDecision {
 			continue
 		}
 
-		parts := strings.SplitN(trimmed, "|", 2)
+		parts := strings.Split(trimmed, "|")
 		decision := strings.ToUpper(strings.TrimSpace(parts[0]))
 		reason := ""
-		if len(parts) == 2 {
-			reason = strings.TrimSpace(parts[1])
+		hints := make([]string, 0)
+		for _, part := range parts[1:] {
+			part = strings.TrimSpace(part)
+			if strings.HasPrefix(strings.ToUpper(part), "HINT:") {
+				hint := strings.TrimSpace(part[len("HINT:"):])
+				if hint != "" {
+					hints = append(hints, hint)
+				}
+				continue
+			}
+			if part == "" {
+				continue
+			}
+			if reason == "" {
+				reason = part
+			} else {
+				reason += " | " + part
+			}
 		}
 
 		switch decision {
@@ -73,7 +90,10 @@ func ParseReviewDecision(output string) ReviewDecision {
 			if reason == "" {
 				reason = "review failed"
 			}
-			return ReviewDecision{Pass: false, Reason: reason}
+			if len(hints) == 0 {
+				hints = append(hints, reason)
+			}
+			return ReviewDecision{Pass: false, Reason: reason, Hints: hints}
 		default:
 			return ReviewDecision{Pass: false, Reason: "reviewer output must use PASS|... or FAIL|..."}
 		}

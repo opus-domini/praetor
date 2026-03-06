@@ -15,11 +15,19 @@ import (
 type ProbeStatus string
 
 const (
-	StatusOK          ProbeStatus = "ok"
-	StatusNotFound    ProbeStatus = "not_found"
-	StatusError       ProbeStatus = "error"
-	StatusUnreachable ProbeStatus = "unreachable"
+	StatusPass ProbeStatus = "pass"
+	StatusWarn ProbeStatus = "warn"
+	StatusFail ProbeStatus = "fail"
 )
+
+// HealthCheck describes one structured environment check.
+type HealthCheck struct {
+	Code    string `json:"code"`
+	Level   string `json:"level"`
+	Message string `json:"message"`
+	Detail  string `json:"detail,omitempty"`
+	Hint    string `json:"hint,omitempty"`
+}
 
 // ProbeResult holds the outcome of a health check for one agent.
 type ProbeResult struct {
@@ -30,11 +38,12 @@ type ProbeResult struct {
 	Version     string // parsed version string, empty if unavailable
 	Path        string // resolved binary path (CLI) or base URL (REST)
 	Detail      string // human-readable status detail or error message
+	Checks      []HealthCheck
 }
 
 // Healthy reports whether the probe found the agent operational.
 func (r ProbeResult) Healthy() bool {
-	return r.Status == StatusOK
+	return r.Status != StatusFail
 }
 
 // Prober runs health checks against agent backends.
@@ -94,8 +103,14 @@ func (p *Prober) ProbeAll(ctx context.Context, binaryOverrides map[ID]string, re
 				ID:          entry.ID,
 				DisplayName: entry.DisplayName,
 				Transport:   entry.Transport,
-				Status:      StatusError,
+				Status:      StatusFail,
 				Detail:      fmt.Sprintf("unknown transport %q", entry.Transport),
+				Checks: []HealthCheck{{
+					Code:    "unknown_transport",
+					Level:   "error",
+					Message: "Unknown transport",
+					Detail:  fmt.Sprintf("transport %q is not supported", entry.Transport),
+				}},
 			}
 		}
 		results = append(results, result)
@@ -128,10 +143,48 @@ func (p *Prober) ProbeOne(ctx context.Context, id ID, binaryOverride string, res
 			ID:          entry.ID,
 			DisplayName: entry.DisplayName,
 			Transport:   entry.Transport,
-			Status:      StatusError,
+			Status:      StatusFail,
 			Detail:      fmt.Sprintf("unknown transport %q", entry.Transport),
+			Checks: []HealthCheck{{
+				Code:    "unknown_transport",
+				Level:   "error",
+				Message: "Unknown transport",
+				Detail:  fmt.Sprintf("transport %q is not supported", entry.Transport),
+			}},
 		}, nil
 	}
+}
+
+func addCheck(result *ProbeResult, code, level, message, detail, hint string) {
+	if result == nil {
+		return
+	}
+	result.Checks = append(result.Checks, HealthCheck{
+		Code:    code,
+		Level:   level,
+		Message: message,
+		Detail:  strings.TrimSpace(detail),
+		Hint:    strings.TrimSpace(hint),
+	})
+	result.Status = aggregateProbeStatus(result.Checks)
+	if strings.TrimSpace(detail) != "" {
+		result.Detail = strings.TrimSpace(detail)
+	} else {
+		result.Detail = strings.TrimSpace(message)
+	}
+}
+
+func aggregateProbeStatus(checks []HealthCheck) ProbeStatus {
+	status := StatusPass
+	for _, check := range checks {
+		switch strings.ToLower(strings.TrimSpace(check.Level)) {
+		case "error":
+			return StatusFail
+		case "warn":
+			status = StatusWarn
+		}
+	}
+	return status
 }
 
 func (p *Prober) probeCLI(ctx context.Context, entry CatalogEntry, binary string) ProbeResult {
@@ -139,19 +192,19 @@ func (p *Prober) probeCLI(ctx context.Context, entry CatalogEntry, binary string
 		ID:          entry.ID,
 		DisplayName: entry.DisplayName,
 		Transport:   entry.Transport,
+		Status:      StatusPass,
 	}
 
 	resolvedPath, err := exec.LookPath(binary)
 	if err != nil {
-		result.Status = StatusNotFound
-		result.Detail = fmt.Sprintf("%s not found in PATH", binary)
+		addCheck(&result, "binary_missing", "error", "Binary not found", fmt.Sprintf("%s not found in PATH", binary), entry.InstallHint)
 		return result
 	}
 	result.Path = resolvedPath
+	addCheck(&result, "binary_found", "info", "Binary found", resolvedPath, "")
 
 	if len(entry.VersionArgs) == 0 {
-		result.Status = StatusOK
-		result.Detail = "binary found (version detection not configured)"
+		addCheck(&result, "version_skipped", "info", "Version check skipped", "version detection is not configured for this adapter", "")
 		return result
 	}
 
@@ -164,9 +217,7 @@ func (p *Prober) probeCLI(ctx context.Context, entry CatalogEntry, binary string
 	cmd.Stderr = &stderrBuf
 	err = cmd.Run()
 	if err != nil {
-		// Binary exists but version command failed — still usable.
-		result.Status = StatusOK
-		result.Detail = "binary found (version command failed: " + strings.TrimSpace(err.Error()) + ")"
+		addCheck(&result, "version_probe_failed", "warn", "Version command failed", strings.TrimSpace(err.Error()), "Check whether the installed CLI supports --version or update it.")
 		return result
 	}
 
@@ -177,11 +228,10 @@ func (p *Prober) probeCLI(ctx context.Context, entry CatalogEntry, binary string
 		version = parseVersion(stripANSI(strings.TrimSpace(stderrBuf.String())))
 	}
 	result.Version = version
-	result.Status = StatusOK
 	if version != "" {
-		result.Detail = "v" + version
+		addCheck(&result, "version_parsed", "info", "Version detected", "v"+version, "")
 	} else {
-		result.Detail = "binary found"
+		addCheck(&result, "version_missing", "warn", "Binary found but version could not be parsed", strings.TrimSpace(stdoutBuf.String()), "Run the binary manually and confirm it prints a semantic version.")
 	}
 	return result
 }
@@ -191,18 +241,18 @@ func (p *Prober) probeREST(ctx context.Context, entry CatalogEntry, baseURL stri
 		ID:          entry.ID,
 		DisplayName: entry.DisplayName,
 		Transport:   entry.Transport,
+		Status:      StatusPass,
 	}
 
 	if baseURL == "" {
-		result.Status = StatusError
-		result.Detail = "no endpoint configured"
+		addCheck(&result, "endpoint_missing", "error", "Endpoint is not configured", "no endpoint configured", entry.InstallHint)
 		return result
 	}
 	result.Path = baseURL
+	addCheck(&result, "endpoint_configured", "info", "Endpoint configured", baseURL, "")
 
 	if entry.HealthEndpoint == "" {
-		result.Status = StatusOK
-		result.Detail = "endpoint configured (no health check path)"
+		addCheck(&result, "healthcheck_skipped", "info", "Health check skipped", "adapter has no dedicated health endpoint", "")
 		return result
 	}
 
@@ -212,25 +262,21 @@ func (p *Prober) probeREST(ctx context.Context, entry CatalogEntry, baseURL stri
 	url := strings.TrimRight(baseURL, "/") + entry.HealthEndpoint
 	req, err := http.NewRequestWithContext(probeCtx, http.MethodGet, url, nil)
 	if err != nil {
-		result.Status = StatusError
-		result.Detail = "invalid endpoint URL: " + err.Error()
+		addCheck(&result, "endpoint_invalid", "error", "Endpoint URL is invalid", err.Error(), entry.InstallHint)
 		return result
 	}
 
 	resp, err := p.httpClient.Do(req)
 	if err != nil {
-		result.Status = StatusUnreachable
-		result.Detail = "endpoint unreachable: " + summarizeNetError(err)
+		addCheck(&result, "endpoint_unreachable", "error", "Health endpoint unreachable", summarizeNetError(err), restHint(entry))
 		return result
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode >= 200 && resp.StatusCode < 400 {
-		result.Status = StatusOK
-		result.Detail = fmt.Sprintf("reachable (HTTP %d)", resp.StatusCode)
+		addCheck(&result, "endpoint_reachable", "info", "Health endpoint reachable", fmt.Sprintf("HTTP %d", resp.StatusCode), "")
 	} else {
-		result.Status = StatusError
-		result.Detail = fmt.Sprintf("endpoint returned HTTP %d", resp.StatusCode)
+		addCheck(&result, "endpoint_error", "error", "Health endpoint returned an error", fmt.Sprintf("HTTP %d", resp.StatusCode), restHint(entry))
 	}
 	return result
 }
@@ -285,4 +331,17 @@ func summarizeNetError(err error) string {
 		}
 	}
 	return msg
+}
+
+func restHint(entry CatalogEntry) string {
+	switch entry.ID {
+	case Ollama:
+		return "Start Ollama with: ollama serve"
+	case LMStudio:
+		return "Start the LM Studio local server and verify the configured port."
+	case OpenRouter:
+		return "Verify the endpoint URL and that the required API key is configured."
+	default:
+		return entry.InstallHint
+	}
 }

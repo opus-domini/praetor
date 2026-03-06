@@ -217,10 +217,10 @@ func TestLoadPlanAcceptsFullFeatures(t *testing.T) {
       "agents": {
         "executor": "claude",
         "reviewer": "none"
-      }
-    }
-  ]
-}
+	      }
+	    }
+	  ]
+	}
 `), 0o644); err != nil {
 		t.Fatalf("write plan: %v", err)
 	}
@@ -249,6 +249,67 @@ func TestLoadPlanAcceptsFullFeatures(t *testing.T) {
 	}
 }
 
+func TestLoadPlanAcceptsPromptBudgetAndCostPolicy(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	planPath := filepath.Join(dir, "policy.json")
+	if err := os.WriteFile(planPath, []byte(`{
+  "name": "policy-plan",
+  "settings": {
+    "agents": {
+      "executor": {"agent": "codex"},
+      "reviewer": {"agent": "claude"}
+    },
+    "execution_policy": {
+      "prompt_budget": {
+        "executor_chars": 120000,
+        "reviewer_chars": 80000
+      },
+      "cost": {
+        "plan_limit_cents": 1500,
+        "task_limit_cents": 500,
+        "warn_threshold": 0.8,
+        "enforce": true
+      }
+    }
+  },
+  "tasks": [
+    {
+      "id": "TASK-001",
+      "title": "task",
+      "acceptance": ["done"]
+    }
+  ]
+}
+`), 0o644); err != nil {
+		t.Fatalf("write plan: %v", err)
+	}
+
+	plan, err := LoadPlan(planPath)
+	if err != nil {
+		t.Fatalf("load plan: %v", err)
+	}
+	if plan.Settings.ExecutionPolicy.PromptBudget.ExecutorChars != 120000 {
+		t.Fatalf("executor prompt chars = %d, want 120000", plan.Settings.ExecutionPolicy.PromptBudget.ExecutorChars)
+	}
+	if plan.Settings.ExecutionPolicy.PromptBudget.ReviewerChars != 80000 {
+		t.Fatalf("reviewer prompt chars = %d, want 80000", plan.Settings.ExecutionPolicy.PromptBudget.ReviewerChars)
+	}
+	if plan.Settings.ExecutionPolicy.Cost.PlanLimitCents != 1500 {
+		t.Fatalf("plan limit cents = %d, want 1500", plan.Settings.ExecutionPolicy.Cost.PlanLimitCents)
+	}
+	if plan.Settings.ExecutionPolicy.Cost.TaskLimitCents != 500 {
+		t.Fatalf("task limit cents = %d, want 500", plan.Settings.ExecutionPolicy.Cost.TaskLimitCents)
+	}
+	if plan.Settings.ExecutionPolicy.Cost.WarnThreshold != 0.8 {
+		t.Fatalf("warn threshold = %.2f, want 0.80", plan.Settings.ExecutionPolicy.Cost.WarnThreshold)
+	}
+	if plan.Settings.ExecutionPolicy.Cost.Enforce == nil || !*plan.Settings.ExecutionPolicy.Cost.Enforce {
+		t.Fatal("expected enforce=true")
+	}
+}
+
 func TestValidatePlanRejectsInvalidTaskConstraintTimeout(t *testing.T) {
 	t.Parallel()
 	plan := Plan{
@@ -272,6 +333,37 @@ func TestValidatePlanRejectsInvalidTaskConstraintTimeout(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "constraints.timeout") {
 		t.Fatalf("expected constraints.timeout error, got: %v", err)
+	}
+}
+
+func TestValidatePlanRejectsInvalidCostWarnThreshold(t *testing.T) {
+	t.Parallel()
+
+	enforce := true
+	plan := Plan{
+		Name: "bad-cost-threshold",
+		Settings: PlanSettings{
+			Agents: PlanAgents{
+				Executor: PlanAgentConfig{Agent: AgentCodex},
+				Reviewer: PlanAgentConfig{Agent: AgentClaude},
+			},
+			ExecutionPolicy: ExecutionPolicy{
+				Cost: CostPolicy{
+					PlanLimitCents: 1000,
+					WarnThreshold:  1.2,
+					Enforce:        &enforce,
+				},
+			},
+		},
+		Tasks: []Task{{ID: "TASK-001", Title: "task", Acceptance: []string{"done"}}},
+	}
+
+	err := ValidatePlan(plan)
+	if err == nil {
+		t.Fatal("expected invalid cost threshold error")
+	}
+	if !strings.Contains(err.Error(), "settings.execution_policy.cost.warn_threshold") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 

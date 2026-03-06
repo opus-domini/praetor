@@ -161,14 +161,16 @@ type promptPerformanceEntry struct {
 }
 
 func (run *activeRun) appendPerformanceEntry(phase, prompt string, truncated []string) error {
-	if run == nil || run.budgetManager == nil || strings.TrimSpace(run.performancePath) == "" {
+	if run == nil || run.promptBudget == nil || strings.TrimSpace(run.performancePath) == "" {
 		return nil
 	}
+	run.mu.Lock()
+	defer run.mu.Unlock()
 	entry := promptPerformanceEntry{
 		Iteration:         run.stats.Iterations,
 		Phase:             strings.TrimSpace(phase),
 		PromptChars:       len(prompt),
-		EstimatedTokens:   run.budgetManager.EstimateTokens(prompt),
+		EstimatedTokens:   run.promptBudget.EstimateTokens(prompt),
 		SectionsTruncated: truncated,
 	}
 	encoded, err := json.Marshal(entry)
@@ -190,8 +192,8 @@ func (run *activeRun) appendPerformanceEntry(phase, prompt string, truncated []s
 		run.eventSink.Emit(middleware.ExecutionEvent{
 			SchemaVersion: 1,
 			Timestamp:     time.Now().UTC().Format(time.RFC3339),
-			Type:          middleware.EventBudgetWarning,
-			EventType:     string(middleware.EventBudgetWarning),
+			Type:          middleware.EventPromptBudgetWarning,
+			EventType:     string(middleware.EventPromptBudgetWarning),
 			RunID:         run.runID,
 			Phase:         strings.TrimSpace(phase),
 			Action:        "truncated",
@@ -199,7 +201,7 @@ func (run *activeRun) appendPerformanceEntry(phase, prompt string, truncated []s
 			Data: map[string]any{
 				"phase":              strings.TrimSpace(phase),
 				"prompt_chars":       len(prompt),
-				"estimated_tokens":   run.budgetManager.EstimateTokens(prompt),
+				"estimated_tokens":   run.promptBudget.EstimateTokens(prompt),
 				"sections_truncated": truncated,
 			},
 		})

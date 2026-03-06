@@ -36,10 +36,11 @@ func (s *Store) Status(slug string) (domain.PlanStatus, error) {
 	stateFile := s.StateFile(slug)
 	if _, err := os.Stat(stateFile); errors.Is(err, os.ErrNotExist) {
 		return domain.PlanStatus{
-			PlanSlug: slug,
-			Total:    len(plan.Tasks),
-			Active:   len(plan.Tasks),
-			Done:     0,
+			PlanSlug:        slug,
+			Total:           len(plan.Tasks),
+			Active:          len(plan.Tasks),
+			Done:            0,
+			ExecutionPolicy: plan.Settings.ExecutionPolicy,
 		}, nil
 	} else if err != nil {
 		return domain.PlanStatus{}, fmt.Errorf("stat state file: %w", err)
@@ -52,16 +53,18 @@ func (s *Store) Status(slug string) (domain.PlanStatus, error) {
 	lockRunning, _ := s.IsPlanRunning(slug)
 
 	return domain.PlanStatus{
-		PlanSlug:  slug,
-		StateFile: stateFile,
-		UpdatedAt: state.UpdatedAt,
-		Outcome:   state.Outcome,
-		Done:      state.DoneCount(),
-		Failed:    state.FailedCount(),
-		Active:    state.ActiveCount(),
-		Total:     len(state.Tasks),
-		Running:   lockRunning,
-		Tasks:     state.Tasks,
+		PlanSlug:        slug,
+		StateFile:       stateFile,
+		UpdatedAt:       state.UpdatedAt,
+		Outcome:         state.Outcome,
+		Done:            state.DoneCount(),
+		Failed:          state.FailedCount(),
+		Active:          state.ActiveCount(),
+		Total:           len(state.Tasks),
+		Running:         lockRunning,
+		ExecutionPolicy: resolveStatusExecutionPolicy(state.ExecutionPolicy, plan.Settings.ExecutionPolicy),
+		TotalCostMicros: state.TotalCostMicros,
+		Tasks:           state.Tasks,
 	}, nil
 }
 
@@ -109,9 +112,10 @@ func (s *Store) ListPlanStatuses() ([]domain.PlanStatus, error) {
 				continue
 			}
 			statuses = append(statuses, domain.PlanStatus{
-				PlanSlug: slug,
-				Total:    len(plan.Tasks),
-				Active:   len(plan.Tasks),
+				PlanSlug:        slug,
+				Total:           len(plan.Tasks),
+				Active:          len(plan.Tasks),
+				ExecutionPolicy: plan.Settings.ExecutionPolicy,
 			})
 			continue
 		} else if err != nil {
@@ -129,15 +133,17 @@ func (s *Store) ListPlanStatuses() ([]domain.PlanStatus, error) {
 
 		running, _ := s.IsPlanRunning(slug)
 		statuses = append(statuses, domain.PlanStatus{
-			PlanSlug:  slug,
-			StateFile: stateFile,
-			UpdatedAt: state.UpdatedAt,
-			Outcome:   state.Outcome,
-			Done:      state.DoneCount(),
-			Failed:    state.FailedCount(),
-			Active:    state.ActiveCount(),
-			Total:     len(state.Tasks),
-			Running:   running,
+			PlanSlug:        slug,
+			StateFile:       stateFile,
+			UpdatedAt:       state.UpdatedAt,
+			Outcome:         state.Outcome,
+			Done:            state.DoneCount(),
+			Failed:          state.FailedCount(),
+			Active:          state.ActiveCount(),
+			Total:           len(state.Tasks),
+			Running:         running,
+			ExecutionPolicy: state.ExecutionPolicy,
+			TotalCostMicros: state.TotalCostMicros,
 		})
 	}
 
@@ -145,6 +151,13 @@ func (s *Store) ListPlanStatuses() ([]domain.PlanStatus, error) {
 		return statuses[i].PlanSlug < statuses[j].PlanSlug
 	})
 	return statuses, nil
+}
+
+func resolveStatusExecutionPolicy(statePolicy, planPolicy domain.ExecutionPolicy) domain.ExecutionPolicy {
+	if statePolicy != (domain.ExecutionPolicy{}) {
+		return statePolicy
+	}
+	return planPolicy
 }
 
 // IsPlanRunning reports whether the lock PID is alive.

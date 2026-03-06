@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"strings"
@@ -17,6 +18,7 @@ func newDoctorCmd() *cobra.Command {
 	var workdir string
 	var noColor bool
 	var timeout time.Duration
+	var jsonOut bool
 
 	cmd := &cobra.Command{
 		Use:   "doctor",
@@ -57,23 +59,43 @@ For REST agents: verifies the endpoint is reachable via HTTP health check.`,
 				defer cancel()
 			}
 
-			r.Header("Agent Health Check")
-			_, _ = fmt.Fprintln(stdout)
+			if !jsonOut {
+				r.Header("Agent Health Check")
+				_, _ = fmt.Fprintln(stdout)
+			}
 
 			entries := agent.AllCatalogEntries()
 			healthy := 0
 			total := len(entries)
+			results := make([]agent.ProbeResult, 0, len(entries))
 
 			for _, entry := range entries {
-				writeProbeProgress(stdout, r, entry)
+				if !jsonOut {
+					writeProbeProgress(stdout, r, entry)
+				}
 				binOverride := binaryOverrides[entry.ID]
 				restEndpoint := restEndpoints[entry.ID]
 				result, _ := prober.ProbeOne(ctx, entry.ID, binOverride, restEndpoint)
-				clearProbeProgress(stdout, r, entry)
-				writeProbeResult(stdout, r, result)
+				results = append(results, result)
+				if !jsonOut {
+					clearProbeProgress(stdout, r, entry)
+				}
+				if !jsonOut {
+					writeProbeResult(stdout, r, result)
+				}
 				if result.Healthy() {
 					healthy++
 				}
+			}
+
+			if jsonOut {
+				encoded, err := json.MarshalIndent(results, "", "  ")
+				if err != nil {
+					return err
+				}
+				encoded = append(encoded, '\n')
+				_, err = stdout.Write(encoded)
+				return err
 			}
 
 			_, _ = fmt.Fprintln(stdout)
@@ -93,6 +115,7 @@ For REST agents: verifies the endpoint is reachable via HTTP health check.`,
 	cmd.Flags().StringVar(&workdir, "workdir", ".", "Working directory for config resolution")
 	cmd.Flags().BoolVar(&noColor, "no-color", false, "Disable colored output")
 	cmd.Flags().DurationVar(&timeout, "timeout", 10*time.Second, "Per-probe timeout (e.g. 5s, 15s)")
+	cmd.Flags().BoolVar(&jsonOut, "json", false, "Print structured JSON output")
 	return cmd
 }
 
@@ -110,17 +133,13 @@ func clearProbeProgress(w io.Writer, r *Renderer, entry agent.CatalogEntry) {
 func writeProbeResult(w io.Writer, r *Renderer, result agent.ProbeResult) {
 	var statusColor string
 	switch result.Status {
-	case agent.StatusOK:
+	case agent.StatusPass:
 		statusColor = "32" // green
-	case agent.StatusNotFound:
-		statusColor = "31" // red
-	case agent.StatusUnreachable:
+	case agent.StatusWarn:
 		statusColor = "33" // yellow
 	default:
 		statusColor = "31" // red
 	}
-
-	transportTag := strings.ToUpper(string(result.Transport))
 
 	// Build the dots padding for alignment.
 	name := result.DisplayName
@@ -129,38 +148,51 @@ func writeProbeResult(w io.Writer, r *Renderer, result agent.ProbeResult) {
 		padLen = 3
 	}
 	dots := strings.Repeat(".", padLen)
+	transportTag := strings.ToUpper(string(result.Transport))
 
-	// Format: "  Claude Code .............. [CLI]  v1.0.30"
-	detail := result.Detail
-	if detail == "" {
-		detail = string(result.Status)
-	}
-
-	_, _ = fmt.Fprintf(w, "  %s %s %s[%s]%s  %s%s%s\n",
+	_, _ = fmt.Fprintf(w, "  %s %s %s%s%s [%s]\n",
 		name,
 		r.c("2")+dots+r.reset(),
-		r.c("36"), transportTag, r.reset(),
-		r.c(statusColor), detail, r.reset(),
+		r.c(statusColor), strings.TrimSpace(string(result.Status)), r.reset(),
+		transportTag,
 	)
 
-	// Always show a second line for consistent two-line format.
-	// If agent is found: show path/endpoint.
-	// If not found: show install hint.
-	secondLine := result.Path
-	if secondLine == "" {
-		entry, ok := agent.LookupCatalog(result.ID)
-		if ok && entry.InstallHint != "" {
-			secondLine = entry.InstallHint
+	checks := result.Checks
+	if len(checks) == 0 {
+		level := "info"
+		if result.Status == agent.StatusWarn {
+			level = "warn"
+		}
+		if result.Status == agent.StatusFail {
+			level = "error"
+		}
+		if strings.TrimSpace(result.Detail) != "" {
+			checks = append(checks, agent.HealthCheck{Level: level, Message: strings.TrimSpace(result.Detail)})
+		}
+		if strings.TrimSpace(result.Path) != "" {
+			checks = append(checks, agent.HealthCheck{Level: "info", Message: "Location", Detail: strings.TrimSpace(result.Path)})
+		} else if entry, ok := agent.LookupCatalog(result.ID); ok && strings.TrimSpace(entry.InstallHint) != "" {
+			checks = append(checks, agent.HealthCheck{Level: "info", Message: "Install hint", Detail: strings.TrimSpace(entry.InstallHint)})
 		}
 	}
-	if secondLine == "" {
-		secondLine = "-"
+	for _, check := range checks {
+		level := strings.ToLower(strings.TrimSpace(check.Level))
+		color := "2"
+		switch level {
+		case "warn":
+			color = "33"
+		case "error":
+			color = "31"
+		}
+		detail := strings.TrimSpace(check.Message)
+		if strings.TrimSpace(check.Detail) != "" {
+			detail = detail + ": " + strings.TrimSpace(check.Detail)
+		}
+		_, _ = fmt.Fprintf(w, "    %s[%s]%s %s\n", r.c(color), level, r.reset(), detail)
+		if strings.TrimSpace(check.Hint) != "" {
+			_, _ = fmt.Fprintf(w, "    %s[hint]%s %s\n", r.c("36"), r.reset(), strings.TrimSpace(check.Hint))
+		}
 	}
-	_, _ = fmt.Fprintf(w, "  %s%s  %s%s\n",
-		strings.Repeat(" ", len(name)),
-		r.c("2")+strings.Repeat(" ", padLen)+r.reset(),
-		r.c("2"), secondLine+r.reset(),
-	)
 }
 
 func buildBinaryOverrides(cfg config.Config) map[agent.ID]string {

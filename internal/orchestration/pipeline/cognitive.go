@@ -256,6 +256,8 @@ Rules:
 - Do not execute actions.
 - Do not create files.
 - Do not claim implementation is complete.
+- Do not ask follow-up questions.
+- If ambiguity remains, make a reasonable assumption and encode unresolved items in the JSON.
 - Do not include markdown fences or commentary.
 - Return JSON only.`)
 	return b.String()

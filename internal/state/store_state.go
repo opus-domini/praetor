@@ -29,11 +29,12 @@ func (s *Store) LoadOrInitializeState(slug string, plan domain.Plan) (domain.Sta
 
 	if _, err := os.Stat(stateFile); errors.Is(err, os.ErrNotExist) {
 		state := domain.State{
-			PlanSlug:     slug,
-			PlanChecksum: checksum,
-			CreatedAt:    now,
-			UpdatedAt:    now,
-			Tasks:        domain.StateTasksFromPlan(plan),
+			PlanSlug:        slug,
+			PlanChecksum:    checksum,
+			CreatedAt:       now,
+			UpdatedAt:       now,
+			ExecutionPolicy: plan.Settings.ExecutionPolicy,
+			Tasks:           domain.StateTasksFromPlan(plan),
 		}
 		if err := domain.WriteJSONFile(stateFile, state); err != nil {
 			return domain.State{}, err
@@ -87,8 +88,14 @@ func (s *Store) WriteState(slug string, state domain.State) error {
 func mergeState(slug, checksum string, previous domain.State, plan domain.Plan) domain.State {
 	statusByID := make(map[string]domain.TaskStatus, len(previous.Tasks))
 	statusByAutoFingerprint := make(map[string]domain.TaskStatus)
+	attemptByID := make(map[string]int, len(previous.Tasks))
+	feedbackByID := make(map[string]string, len(previous.Tasks))
+	costByID := make(map[string]int64, len(previous.Tasks))
 	for _, task := range previous.Tasks {
 		statusByID[task.ID] = task.Status
+		attemptByID[task.ID] = task.Attempt
+		feedbackByID[task.ID] = task.Feedback
+		costByID[task.ID] = task.CostMicros
 		if strings.HasPrefix(task.ID, "auto-") {
 			statusByAutoFingerprint[domain.AutoTaskFingerprint(
 				task.Title,
@@ -101,20 +108,29 @@ func mergeState(slug, checksum string, previous domain.State, plan domain.Plan) 
 
 	now := time.Now().UTC().Format(time.RFC3339)
 	merged := domain.State{
-		PlanSlug:     slug,
-		PlanChecksum: checksum,
-		CreatedAt:    previous.CreatedAt,
-		UpdatedAt:    now,
-		Outcome:      previous.Outcome,
-		Tasks:        domain.StateTasksFromPlan(plan),
+		PlanSlug:           slug,
+		PlanChecksum:       checksum,
+		CreatedAt:          previous.CreatedAt,
+		UpdatedAt:          now,
+		Outcome:            previous.Outcome,
+		ExecutionPolicy:    previous.ExecutionPolicy,
+		TotalCostMicros:    previous.TotalCostMicros,
+		CostWarningEmitted: previous.CostWarningEmitted,
+		Tasks:              domain.StateTasksFromPlan(plan),
 	}
 	if merged.CreatedAt == "" {
 		merged.CreatedAt = now
+	}
+	if merged.ExecutionPolicy == (domain.ExecutionPolicy{}) {
+		merged.ExecutionPolicy = plan.Settings.ExecutionPolicy
 	}
 
 	for i, task := range merged.Tasks {
 		if status, ok := statusByID[task.ID]; ok {
 			merged.Tasks[i].Status = status
+			merged.Tasks[i].Attempt = attemptByID[task.ID]
+			merged.Tasks[i].Feedback = feedbackByID[task.ID]
+			merged.Tasks[i].CostMicros = costByID[task.ID]
 			continue
 		}
 		if strings.HasPrefix(task.ID, "auto-") {
@@ -162,6 +178,12 @@ func (s *Store) normalizeTaskStatuses(slug string, state *domain.State) bool {
 				changed = true
 			}
 			if task.Feedback == "" {
+				if history, err := s.LoadTaskFeedback(slug, sig); err == nil && len(history) > 0 {
+					task.Feedback = history[len(history)-1].Reason
+					changed = true
+				}
+			}
+			if task.Feedback == "" {
 				if fb, err := s.ReadFeedback(sig); err == nil && fb != "" {
 					task.Feedback = fb
 					changed = true
@@ -202,6 +224,13 @@ func (s *Store) ResetPlanRuntime(slug string, plan domain.Plan) (int, error) {
 			removed++
 		} else if err != nil && !errors.Is(err, os.ErrNotExist) {
 			return removed, fmt.Errorf("remove feedback file: %w", err)
+		}
+
+		structuredFeedbackPath := filepath.Join(s.FeedbackDir(), slug, signature+".jsonl")
+		if err := os.Remove(structuredFeedbackPath); err == nil {
+			removed++
+		} else if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return removed, fmt.Errorf("remove structured feedback file: %w", err)
 		}
 	}
 

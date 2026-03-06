@@ -30,6 +30,7 @@ type Snapshot struct {
 	Outcome           string          `json:"outcome,omitempty"`
 	Iteration         int             `json:"iteration"`
 	Timestamp         string          `json:"timestamp"`
+	Summary           json.RawMessage `json:"summary,omitempty"`
 	State             json.RawMessage `json:"state"`
 }
 

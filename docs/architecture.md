@@ -33,7 +33,7 @@ internal/
 ├── app/                          Bootstrap and dependency wiring
 ├── cli/                          Cobra commands and renderer
 ├── commands/                     Shared agent commands (sync + templates)
-├── config/                       Config loading and normalization
+├── config/                       Config loading, normalization, and plan template registry
 ├── domain/                       Core types, parsing, transitions, validation
 ├── mcp/                          MCP server (JSON-RPC 2.0 over stdio)
 ├── orchestration/
@@ -41,7 +41,7 @@ internal/
 │   └── pipeline/                 Plan/Execute/Review loop + cognitive agents
 ├── prompt/                       Template engine (embedded + overlay)
 ├── runtime/                      Process, PTY, tmux execution backends
-├── state/                        Stores, locks, checkpoints, snapshots
+├── state/                        Stores, feedback logs, locks, checkpoints, snapshots
 └── workspace/                    Project root/manifest resolution
 ```
 
@@ -79,8 +79,9 @@ flowchart TD
 
     CLI --> PIPELINE
     CLI --> RUNTIME
-    MCP --> PIPELINE
     MCP --> STATE
+    MCP --> CONFIG
+    MCP --> DOMAIN
 
     PIPELINE --> FSM
     PIPELINE --> RUNTIME
@@ -101,10 +102,11 @@ flowchart TD
 `internal/domain` is dependency-free and centralizes:
 
 - Plan schema (`Plan`, `Task`, `PlanSettings`, `PlanQuality`, `ExecutionPolicy`, `PlanCognitive`, `TaskConstraints`, `TaskAgents`)
-- Mutable run state (`State`, `StateTask`, `TaskStatus`)
+- Mutable run state (`State`, `StateTask`, `TaskStatus`, `TaskFeedback`, `EventActor`)
 - Runtime config (`RunnerOptions`)
+- Run diagnostics (`ActorStats`, `RunSummary`)
 - Parsing contracts (`ParseExecutorResult`, `ParseReviewDecision`, `ParseGateEvidence`)
-- Transitions/graph (`Transition`, `NextRunnableTask`, blocked-dependency reporting)
+- Transitions/graph (`Transition`, `RunnableTaskIndices`, blocked-dependency reporting)
 
 Plan loading uses strict decode with `DisallowUnknownFields()`.
 
@@ -164,10 +166,10 @@ sequenceDiagram
 The runtime is assembled as decorators:
 
 ```text
-RegistryRuntime
-  └── FallbackRuntime
-       └── Logging middleware
-            └── Metrics middleware
+Logging middleware
+  └── Metrics middleware
+       └── FallbackRuntime
+            └── RegistryRuntime
 ```
 
 ```mermaid
@@ -176,17 +178,17 @@ config:
   theme: dark
 ---
 flowchart TD
-    REQ["AgentRequest"] --> METRICS
+    REQ["AgentRequest"] --> LOGGING
 
     subgraph stack ["Middleware Stack (outermost first)"]
-        METRICS["Metrics middleware<br>latency, token counts"]
         LOGGING["Logging middleware<br>structured request/response logs"]
+        METRICS["Metrics middleware<br>latency, token counts"]
         FALLBACK["FallbackRuntime<br>error classification + fallback mappings"]
         REGISTRY["RegistryRuntime<br>provider lookup"]
     end
 
-    METRICS --> LOGGING
-    LOGGING --> FALLBACK
+    LOGGING --> METRICS
+    METRICS --> FALLBACK
     FALLBACK --> REGISTRY
 
     REGISTRY --> ADAPTER["Resolved Adapter<br>claude / codex / gemini / ..."]
@@ -255,9 +257,9 @@ Structured runtime diagnostics are persisted per run:
 Emitted events include:
 
 - `agent_start`, `agent_complete`, `agent_error`, `agent_fallback`
-- `task_stalled`
-- `budget_warning`
-- `gate_result`
+- `task_started`, `task_completed`, `task_failed`, `task_stalled`
+- `prompt_budget_warning`, `cost_budget_warning`, `cost_budget_exceeded`
+- `gate_result`, `parallel_merge`, `parallel_conflict`, `state_transition`
 
 This stream is consumed by `praetor plan diagnose`.
 
@@ -267,6 +269,7 @@ Project data is isolated under `<praetor-home>/projects/<project-key>/`:
 
 - `plans/` plan files
 - `state/` mutable state
+- `feedback/` structured retry feedback logs
 - `locks/` run locks
 - `checkpoints/` transition ledger
 - `costs/` cost metrics
@@ -301,6 +304,6 @@ The plan schema supports per-task agent overrides via the `task.agents` field. W
 - CLI-first operational UX
 - Strict schemas and explicit failure modes
 - Filesystem as auditable source of truth
-- Context-budgeted prompts for predictable execution
+- Prompt-budgeted execution for predictable orchestration
 - Event-driven diagnostics without mandatory UI/dashboard
 - MCP integration for AI agent interoperability

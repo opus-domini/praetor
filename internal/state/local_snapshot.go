@@ -22,6 +22,7 @@ type LocalSnapshot struct {
 	Outcome           domain.RunOutcome `json:"outcome,omitempty"`
 	Iteration         int               `json:"iteration"`
 	Timestamp         string            `json:"timestamp"`
+	Summary           domain.RunSummary `json:"summary,omitempty"`
 	State             domain.State      `json:"state"`
 }
 
@@ -63,6 +64,10 @@ func (s *LocalSnapshotStore) Save(snapshot LocalSnapshot) error {
 	if err != nil {
 		return fmt.Errorf("encode snapshot state: %w", err)
 	}
+	summaryPayload, err := json.Marshal(snapshot.Summary)
+	if err != nil {
+		return fmt.Errorf("encode snapshot summary: %w", err)
+	}
 	return s.inner.Save(Snapshot{
 		Version:           snapshot.Version,
 		RunID:             snapshot.RunID,
@@ -77,6 +82,7 @@ func (s *LocalSnapshotStore) Save(snapshot LocalSnapshot) error {
 		Outcome:           string(snapshot.Outcome),
 		Iteration:         snapshot.Iteration,
 		Timestamp:         snapshot.Timestamp,
+		Summary:           summaryPayload,
 		State:             statePayload,
 	})
 }
@@ -102,6 +108,12 @@ func LoadLatestLocalSnapshot(runtimeRoot, planSlug string) (LocalSnapshot, strin
 			return LocalSnapshot{}, "", fmt.Errorf("decode local snapshot state: %w", err)
 		}
 	}
+	summary := domain.RunSummary{}
+	if len(snapshot.Summary) > 0 {
+		if err := json.Unmarshal(snapshot.Summary, &summary); err != nil {
+			return LocalSnapshot{}, "", fmt.Errorf("decode local snapshot summary: %w", err)
+		}
+	}
 	return LocalSnapshot{
 		Version:           snapshot.Version,
 		RunID:             snapshot.RunID,
@@ -116,6 +128,7 @@ func LoadLatestLocalSnapshot(runtimeRoot, planSlug string) (LocalSnapshot, strin
 		Outcome:           domain.RunOutcome(snapshot.Outcome),
 		Iteration:         snapshot.Iteration,
 		Timestamp:         snapshot.Timestamp,
+		Summary:           summary,
 		State:             state,
 	}, path, nil
 }

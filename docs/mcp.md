@@ -87,9 +87,17 @@ sequenceDiagram
 | Tool | Description | Required params |
 |---|---|---|
 | `plan_events` | Get execution events from a plan run | `slug` |
-| `plan_diagnose` | Get diagnostics (errors, stalls, costs) | `slug` |
+| `plan_diagnose` | Get diagnostics, summary, actor analysis, and performance for the latest run | `slug` |
 
-The `plan_diagnose` tool accepts a `query` parameter: `errors`, `stalls`, `fallbacks`, `costs`, or `all` (default).
+The `plan_diagnose` tool accepts a `query` parameter: `errors`, `stalls`, `fallbacks`, `costs`, `summary`, or `all` (default).
+
+The response includes:
+
+- `summary`: plan status plus effective cost budget limits
+- `run_summary`: latest persisted run summary with retries, stalls, fallbacks, and totals
+- `actor_analysis`: per-actor cost plus the noisiest retry/stall actors
+- `events`: filtered `events.jsonl` records for the selected query
+- `performance`: prompt/performance diagnostics when available
 
 ### Configuration
 
@@ -102,7 +110,9 @@ The `plan_diagnose` tool accepts a `query` parameter: `errors`, `stalls`, `fallb
 
 | Tool | Description | Required params |
 |---|---|---|
-| `doctor` | Check availability of all AI agent providers | - |
+| `doctor` | Check availability of all AI agent providers and return structured health checks | - |
+
+`doctor` returns one `ProbeResult` per provider with `status`, `transport`, `version`, `path`, `detail`, and `checks[]` entries that include remediation hints when available.
 
 ### Tool call dispatch
 
@@ -175,11 +185,11 @@ sequenceDiagram
     Server->>Client: task states, progress, run outcome
 
     Note over Client, Server: Diagnostics phase
-    Client->>Server: tools/call (plan_diagnose, slug: "auth-flow", query: "errors")
-    Server->>Client: error events, failed tasks, agent output
+    Client->>Server: tools/call (plan_diagnose, slug: "auth-flow", query: "summary")
+    Server->>Client: summary, run_summary, actor_analysis, performance
 
     Client->>Server: tools/call (doctor)
-    Server->>Client: agent availability report
+    Server->>Client: structured ProbeResult array
 ```
 
 ## Implementation
@@ -223,6 +233,7 @@ flowchart TD
     ResHandlers --> DL
     ResHandlers --> SS
     ResHandlers --> CR
+    ResHandlers --> AP
 ```
 
 All tool handlers reuse existing praetor packages (`state.Store`, `domain.LoadPlan`, `config.LoadResolved`, etc.) ensuring consistent behavior with the CLI.

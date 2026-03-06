@@ -1,0 +1,286 @@
+package adapters
+
+import (
+	"encoding/json"
+	"os"
+	"strings"
+)
+
+const plannerOutputSchemaJSON = `{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["name", "settings", "tasks"],
+  "properties": {
+    "name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "summary": {
+      "type": "string"
+    },
+    "meta": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "source": {
+          "type": "string"
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "created_by": {
+          "type": "string"
+        },
+        "generator": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "name": {"type": "string"},
+            "version": {"type": "string"},
+            "prompt_hash": {"type": "string"}
+          }
+        }
+      }
+    },
+    "cognitive": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "assumptions": {
+          "type": "array",
+          "items": {"type": "string"}
+        },
+        "open_questions": {
+          "type": "array",
+          "items": {"type": "string"}
+        },
+        "failure_modes": {
+          "type": "array",
+          "items": {"type": "string"}
+        },
+        "decisions": {
+          "type": "array",
+          "items": {"type": "string"}
+        }
+      }
+    },
+    "settings": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["agents"],
+      "properties": {
+        "agents": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["executor", "reviewer"],
+          "properties": {
+            "planner": {"$ref": "#/$defs/agentConfigPlanner"},
+            "executor": {"$ref": "#/$defs/agentConfigExecutor"},
+            "reviewer": {"$ref": "#/$defs/agentConfigReviewer"}
+          }
+        },
+        "execution_policy": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "max_total_iterations": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "max_retries_per_task": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "max_parallel_tasks": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "timeout": {
+              "type": "string"
+            },
+            "prompt_budget": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "executor_chars": {"type": "integer", "minimum": 1},
+                "reviewer_chars": {"type": "integer", "minimum": 1}
+              }
+            },
+            "cost": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "plan_limit_cents": {"type": "integer", "minimum": 1},
+                "task_limit_cents": {"type": "integer", "minimum": 1},
+                "warn_threshold": {"type": "number", "minimum": 0, "maximum": 1},
+                "enforce": {"type": "boolean"}
+              }
+            },
+            "stall_detection": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "enabled": {"type": "boolean"},
+                "window": {"type": "integer", "minimum": 2},
+                "threshold": {"type": "number", "minimum": 0, "maximum": 1}
+              }
+            }
+          }
+        }
+      }
+    },
+    "quality": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "evidence_format": {"type": "string"},
+        "required": {
+          "type": "array",
+          "items": {"type": "string"}
+        },
+        "optional": {
+          "type": "array",
+          "items": {"type": "string"}
+        },
+        "commands": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "tests": {"type": "string", "minLength": 1},
+            "lint": {"type": "string", "minLength": 1},
+            "standards": {"type": "string", "minLength": 1}
+          }
+        }
+      }
+    },
+    "tasks": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "title", "acceptance"],
+        "properties": {
+          "id": {"type": "string", "minLength": 1},
+          "title": {"type": "string", "minLength": 1},
+          "description": {"type": "string"},
+          "depends_on": {
+            "type": "array",
+            "items": {"type": "string", "minLength": 1}
+          },
+          "acceptance": {
+            "type": "array",
+            "minItems": 1,
+            "items": {"type": "string", "minLength": 1}
+          },
+          "constraints": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "allowed_tools": {
+                "type": "array",
+                "items": {"type": "string"}
+              },
+              "denied_tools": {
+                "type": "array",
+                "items": {"type": "string"}
+              },
+              "timeout": {
+                "type": "string"
+              }
+            }
+          },
+          "agents": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "executor": {
+                "type": "string",
+                "enum": ["claude", "codex", "copilot", "gemini", "kimi", "opencode", "openrouter", "ollama", "lmstudio"]
+              },
+              "reviewer": {
+                "type": "string",
+                "enum": ["claude", "codex", "copilot", "gemini", "kimi", "opencode", "openrouter", "ollama", "lmstudio", "none"]
+              },
+              "executor_model": {
+                "type": "string"
+              },
+              "reviewer_model": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "agentConfigExecutor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["agent"],
+      "properties": {
+        "agent": {
+          "type": "string",
+          "enum": ["claude", "codex", "copilot", "gemini", "kimi", "opencode", "openrouter", "ollama", "lmstudio"]
+        },
+        "model": {"type": "string"}
+      }
+    },
+    "agentConfigPlanner": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["agent"],
+      "properties": {
+        "agent": {
+          "type": "string",
+          "enum": ["claude", "codex", "copilot", "gemini", "kimi", "opencode", "openrouter", "ollama", "lmstudio"]
+        },
+        "model": {"type": "string"}
+      }
+    },
+    "agentConfigReviewer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["agent"],
+      "properties": {
+        "agent": {
+          "type": "string",
+          "enum": ["claude", "codex", "copilot", "gemini", "kimi", "opencode", "openrouter", "ollama", "lmstudio", "none"]
+        },
+        "model": {"type": "string"}
+      }
+    }
+  }
+}`
+
+func plannerOutputSchema() string {
+	return plannerOutputSchemaJSON
+}
+
+func plannerManifest(output string) json.RawMessage {
+	output = strings.TrimSpace(output)
+	if output == "" || !json.Valid([]byte(output)) {
+		return nil
+	}
+	return json.RawMessage(output)
+}
+
+func writePlannerOutputSchemaFile() (string, error) {
+	file, err := os.CreateTemp("", "praetor-planner-schema-*.json")
+	if err != nil {
+		return "", err
+	}
+	if _, err := file.WriteString(plannerOutputSchema()); err != nil {
+		_ = file.Close()
+		_ = os.Remove(file.Name())
+		return "", err
+	}
+	if err := file.Close(); err != nil {
+		_ = os.Remove(file.Name())
+		return "", err
+	}
+	return file.Name(), nil
+}

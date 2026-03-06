@@ -36,8 +36,8 @@ func TestProbeCLIBinaryFound(t *testing.T) {
 		VersionArgs: []string{"--version"},
 	}, binary)
 
-	if result.Status != StatusOK {
-		t.Errorf("expected StatusOK, got %q: %s", result.Status, result.Detail)
+	if result.Status != StatusPass {
+		t.Errorf("expected StatusPass, got %q: %s", result.Status, result.Detail)
 	}
 	if result.Path == "" {
 		t.Error("expected non-empty path")
@@ -56,8 +56,8 @@ func TestProbeCLIBinaryNotFound(t *testing.T) {
 		VersionArgs: []string{"--version"},
 	}, "definitely-not-a-real-binary-xyz")
 
-	if result.Status != StatusNotFound {
-		t.Errorf("expected StatusNotFound, got %q: %s", result.Status, result.Detail)
+	if result.Status != StatusFail {
+		t.Errorf("expected StatusFail, got %q: %s", result.Status, result.Detail)
 	}
 	if result.Path != "" {
 		t.Error("expected empty path for not-found binary")
@@ -84,8 +84,8 @@ func TestProbeCLIVersionParseFromFakeBinary(t *testing.T) {
 		VersionArgs: []string{"--version"},
 	}, fakeBin)
 
-	if result.Status != StatusOK {
-		t.Fatalf("expected StatusOK, got %q: %s", result.Status, result.Detail)
+	if result.Status != StatusPass {
+		t.Fatalf("expected StatusPass, got %q: %s", result.Status, result.Detail)
 	}
 	if result.Version != "1.2.3" {
 		t.Errorf("expected version '1.2.3', got %q", result.Version)
@@ -112,9 +112,9 @@ func TestProbeCLIVersionCommandFails(t *testing.T) {
 		VersionArgs: []string{"--version"},
 	}, fakeBin)
 
-	// Binary exists but version fails — still considered OK.
-	if result.Status != StatusOK {
-		t.Errorf("expected StatusOK (binary exists despite version failure), got %q: %s", result.Status, result.Detail)
+	// Binary exists but version fails — still considered usable but degraded.
+	if result.Status != StatusWarn {
+		t.Errorf("expected StatusWarn (binary exists despite version failure), got %q: %s", result.Status, result.Detail)
 	}
 	if result.Version != "" {
 		t.Errorf("expected empty version on failure, got %q", result.Version)
@@ -141,8 +141,8 @@ func TestProbeCLINoVersionArgs(t *testing.T) {
 		VersionArgs: nil, // no version detection
 	}, binary)
 
-	if result.Status != StatusOK {
-		t.Errorf("expected StatusOK, got %q: %s", result.Status, result.Detail)
+	if result.Status != StatusPass {
+		t.Errorf("expected StatusPass, got %q: %s", result.Status, result.Detail)
 	}
 }
 
@@ -166,8 +166,8 @@ func TestProbeRESTHealthy(t *testing.T) {
 		HealthEndpoint: "/health",
 	}, srv.URL)
 
-	if result.Status != StatusOK {
-		t.Errorf("expected StatusOK, got %q: %s", result.Status, result.Detail)
+	if result.Status != StatusPass {
+		t.Errorf("expected StatusPass, got %q: %s", result.Status, result.Detail)
 	}
 	if result.Path != srv.URL {
 		t.Errorf("expected path %q, got %q", srv.URL, result.Path)
@@ -188,8 +188,8 @@ func TestProbeRESTUnreachable(t *testing.T) {
 		HealthEndpoint: "/health",
 	}, "http://127.0.0.1:1") // port 1 is virtually always unreachable
 
-	if result.Status != StatusUnreachable {
-		t.Errorf("expected StatusUnreachable, got %q: %s", result.Status, result.Detail)
+	if result.Status != StatusFail {
+		t.Errorf("expected StatusFail, got %q: %s", result.Status, result.Detail)
 	}
 }
 
@@ -212,8 +212,8 @@ func TestProbeRESTServerError(t *testing.T) {
 		HealthEndpoint: "/health",
 	}, srv.URL)
 
-	if result.Status != StatusError {
-		t.Errorf("expected StatusError, got %q: %s", result.Status, result.Detail)
+	if result.Status != StatusFail {
+		t.Errorf("expected StatusFail, got %q: %s", result.Status, result.Detail)
 	}
 }
 
@@ -228,8 +228,8 @@ func TestProbeRESTNoEndpointConfigured(t *testing.T) {
 		HealthEndpoint: "/health",
 	}, "") // empty base URL
 
-	if result.Status != StatusError {
-		t.Errorf("expected StatusError for empty endpoint, got %q: %s", result.Status, result.Detail)
+	if result.Status != StatusFail {
+		t.Errorf("expected StatusFail for empty endpoint, got %q: %s", result.Status, result.Detail)
 	}
 }
 
@@ -244,8 +244,8 @@ func TestProbeRESTNoHealthEndpointPath(t *testing.T) {
 		HealthEndpoint: "", // no health check path configured
 	}, "https://api.example.com")
 
-	if result.Status != StatusOK {
-		t.Errorf("expected StatusOK when no health endpoint, got %q: %s", result.Status, result.Detail)
+	if result.Status != StatusPass {
+		t.Errorf("expected StatusPass when no health endpoint, got %q: %s", result.Status, result.Detail)
 	}
 }
 
@@ -273,7 +273,7 @@ func TestProbeAllIteratesOverCatalog(t *testing.T) {
 		}
 		// Status must be one of the known values.
 		switch result.Status {
-		case StatusOK, StatusNotFound, StatusError, StatusUnreachable:
+		case StatusPass, StatusWarn, StatusFail:
 			// valid
 		default:
 			t.Errorf("result for %q has unknown status %q", result.ID, result.Status)
@@ -311,8 +311,8 @@ func TestProbeAllWithOverrides(t *testing.T) {
 	if ollamaResult == nil {
 		t.Fatal("Ollama not found in results")
 	}
-	if ollamaResult.Status != StatusOK {
-		t.Errorf("expected Ollama StatusOK with test server, got %q: %s", ollamaResult.Status, ollamaResult.Detail)
+	if ollamaResult.Status != StatusPass {
+		t.Errorf("expected Ollama StatusPass with test server, got %q: %s", ollamaResult.Status, ollamaResult.Detail)
 	}
 }
 
@@ -351,8 +351,8 @@ func TestProbeOneKnownAgent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if result.Status != StatusOK {
-		t.Errorf("expected StatusOK, got %q: %s", result.Status, result.Detail)
+	if result.Status != StatusPass {
+		t.Errorf("expected StatusPass, got %q: %s", result.Status, result.Detail)
 	}
 }
 
@@ -373,10 +373,9 @@ func TestProbeResultHealthy(t *testing.T) {
 		status  ProbeStatus
 		healthy bool
 	}{
-		{StatusOK, true},
-		{StatusNotFound, false},
-		{StatusError, false},
-		{StatusUnreachable, false},
+		{StatusPass, true},
+		{StatusWarn, true},
+		{StatusFail, false},
 	}
 	for _, tc := range cases {
 		t.Run(string(tc.status), func(t *testing.T) {

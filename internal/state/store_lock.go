@@ -11,6 +11,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/opus-domini/praetor/internal/domain"
 )
 
 const (
@@ -28,18 +30,35 @@ type lockMeta struct {
 
 // AcquireRunLock acquires a lock for one plan run.
 func (s *Store) AcquireRunLock(slug string, force bool) (RunLock, error) {
-	if err := s.Init(); err != nil {
+	lockPath := s.LockFile(slug)
+	lock, err := s.acquireLock(lockPath, s.RuntimeKey(slug), force)
+	if err != nil {
 		return RunLock{}, err
 	}
+	return RunLock(lock), nil
+}
 
-	runtimeKey := s.RuntimeKey(slug)
-	lockPath := s.LockFile(slug)
+// AcquireTaskLock acquires a lock for one task within a plan run.
+func (s *Store) AcquireTaskLock(slug, taskID string, force bool) (TaskLock, error) {
+	lockPath := s.TaskLockFile(slug, taskID)
+	lock, err := s.acquireLock(lockPath, s.RuntimeKey(slug)+"::"+domain.SanitizePathToken(taskID), force)
+	if err != nil {
+		return TaskLock{}, err
+	}
+	return lock, nil
+}
+
+func (s *Store) acquireLock(lockPath, runtimeKey string, force bool) (TaskLock, error) {
+	if err := s.Init(); err != nil {
+		return TaskLock{}, err
+	}
+
 	hostname, _ := os.Hostname()
 
 	for range 4 {
 		token, err := randomHex(12)
 		if err != nil {
-			return RunLock{}, err
+			return TaskLock{}, err
 		}
 		meta := lockMeta{
 			Version:   lockSchemaVersion,
@@ -51,7 +70,7 @@ func (s *Store) AcquireRunLock(slug string, force bool) (RunLock, error) {
 		}
 		payload, err := json.Marshal(meta)
 		if err != nil {
-			return RunLock{}, fmt.Errorf("encode lock metadata: %w", err)
+			return TaskLock{}, fmt.Errorf("encode lock metadata: %w", err)
 		}
 		payload = append(payload, '\n')
 
@@ -60,21 +79,21 @@ func (s *Store) AcquireRunLock(slug string, force bool) (RunLock, error) {
 			if _, writeErr := file.Write(payload); writeErr != nil {
 				_ = file.Close()
 				_ = os.Remove(lockPath)
-				return RunLock{}, fmt.Errorf("write lock file: %w", writeErr)
+				return TaskLock{}, fmt.Errorf("write lock file: %w", writeErr)
 			}
 			if closeErr := file.Close(); closeErr != nil {
 				_ = os.Remove(lockPath)
-				return RunLock{}, fmt.Errorf("close lock file: %w", closeErr)
+				return TaskLock{}, fmt.Errorf("close lock file: %w", closeErr)
 			}
-			return RunLock{Path: lockPath, Token: token}, nil
+			return TaskLock{Path: lockPath, Token: token}, nil
 		}
 		if !errors.Is(err, os.ErrExist) {
-			return RunLock{}, fmt.Errorf("open lock file: %w", err)
+			return TaskLock{}, fmt.Errorf("open lock file: %w", err)
 		}
 
 		data, readErr := os.ReadFile(lockPath)
 		if readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
-			return RunLock{}, fmt.Errorf("read lock file: %w", readErr)
+			return TaskLock{}, fmt.Errorf("read lock file: %w", readErr)
 		}
 		if errors.Is(readErr, os.ErrNotExist) {
 			continue
@@ -82,17 +101,26 @@ func (s *Store) AcquireRunLock(slug string, force bool) (RunLock, error) {
 
 		existing := parseLockFile(data)
 		if lockIsActive(existing, hostname, runtimeKey) && !force {
-			return RunLock{}, fmt.Errorf("plan is already running (pid=%d, started=%s); use --force to override", existing.PID, existing.StartedAt)
+			return TaskLock{}, fmt.Errorf("lock is already held (pid=%d, started=%s); use --force to override", existing.PID, existing.StartedAt)
 		}
 		if removeErr := os.Remove(lockPath); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
-			return RunLock{}, fmt.Errorf("remove stale lock file: %w", removeErr)
+			return TaskLock{}, fmt.Errorf("remove stale lock file: %w", removeErr)
 		}
 	}
-	return RunLock{}, errors.New("unable to acquire lock after multiple attempts")
+	return TaskLock{}, errors.New("unable to acquire lock after multiple attempts")
 }
 
 // ReleaseRunLock releases a plan lock.
 func (s *Store) ReleaseRunLock(lock RunLock) error {
+	return s.releaseLock(TaskLock(lock))
+}
+
+// ReleaseTaskLock releases a task-level lock.
+func (s *Store) ReleaseTaskLock(lock TaskLock) error {
+	return s.releaseLock(lock)
+}
+
+func (s *Store) releaseLock(lock TaskLock) error {
 	lockPath := strings.TrimSpace(lock.Path)
 	if lockPath == "" {
 		return nil

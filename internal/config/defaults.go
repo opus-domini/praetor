@@ -6,6 +6,7 @@ type KeyType int
 const (
 	KeyTypeString KeyType = iota
 	KeyTypeInt
+	KeyTypeFloat
 	KeyTypeBool
 	KeyTypeDuration
 )
@@ -53,7 +54,12 @@ var Registry = []KeyMeta{
 	{Key: "max-iterations", DefaultValue: "0", Type: KeyTypeInt, Category: CategoryLimits, Description: "Maximum loop iterations (0 = unlimited)"},
 	{Key: "max-transitions", DefaultValue: "0", Type: KeyTypeInt, Category: CategoryLimits, Description: "Maximum FSM state transitions (0 = unlimited)"},
 	{Key: "keep-last-runs", DefaultValue: "20", Type: KeyTypeInt, Category: CategoryLimits, Description: "Keep only the most recent N runs (0 = no pruning)"},
+	{Key: "max-parallel-tasks", DefaultValue: "1", Type: KeyTypeInt, Category: CategoryLimits, Description: "Maximum number of independent tasks to execute per wave"},
 	{Key: "timeout", DefaultValue: "0s", Type: KeyTypeDuration, Category: CategoryLimits, Description: "Run timeout (e.g. 30m, 2h)"},
+	{Key: "plan-cost-budget-usd", DefaultValue: "0", Type: KeyTypeFloat, Category: CategoryLimits, Description: "Plan-level cost budget in USD (0 = disabled)"},
+	{Key: "task-cost-budget-usd", DefaultValue: "0", Type: KeyTypeFloat, Category: CategoryLimits, Description: "Per-task cost budget in USD (0 = disabled)"},
+	{Key: "cost-budget-warn-threshold", DefaultValue: "0.8", Type: KeyTypeFloat, Category: CategoryLimits, Description: "Warn when cumulative cost reaches this fraction of the budget"},
+	{Key: "cost-budget-enforce", DefaultValue: "true", Type: KeyTypeBool, Category: CategoryLimits, Description: "Stop execution when a configured cost budget is exceeded"},
 
 	// Runtime
 	{Key: "runner", DefaultValue: "tmux", Type: KeyTypeString, Category: CategoryRuntime, Description: "Runner mode: tmux, pty, or direct"},

@@ -18,17 +18,31 @@ func NextRunnableTask(state State) (int, StateTask, bool) {
 
 // RunnableTasks returns all currently runnable open tasks.
 func RunnableTasks(state State) []StateTask {
+	indices := RunnableTaskIndices(state, 0)
+	tasks := make([]StateTask, 0, len(indices))
+	for _, index := range indices {
+		tasks = append(tasks, state.Tasks[index])
+	}
+	return tasks
+}
+
+// RunnableTaskIndices returns deterministic indices for the current runnable wave.
+// A limit <= 0 returns the full frontier.
+func RunnableTaskIndices(state State, limit int) []int {
 	done := doneSet(state)
-	tasks := make([]StateTask, 0)
-	for _, task := range state.Tasks {
+	indices := make([]int, 0)
+	for index, task := range state.Tasks {
 		if task.Status != TaskPending {
 			continue
 		}
 		if dependenciesDone(task, done) {
-			tasks = append(tasks, task)
+			indices = append(indices, index)
+			if limit > 0 && len(indices) >= limit {
+				break
+			}
 		}
 	}
-	return tasks
+	return indices
 }
 
 // BlockedTasksReport returns a compact report for blocked open tasks.

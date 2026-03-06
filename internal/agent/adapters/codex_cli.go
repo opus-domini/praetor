@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -13,8 +14,9 @@ import (
 )
 
 // CodexCLI is a CLI-backed Agent implementation using the `codex` CLI.
+// Plan uses `codex exec --json` with `--output-schema` in a read-only sandbox.
 // Execute (OneShot) uses `codex exec --json <prompt>` (no sandbox/approval flags).
-// Plan and Review use run() with full pipeline flags (sandbox, approval_policy).
+// Review and pipeline execute use run() with full pipeline flags.
 type CodexCLI struct {
 	Binary string
 	Runner runner.CommandRunner
@@ -57,12 +59,16 @@ func (a *CodexCLI) Plan(ctx context.Context, req agent.PlanRequest) (agent.PlanR
 	} else if c := strings.TrimSpace(req.WorkspaceContext); c != "" {
 		prompt = "Project context:\n" + c + "\n\n" + prompt
 	}
-	resp, err := a.run(ctx, req.Workdir, req.Model, prompt, req.RunDir, req.OutputPrefix, req.TaskLabel)
+	resp, err := a.plan(ctx, req.Workdir, req.Model, prompt, req.RunDir, req.OutputPrefix, req.TaskLabel)
 	if err != nil {
 		return agent.PlanResponse{}, err
 	}
+	if manifest := plannerManifest(resp.Output); len(manifest) > 0 {
+		resp.Manifest = manifest
+		return resp, nil
+	}
 	obj, err := ExtractJSONObject(resp.Output)
-	if err == nil {
+	if err == nil && json.Valid([]byte(obj)) {
 		resp.Manifest = json.RawMessage(obj)
 	}
 	return resp, nil
@@ -173,6 +179,71 @@ func (a *CodexCLI) run(ctx context.Context, workdir, model, prompt, runDir, outp
 	parsed := parseCodexOutput(result.Stdout)
 	if parsed.Model != "" {
 		model = parsed.Model
+	}
+	return agent.PlanResponse{
+		Output:    parsed.Output,
+		Model:     model,
+		DurationS: time.Since(start).Seconds(),
+		Strategy:  result.Strategy,
+	}, nil
+}
+
+func (a *CodexCLI) plan(ctx context.Context, workdir, model, prompt, runDir, outputPrefix, taskLabel string) (agent.PlanResponse, error) {
+	start := time.Now()
+	schemaPath, err := writePlannerOutputSchemaFile()
+	if err != nil {
+		return agent.PlanResponse{}, err
+	}
+	defer func() { _ = os.Remove(schemaPath) }()
+
+	outputFile, err := os.CreateTemp("", "praetor-planner-output-*.json")
+	if err != nil {
+		return agent.PlanResponse{}, err
+	}
+	outputPath := outputFile.Name()
+	_ = outputFile.Close()
+	defer func() { _ = os.Remove(outputPath) }()
+
+	args := []string{a.Binary, "exec", "--json",
+		"--sandbox", "read-only",
+		"--skip-git-repo-check",
+		"--config", `approval_policy="never"`,
+		"--ephemeral",
+		"--output-schema", schemaPath,
+		"--output-last-message", outputPath,
+	}
+	if strings.TrimSpace(workdir) != "" {
+		args = append(args, "--cd", workdir)
+	}
+	if model = strings.TrimSpace(model); model != "" {
+		args = append(args, "--model", model)
+	}
+	args = append(args, strings.TrimSpace(prompt))
+
+	result, err := a.Runner.Run(ctx, runner.CommandSpec{
+		Args:         args,
+		Dir:          strings.TrimSpace(workdir),
+		UsePTY:       false,
+		RunDir:       strings.TrimSpace(runDir),
+		OutputPrefix: strings.TrimSpace(outputPrefix),
+		WindowHint:   strings.TrimSpace(taskLabel),
+	})
+	if err != nil {
+		return agent.PlanResponse{DurationS: time.Since(start).Seconds()}, err
+	}
+	if result.ExitCode != 0 {
+		return agent.PlanResponse{DurationS: time.Since(start).Seconds()}, fmt.Errorf("codex exit code %d: %s", result.ExitCode, TailText(result.Stderr, 20))
+	}
+
+	parsed := parseCodexOutput(result.Stdout)
+	if parsed.Model != "" {
+		model = parsed.Model
+	}
+	output, readErr := os.ReadFile(outputPath)
+	if readErr == nil {
+		if trimmed := strings.TrimSpace(string(output)); trimmed != "" {
+			parsed.Output = trimmed
+		}
 	}
 	return agent.PlanResponse{
 		Output:    parsed.Output,

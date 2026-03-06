@@ -59,8 +59,26 @@ func ValidateValue(key, value string) error {
 		if key == "max-retries" && n <= 0 {
 			return fmt.Errorf("key %q: must be greater than zero", key)
 		}
+		if key == "max-parallel-tasks" && n < 1 {
+			return fmt.Errorf("key %q: must be at least 1", key)
+		}
 		if n < 0 {
 			return fmt.Errorf("key %q: cannot be negative", key)
+		}
+	case KeyTypeFloat:
+		n, err := strconv.ParseFloat(value, 64)
+		if err != nil {
+			return fmt.Errorf("key %q: invalid number %q", key, value)
+		}
+		switch key {
+		case "plan-cost-budget-usd", "task-cost-budget-usd":
+			if n < 0 {
+				return fmt.Errorf("key %q: cannot be negative", key)
+			}
+		case "cost-budget-warn-threshold":
+			if n < 0 || n > 1 {
+				return fmt.Errorf("key %q: must be between 0 and 1", key)
+			}
 		}
 	case KeyTypeBool:
 		if _, err := parseBool(value); err != nil {
@@ -84,7 +102,7 @@ func formatLine(key, value string) string {
 		return key + " = " + quoteString(value)
 	}
 	switch meta.Type {
-	case KeyTypeInt, KeyTypeBool:
+	case KeyTypeInt, KeyTypeFloat, KeyTypeBool:
 		return key + " = " + value
 	default:
 		return key + " = " + quoteString(value)

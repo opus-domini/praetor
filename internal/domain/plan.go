@@ -249,11 +249,23 @@ func ValidatePlan(plan Plan) error {
 	if plan.Settings.ExecutionPolicy.MaxRetriesPerTask < 0 {
 		errorsList = append(errorsList, "settings.execution_policy.max_retries_per_task cannot be negative")
 	}
-	if plan.Settings.ExecutionPolicy.Budget.Execute < 0 {
-		errorsList = append(errorsList, "settings.execution_policy.budget.execute cannot be negative")
+	if plan.Settings.ExecutionPolicy.MaxParallelTasks < 0 {
+		errorsList = append(errorsList, "settings.execution_policy.max_parallel_tasks cannot be negative")
 	}
-	if plan.Settings.ExecutionPolicy.Budget.Review < 0 {
-		errorsList = append(errorsList, "settings.execution_policy.budget.review cannot be negative")
+	if plan.Settings.ExecutionPolicy.PromptBudget.ExecutorChars < 0 {
+		errorsList = append(errorsList, "settings.execution_policy.prompt_budget.executor_chars cannot be negative")
+	}
+	if plan.Settings.ExecutionPolicy.PromptBudget.ReviewerChars < 0 {
+		errorsList = append(errorsList, "settings.execution_policy.prompt_budget.reviewer_chars cannot be negative")
+	}
+	if plan.Settings.ExecutionPolicy.Cost.PlanLimitCents < 0 {
+		errorsList = append(errorsList, "settings.execution_policy.cost.plan_limit_cents cannot be negative")
+	}
+	if plan.Settings.ExecutionPolicy.Cost.TaskLimitCents < 0 {
+		errorsList = append(errorsList, "settings.execution_policy.cost.task_limit_cents cannot be negative")
+	}
+	if plan.Settings.ExecutionPolicy.Cost.WarnThreshold < 0 || plan.Settings.ExecutionPolicy.Cost.WarnThreshold > 1 {
+		errorsList = append(errorsList, "settings.execution_policy.cost.warn_threshold must be between 0 and 1")
 	}
 	if plan.Settings.ExecutionPolicy.StallDetection.Window < 0 {
 		errorsList = append(errorsList, "settings.execution_policy.stall_detection.window cannot be negative")

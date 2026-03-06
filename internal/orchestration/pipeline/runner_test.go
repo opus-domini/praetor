@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -73,6 +74,18 @@ func TestNormalizeRunnerOptionsSetsDefaultGeminiAndOllamaSettings(t *testing.T) 
 	}
 	if normalized.OllamaModel == "" {
 		t.Fatal("expected default ollama model")
+	}
+	if normalized.ExecutorPromptChars != 120000 {
+		t.Fatalf("expected default executor prompt chars, got %d", normalized.ExecutorPromptChars)
+	}
+	if normalized.ReviewerPromptChars != 80000 {
+		t.Fatalf("expected default reviewer prompt chars, got %d", normalized.ReviewerPromptChars)
+	}
+	if normalized.CostWarnThreshold != 0.80 {
+		t.Fatalf("expected default cost warn threshold, got %.2f", normalized.CostWarnThreshold)
+	}
+	if !normalized.CostBudgetEnforce {
+		t.Fatal("expected cost budget enforcement to default to true")
 	}
 }
 
@@ -464,6 +477,61 @@ func TestRunnerKeepsTaskOpenWhenMergeFails(t *testing.T) {
 	}
 }
 
+func TestRunnerExecutesIndependentTasksInParallelWaves(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	git(t, tmpDir, "init")
+
+	projectHome := filepath.Join(tmpDir, "home")
+	slug := "parallel-plan"
+	store := localstate.NewStore(projectHome)
+	if err := store.Init(); err != nil {
+		t.Fatalf("init store: %v", err)
+	}
+	writePlanFile(t, store.PlanFile(slug), testPlan([]domain.Task{
+		{ID: "TASK-001", Title: "Task 1", Acceptance: []string{"done"}},
+		{ID: "TASK-002", Title: "Task 2", Acceptance: []string{"done"}},
+		{ID: "TASK-003", Title: "Task 3", DependsOn: []string{"TASK-001", "TASK-002"}, Acceptance: []string{"done"}},
+	}))
+
+	runtime := &parallelProbeRuntime{releaseFirstWave: make(chan struct{})}
+	runner := NewRunner(runtime)
+	_, err := runner.Run(context.Background(), discardSink{}, slug, domain.RunnerOptions{
+		ProjectHome:      projectHome,
+		Workdir:          tmpDir,
+		DefaultExecutor:  domain.AgentCodex,
+		DefaultReviewer:  domain.AgentNone,
+		MaxRetries:       2,
+		MaxParallelTasks: 2,
+		SkipReview:       true,
+		CodexBin:         mustExecutablePath(t),
+		ClaudeBin:        mustExecutablePath(t),
+		Isolation:        domain.IsolationOff,
+		RunnerMode:       domain.RunnerDirect,
+	})
+	if err != nil {
+		t.Fatalf("run pipeline: %v", err)
+	}
+
+	state, err := store.ReadState(slug)
+	if err != nil {
+		t.Fatalf("read state: %v", err)
+	}
+	if state.DoneCount() != 3 {
+		t.Fatalf("done count = %d, want 3", state.DoneCount())
+	}
+	if runtime.maxActive < 2 {
+		t.Fatalf("max active executors = %d, want >= 2", runtime.maxActive)
+	}
+	if len(runtime.executeOrder) != 3 {
+		t.Fatalf("execute order len = %d, want 3", len(runtime.executeOrder))
+	}
+	if runtime.executeOrder[2] != "TASK-003" {
+		t.Fatalf("dependent task executed too early: %v", runtime.executeOrder)
+	}
+}
+
 type nilRuntime struct{}
 
 func (nilRuntime) Run(context.Context, domain.AgentRequest) (domain.AgentResult, error) {
@@ -494,6 +562,15 @@ func mustExecutablePath(t *testing.T) string {
 type mergeConflictRuntime struct {
 	mainDir string
 	done    bool
+}
+
+type parallelProbeRuntime struct {
+	mu               sync.Mutex
+	active           int
+	maxActive        int
+	executeOrder     []string
+	firstWaveStarted int
+	releaseFirstWave chan struct{}
 }
 
 type scriptedRuntime struct {
@@ -551,6 +628,41 @@ func (r *mergeConflictRuntime) Run(_ context.Context, req domain.AgentRequest) (
 	}
 
 	return domain.AgentResult{Output: "RESULT: PASS\nSUMMARY: ok"}, nil
+}
+
+func (r *parallelProbeRuntime) Run(_ context.Context, req domain.AgentRequest) (domain.AgentResult, error) {
+	if req.Role != "execute" {
+		return domain.AgentResult{Output: "PASS|ok", DurationS: 0.1, Strategy: domain.ExecutionStrategyProcess}, nil
+	}
+
+	r.mu.Lock()
+	r.active++
+	if r.active > r.maxActive {
+		r.maxActive = r.active
+	}
+	r.executeOrder = append(r.executeOrder, req.TaskLabel)
+	if req.TaskLabel == "TASK-001" || req.TaskLabel == "TASK-002" {
+		r.firstWaveStarted++
+		if r.firstWaveStarted == 2 {
+			close(r.releaseFirstWave)
+		}
+	}
+	r.mu.Unlock()
+
+	if req.TaskLabel == "TASK-001" || req.TaskLabel == "TASK-002" {
+		<-r.releaseFirstWave
+	}
+	time.Sleep(50 * time.Millisecond)
+
+	r.mu.Lock()
+	r.active--
+	r.mu.Unlock()
+
+	return domain.AgentResult{
+		Output:    "RESULT: PASS\nSUMMARY: ok",
+		DurationS: 0.1,
+		Strategy:  domain.ExecutionStrategyProcess,
+	}, nil
 }
 
 func testPlan(tasks []domain.Task) domain.Plan {

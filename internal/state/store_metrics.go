@@ -28,13 +28,13 @@ func (s *Store) WriteTaskMetrics(entry domain.CostEntry) error {
 		return fmt.Errorf("stat cost tracking file: %w", err)
 	}
 	if info.Size() == 0 {
-		if _, err := fmt.Fprint(f, "timestamp\trun_id\ttask_id\tagent\trole\tduration_s\tstatus\tcost_usd\n"); err != nil {
+		if _, err := fmt.Fprint(f, "timestamp\tplan_slug\trun_id\ttask_id\tagent\trole\tduration_s\tstatus\tcost_usd\n"); err != nil {
 			return fmt.Errorf("write cost header: %w", err)
 		}
 	}
 
-	if _, err := fmt.Fprintf(f, "%s\t%s\t%s\t%s\t%s\t%.2f\t%s\t%.6f\n",
-		entry.Timestamp, entry.RunID, entry.TaskID, entry.Agent, entry.Role,
+	if _, err := fmt.Fprintf(f, "%s\t%s\t%s\t%s\t%s\t%s\t%.2f\t%s\t%.6f\n",
+		entry.Timestamp, entry.PlanSlug, entry.RunID, entry.TaskID, entry.Agent, entry.Role,
 		entry.DurationS, entry.Status, entry.CostUSD); err != nil {
 		return fmt.Errorf("write cost entry: %w", err)
 	}

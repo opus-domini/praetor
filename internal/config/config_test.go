@@ -1,6 +1,7 @@
 package config
 
 import (
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -92,6 +93,38 @@ openrouter-api-key-env = "OPENROUTER_TOKEN"
 	}
 	if cfg.OpenRouterKeyEnv != "OPENROUTER_TOKEN" {
 		t.Fatalf("expected openrouter-api-key-env, got %q", cfg.OpenRouterKeyEnv)
+	}
+}
+
+func TestLoadCostPolicySettings(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.toml")
+	content := `
+plan-cost-budget-usd = 12.5
+task-cost-budget-usd = 1.25
+cost-budget-warn-threshold = 0.9
+cost-budget-enforce = false
+`
+	if err := os.WriteFile(cfgPath, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PRAETOR_CONFIG", cfgPath)
+
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.PlanCostBudgetUSD == nil || math.Abs(*cfg.PlanCostBudgetUSD-12.5) > 1e-9 {
+		t.Fatalf("expected plan-cost-budget-usd=12.5, got %#v", cfg.PlanCostBudgetUSD)
+	}
+	if cfg.TaskCostBudgetUSD == nil || math.Abs(*cfg.TaskCostBudgetUSD-1.25) > 1e-9 {
+		t.Fatalf("expected task-cost-budget-usd=1.25, got %#v", cfg.TaskCostBudgetUSD)
+	}
+	if cfg.CostWarnThreshold == nil || math.Abs(*cfg.CostWarnThreshold-0.9) > 1e-9 {
+		t.Fatalf("expected cost-budget-warn-threshold=0.9, got %#v", cfg.CostWarnThreshold)
+	}
+	if cfg.CostBudgetEnforce == nil || *cfg.CostBudgetEnforce {
+		t.Fatalf("expected cost-budget-enforce=false, got %#v", cfg.CostBudgetEnforce)
 	}
 }
 
@@ -322,6 +355,24 @@ timeout = "-5m"
 	_, err := Load("")
 	if err == nil {
 		t.Fatal("expected invalid timeout error")
+	}
+}
+
+func TestLoadRejectsInvalidCostPolicyValues(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.toml")
+	content := `
+plan-cost-budget-usd = -1
+cost-budget-warn-threshold = 1.5
+	`
+	if err := os.WriteFile(cfgPath, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PRAETOR_CONFIG", cfgPath)
+
+	_, err := Load("")
+	if err == nil {
+		t.Fatal("expected invalid cost policy error")
 	}
 }
 

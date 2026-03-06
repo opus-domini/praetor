@@ -21,6 +21,12 @@ type RunLock struct {
 	Token string
 }
 
+// TaskLock represents one acquired task-level runtime lock.
+type TaskLock struct {
+	Path  string
+	Token string
+}
+
 // NewStore builds a store with a validated root path.
 func NewStore(root string) *Store {
 	root = strings.TrimSpace(root)
@@ -125,6 +131,12 @@ func (s *Store) StateFile(slug string) string {
 // LockFile returns the lock file path for a plan slug.
 func (s *Store) LockFile(slug string) string {
 	return filepath.Join(s.LocksDir(), s.RuntimeKey(slug)+".lock")
+}
+
+// TaskLockFile returns the lock file path for one task within a plan slug.
+func (s *Store) TaskLockFile(slug, taskID string) string {
+	name := s.RuntimeKey(slug) + "--" + domain.SanitizePathToken(taskID) + ".task.lock"
+	return filepath.Join(s.LocksDir(), name)
 }
 
 func (s *Store) currentCheckpointFile(slug string) string {

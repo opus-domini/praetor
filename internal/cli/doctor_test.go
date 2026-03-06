@@ -192,7 +192,7 @@ func TestWriteProbeResultFormatsCorrectly(t *testing.T) {
 		ID:          agent.Claude,
 		DisplayName: "Claude Code",
 		Transport:   agent.TransportCLI,
-		Status:      agent.StatusOK,
+		Status:      agent.StatusPass,
 		Version:     "1.0.30",
 		Path:        "/usr/local/bin/claude",
 		Detail:      "v1.0.30",
@@ -223,7 +223,7 @@ func TestWriteProbeResultNotFound(t *testing.T) {
 		ID:          agent.Kimi,
 		DisplayName: "Kimi CLI",
 		Transport:   agent.TransportCLI,
-		Status:      agent.StatusNotFound,
+		Status:      agent.StatusFail,
 		Detail:      "kimi not found in PATH",
 	})
 
@@ -250,7 +250,7 @@ func TestWriteProbeResultREST(t *testing.T) {
 		ID:          agent.Ollama,
 		DisplayName: "Ollama",
 		Transport:   agent.TransportREST,
-		Status:      agent.StatusOK,
+		Status:      agent.StatusPass,
 		Path:        "http://127.0.0.1:11434",
 		Detail:      "reachable (HTTP 200)",
 	})

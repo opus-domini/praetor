@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/opus-domini/praetor/internal/domain"
@@ -30,6 +31,11 @@ func Logging(logger Logger, sink EventSink) Middleware {
 	return func(next domain.AgentRuntime) domain.AgentRuntime {
 		return runtimeFunc(func(ctx context.Context, req domain.AgentRequest) (domain.AgentResult, error) {
 			start := time.Now()
+			actor := &domain.EventActor{
+				Role:  req.Role,
+				Agent: string(req.Agent),
+				Model: strings.TrimSpace(req.Model),
+			}
 			if sink != nil {
 				sink.Emit(ExecutionEvent{
 					SchemaVersion: 1,
@@ -40,6 +46,7 @@ func Logging(logger Logger, sink EventSink) Middleware {
 					TaskID:        req.TaskLabel,
 					Phase:         req.Role,
 					Role:          req.Role,
+					Actor:         actor,
 				})
 			}
 			result, err := next.Run(ctx, req)
@@ -76,6 +83,7 @@ func Logging(logger Logger, sink EventSink) Middleware {
 					TaskID:        req.TaskLabel,
 					Phase:         req.Role,
 					Role:          entry.Role,
+					Actor:         actor,
 					Strategy:      entry.Strategy,
 					Error:         entry.Error,
 					DurationS:     entry.DurationS,

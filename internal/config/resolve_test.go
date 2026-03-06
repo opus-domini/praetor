@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 )
 
@@ -146,4 +147,81 @@ max-retries = 7
 			}
 		}
 	}
+}
+
+func TestResolveAllCostPolicyDefaults(t *testing.T) {
+	t.Parallel()
+
+	resolved := ResolveAll(nil, "")
+	values := make(map[string]ResolvedValue, len(resolved))
+	for _, rv := range resolved {
+		values[rv.Key] = rv
+	}
+
+	if values["plan-cost-budget-usd"].Value != "0" || values["plan-cost-budget-usd"].Source != SourceDefault {
+		t.Fatalf("expected default plan-cost-budget-usd=0/default, got %q/%q", values["plan-cost-budget-usd"].Value, values["plan-cost-budget-usd"].Source)
+	}
+	if values["task-cost-budget-usd"].Value != "0" || values["task-cost-budget-usd"].Source != SourceDefault {
+		t.Fatalf("expected default task-cost-budget-usd=0/default, got %q/%q", values["task-cost-budget-usd"].Value, values["task-cost-budget-usd"].Source)
+	}
+	if values["cost-budget-warn-threshold"].Value != "0.8" || values["cost-budget-warn-threshold"].Source != SourceDefault {
+		t.Fatalf("expected default cost-budget-warn-threshold=0.8/default, got %q/%q", values["cost-budget-warn-threshold"].Value, values["cost-budget-warn-threshold"].Source)
+	}
+	if values["cost-budget-enforce"].Value != "true" || values["cost-budget-enforce"].Source != SourceDefault {
+		t.Fatalf("expected default cost-budget-enforce=true/default, got %q/%q", values["cost-budget-enforce"].Value, values["cost-budget-enforce"].Source)
+	}
+}
+
+func TestLoadResolvedCostPolicyProjectOverride(t *testing.T) {
+	dir := t.TempDir()
+	projectRoot := filepath.Join(dir, "project")
+	if err := os.MkdirAll(projectRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	cfgPath := filepath.Join(dir, "config.toml")
+	content := `plan-cost-budget-usd = 5
+cost-budget-warn-threshold = 0.75
+
+[projects."` + projectRoot + `"]
+task-cost-budget-usd = 1.5
+cost-budget-enforce = false
+`
+	if err := os.WriteFile(cfgPath, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PRAETOR_CONFIG", cfgPath)
+
+	resolved, _, err := LoadResolved(projectRoot)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	values := make(map[string]ResolvedValue, len(resolved))
+	for _, rv := range resolved {
+		values[rv.Key] = rv
+	}
+
+	if values["plan-cost-budget-usd"].Source != SourceGlobal || values["plan-cost-budget-usd"].Value != "5" {
+		t.Fatalf("expected global plan cost budget, got %q/%q", values["plan-cost-budget-usd"].Value, values["plan-cost-budget-usd"].Source)
+	}
+	if values["task-cost-budget-usd"].Source != SourceProject || values["task-cost-budget-usd"].Value != "1.5" {
+		t.Fatalf("expected project task cost budget, got %q/%q", values["task-cost-budget-usd"].Value, values["task-cost-budget-usd"].Source)
+	}
+	if values["cost-budget-warn-threshold"].Source != SourceGlobal || mustParseFloat(t, values["cost-budget-warn-threshold"].Value) != 0.75 {
+		t.Fatalf("expected global warn threshold 0.75/config, got %q/%q", values["cost-budget-warn-threshold"].Value, values["cost-budget-warn-threshold"].Source)
+	}
+	if values["cost-budget-enforce"].Source != SourceProject || values["cost-budget-enforce"].Value != "false" {
+		t.Fatalf("expected project enforcement false, got %q/%q", values["cost-budget-enforce"].Value, values["cost-budget-enforce"].Source)
+	}
+}
+
+func mustParseFloat(t *testing.T, raw string) float64 {
+	t.Helper()
+
+	value, err := strconv.ParseFloat(raw, 64)
+	if err != nil {
+		t.Fatalf("parse float %q: %v", raw, err)
+	}
+	return value
 }

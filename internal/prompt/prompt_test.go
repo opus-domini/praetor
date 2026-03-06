@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/opus-domini/praetor/internal/domain"
 )
 
 func TestRenderExecutorSystem(t *testing.T) {
@@ -76,14 +78,20 @@ func TestRenderExecutorTask(t *testing.T) {
 	t.Run("retry", func(t *testing.T) {
 		t.Parallel()
 		got, err := engine.Render("executor.task", ExecutorTaskData{
-			IsRetry:          true,
-			RetryAttempt:     1,
-			PreviousFeedback: "tests failed",
-			TaskTitle:        "Fix bug",
-			TaskID:           "TASK-002",
-			TaskIndex:        1,
-			PlanFile:         "plan.json",
-			Workdir:          "/tmp/work",
+			IsRetry:      true,
+			RetryAttempt: 1,
+			PreviousFeedback: []domain.TaskFeedback{{
+				Attempt: 1,
+				Phase:   "review",
+				Verdict: "fail",
+				Reason:  "tests failed",
+				Hints:   []string{"fix the broken tests"},
+			}},
+			TaskTitle: "Fix bug",
+			TaskID:    "TASK-002",
+			TaskIndex: 1,
+			PlanFile:  "plan.json",
+			Workdir:   "/tmp/work",
 		})
 		if err != nil {
 			t.Fatalf("Render: %v", err)
@@ -96,6 +104,9 @@ func TestRenderExecutorTask(t *testing.T) {
 		}
 		if !strings.Contains(got, "tests failed") {
 			t.Errorf("expected feedback in output, got:\n%s", got)
+		}
+		if !strings.Contains(got, "fix the broken tests") {
+			t.Errorf("expected hint in output, got:\n%s", got)
 		}
 	})
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -27,6 +28,7 @@ func newRunCmd() *cobra.Command {
 	var maxIterations int
 	var maxTransitions int
 	var keepLastRuns int
+	var maxParallelTasks int
 	var noReview bool
 	var force bool
 	var codexBin string
@@ -52,8 +54,12 @@ func newRunCmd() *cobra.Command {
 	var fallbackOnTransient string
 	var fallbackOnAuth string
 	var timeout time.Duration
-	var budgetExecute int
-	var budgetReview int
+	var executorPromptChars int
+	var reviewerPromptChars int
+	var planCostBudgetUSD float64
+	var taskCostBudgetUSD float64
+	var costBudgetWarnThreshold float64
+	var noCostBudgetEnforce bool
 	var stallEnabled bool
 	var stallWindow int
 	var stallThreshold float64
@@ -115,6 +121,9 @@ isolation protects the main branch from partial changes.`,
 			}
 			if !f.Changed("keep-last-runs") && cfg.KeepLastRuns != nil {
 				keepLastRuns = *cfg.KeepLastRuns
+			}
+			if !f.Changed("max-parallel-tasks") && cfg.MaxParallelTasks != nil {
+				maxParallelTasks = *cfg.MaxParallelTasks
 			}
 			if !f.Changed("no-review") && cfg.NoReview != nil {
 				noReview = *cfg.NoReview
@@ -198,75 +207,97 @@ isolation protects the main branch from partial changes.`,
 				}
 				timeout = d
 			}
+			if !f.Changed("plan-cost-budget-usd") && cfg.PlanCostBudgetUSD != nil {
+				planCostBudgetUSD = *cfg.PlanCostBudgetUSD
+			}
+			if !f.Changed("task-cost-budget-usd") && cfg.TaskCostBudgetUSD != nil {
+				taskCostBudgetUSD = *cfg.TaskCostBudgetUSD
+			}
+			if !f.Changed("cost-budget-warn-threshold") && cfg.CostWarnThreshold != nil {
+				costBudgetWarnThreshold = *cfg.CostWarnThreshold
+			}
+			if !f.Changed("no-cost-budget-enforce") && cfg.CostBudgetEnforce != nil {
+				noCostBudgetEnforce = !*cfg.CostBudgetEnforce
+			}
 			if timeout < 0 {
 				return errors.New("timeout cannot be negative")
 			}
 
 			runner := pipeline.NewRunner(nil)
 			runnerOptions := domain.RunnerOptions{
-				ProjectHome:         store.Root,
-				Workdir:             absWorkdir,
-				RunnerMode:          domain.RunnerMode(strings.ToLower(strings.TrimSpace(runnerMode))),
-				DefaultExecutor:     domain.Agent(executor),
-				DefaultReviewer:     domain.Agent(reviewer),
-				ExecutorModel:       executorModel,
-				ReviewerModel:       reviewerModel,
-				PlannerAgent:        domain.Agent(planner),
-				PlannerModel:        plannerModel,
-				Objective:           strings.TrimSpace(objective),
-				MaxRetries:          maxRetries,
-				MaxIterations:       maxIterations,
-				MaxTransitions:      maxTransitions,
-				KeepLastRuns:        keepLastRuns,
-				Timeout:             timeout,
-				BudgetExecute:       budgetExecute,
-				BudgetReview:        budgetReview,
-				StallDetection:      stallEnabled,
-				StallWindow:         stallWindow,
-				StallThreshold:      stallThreshold,
-				PlannerAgentSet:     f.Changed("planner"),
-				PlannerModelSet:     f.Changed("planner-model"),
-				ExecutorAgentSet:    f.Changed("executor"),
-				ExecutorModelSet:    f.Changed("executor-model"),
-				ReviewerAgentSet:    f.Changed("reviewer"),
-				ReviewerModelSet:    f.Changed("reviewer-model"),
-				MaxRetriesSet:       f.Changed("max-retries"),
-				MaxIterationsSet:    f.Changed("max-iterations"),
-				TimeoutSet:          f.Changed("timeout"),
-				BudgetExecuteSet:    f.Changed("budget-execute"),
-				BudgetReviewSet:     f.Changed("budget-review"),
-				StallDetectionSet:   f.Changed("stall-enabled"),
-				StallWindowSet:      f.Changed("stall-window"),
-				StallThresholdSet:   f.Changed("stall-threshold"),
-				GateTestsCmdSet:     f.Changed("gate-tests-cmd"),
-				GateLintCmdSet:      f.Changed("gate-lint-cmd"),
-				GateStandardsCmdSet: f.Changed("gate-standards-cmd"),
-				SkipReview:          noReview,
-				Force:               force,
-				CodexBin:            codexBin,
-				ClaudeBin:           claudeBin,
-				CopilotBin:          copilotBin,
-				GeminiBin:           geminiBin,
-				KimiBin:             kimiBin,
-				OpenCodeBin:         opencodeBin,
-				OpenRouterURL:       openrouterURL,
-				OpenRouterModel:     openrouterModel,
-				OpenRouterKeyEnv:    openrouterKeyEnv,
-				OllamaURL:           ollamaURL,
-				OllamaModel:         ollamaModel,
-				LMStudioURL:         lmstudioURL,
-				LMStudioModel:       lmstudioModel,
-				LMStudioKeyEnv:      lmstudioKeyEnv,
-				TMUXSession:         tmuxSession,
-				NoColor:             noColor,
-				Isolation:           domain.IsolationMode(strings.ToLower(strings.TrimSpace(isolation))),
-				PostTaskHook:        postTaskHook,
-				FallbackAgent:       domain.Agent(fallbackAgent),
-				FallbackOnTransient: domain.Agent(fallbackOnTransient),
-				FallbackOnAuth:      domain.Agent(fallbackOnAuth),
-				GateTestsCmd:        gateTestsCmd,
-				GateLintCmd:         gateLintCmd,
-				GateStandardsCmd:    gateStandardsCmd,
+				ProjectHome:            store.Root,
+				Workdir:                absWorkdir,
+				RunnerMode:             domain.RunnerMode(strings.ToLower(strings.TrimSpace(runnerMode))),
+				DefaultExecutor:        domain.Agent(executor),
+				DefaultReviewer:        domain.Agent(reviewer),
+				ExecutorModel:          executorModel,
+				ReviewerModel:          reviewerModel,
+				PlannerAgent:           domain.Agent(planner),
+				PlannerModel:           plannerModel,
+				Objective:              strings.TrimSpace(objective),
+				MaxRetries:             maxRetries,
+				MaxIterations:          maxIterations,
+				MaxTransitions:         maxTransitions,
+				KeepLastRuns:           keepLastRuns,
+				MaxParallelTasks:       maxParallelTasks,
+				Timeout:                timeout,
+				ExecutorPromptChars:    executorPromptChars,
+				ReviewerPromptChars:    reviewerPromptChars,
+				PlanCostBudgetCents:    usdBudgetToCents(planCostBudgetUSD),
+				TaskCostBudgetCents:    usdBudgetToCents(taskCostBudgetUSD),
+				CostWarnThreshold:      costBudgetWarnThreshold,
+				CostBudgetEnforce:      !noCostBudgetEnforce,
+				StallDetection:         stallEnabled,
+				StallWindow:            stallWindow,
+				StallThreshold:         stallThreshold,
+				PlannerAgentSet:        f.Changed("planner"),
+				PlannerModelSet:        f.Changed("planner-model"),
+				ExecutorAgentSet:       f.Changed("executor"),
+				ExecutorModelSet:       f.Changed("executor-model"),
+				ReviewerAgentSet:       f.Changed("reviewer"),
+				ReviewerModelSet:       f.Changed("reviewer-model"),
+				MaxRetriesSet:          f.Changed("max-retries"),
+				MaxIterationsSet:       f.Changed("max-iterations"),
+				MaxParallelTasksSet:    f.Changed("max-parallel-tasks"),
+				TimeoutSet:             f.Changed("timeout"),
+				ExecutorPromptCharsSet: f.Changed("executor-prompt-chars"),
+				ReviewerPromptCharsSet: f.Changed("reviewer-prompt-chars"),
+				PlanCostBudgetSet:      f.Changed("plan-cost-budget-usd"),
+				TaskCostBudgetSet:      f.Changed("task-cost-budget-usd"),
+				CostWarnThresholdSet:   f.Changed("cost-budget-warn-threshold"),
+				CostBudgetEnforceSet:   f.Changed("no-cost-budget-enforce"),
+				StallDetectionSet:      f.Changed("stall-enabled"),
+				StallWindowSet:         f.Changed("stall-window"),
+				StallThresholdSet:      f.Changed("stall-threshold"),
+				GateTestsCmdSet:        f.Changed("gate-tests-cmd"),
+				GateLintCmdSet:         f.Changed("gate-lint-cmd"),
+				GateStandardsCmdSet:    f.Changed("gate-standards-cmd"),
+				SkipReview:             noReview,
+				Force:                  force,
+				CodexBin:               codexBin,
+				ClaudeBin:              claudeBin,
+				CopilotBin:             copilotBin,
+				GeminiBin:              geminiBin,
+				KimiBin:                kimiBin,
+				OpenCodeBin:            opencodeBin,
+				OpenRouterURL:          openrouterURL,
+				OpenRouterModel:        openrouterModel,
+				OpenRouterKeyEnv:       openrouterKeyEnv,
+				OllamaURL:              ollamaURL,
+				OllamaModel:            ollamaModel,
+				LMStudioURL:            lmstudioURL,
+				LMStudioModel:          lmstudioModel,
+				LMStudioKeyEnv:         lmstudioKeyEnv,
+				TMUXSession:            tmuxSession,
+				NoColor:                noColor,
+				Isolation:              domain.IsolationMode(strings.ToLower(strings.TrimSpace(isolation))),
+				PostTaskHook:           postTaskHook,
+				FallbackAgent:          domain.Agent(fallbackAgent),
+				FallbackOnTransient:    domain.Agent(fallbackOnTransient),
+				FallbackOnAuth:         domain.Agent(fallbackOnAuth),
+				GateTestsCmd:           gateTestsCmd,
+				GateLintCmd:            gateLintCmd,
+				GateStandardsCmd:       gateStandardsCmd,
 			}
 
 			ctx := cmd.Context()
@@ -301,6 +332,7 @@ isolation protects the main branch from partial changes.`,
 	cmd.Flags().IntVar(&maxIterations, "max-iterations", 0, "Maximum loop iterations (0 = unlimited)")
 	cmd.Flags().IntVar(&maxTransitions, "max-transitions", 0, "Maximum FSM state transitions (0 = unlimited)")
 	cmd.Flags().IntVar(&keepLastRuns, "keep-last-runs", 20, "Keep only the most recent N local runtime runs (0 = no pruning)")
+	cmd.Flags().IntVar(&maxParallelTasks, "max-parallel-tasks", 1, "Maximum number of independent tasks to execute in parallel per wave")
 	cmd.Flags().BoolVar(&noReview, "no-review", false, "Skip the reviewer gate and auto-approve executor outputs")
 	cmd.Flags().BoolVar(&force, "force", false, "Override an existing plan lock")
 	cmd.Flags().StringVar(&codexBin, "codex-bin", "codex", "Codex binary path or name")
@@ -327,8 +359,12 @@ isolation protects the main branch from partial changes.`,
 	cmd.Flags().StringVar(&fallbackOnTransient, "fallback-on-transient", "", "Global fallback agent for transient errors")
 	cmd.Flags().StringVar(&fallbackOnAuth, "fallback-on-auth", "", "Global fallback agent for auth errors")
 	cmd.Flags().DurationVar(&timeout, "timeout", 0, "Run timeout (e.g. 30m, 2h)")
-	cmd.Flags().IntVar(&budgetExecute, "budget-execute", 0, "Context budget for executor prompt (chars)")
-	cmd.Flags().IntVar(&budgetReview, "budget-review", 0, "Context budget for reviewer prompt (chars)")
+	cmd.Flags().IntVar(&executorPromptChars, "executor-prompt-chars", 0, "Prompt budget for executor (chars)")
+	cmd.Flags().IntVar(&reviewerPromptChars, "reviewer-prompt-chars", 0, "Prompt budget for reviewer (chars)")
+	cmd.Flags().Float64Var(&planCostBudgetUSD, "plan-cost-budget-usd", 0, "Plan-level cost budget in USD (0 disables)")
+	cmd.Flags().Float64Var(&taskCostBudgetUSD, "task-cost-budget-usd", 0, "Per-task cost budget in USD (0 disables)")
+	cmd.Flags().Float64Var(&costBudgetWarnThreshold, "cost-budget-warn-threshold", 0, "Warn threshold for cumulative cost budget usage (0..1)")
+	cmd.Flags().BoolVar(&noCostBudgetEnforce, "no-cost-budget-enforce", false, "Do not hard-stop when cost budgets are exceeded")
 	cmd.Flags().BoolVar(&stallEnabled, "stall-enabled", false, "Enable stall detection")
 	cmd.Flags().IntVar(&stallWindow, "stall-window", 0, "Stall detection sliding window size")
 	cmd.Flags().Float64Var(&stallThreshold, "stall-threshold", 0, "Stall detection similarity threshold (0..1)")
@@ -336,4 +372,11 @@ isolation protects the main branch from partial changes.`,
 	cmd.Flags().StringVar(&gateLintCmd, "gate-lint-cmd", "golangci-lint run", "Host command for lint quality gate")
 	cmd.Flags().StringVar(&gateStandardsCmd, "gate-standards-cmd", "go test ./... && golangci-lint run", "Host command for standards quality gate")
 	return cmd
+}
+
+func usdBudgetToCents(value float64) int64 {
+	if value <= 0 {
+		return 0
+	}
+	return int64(math.Round(value * 100))
 }

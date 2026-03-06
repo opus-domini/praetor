@@ -10,6 +10,7 @@ Praetor orchestrates plans with a strict JSON schema and a Plan -> Execute -> Re
 praetor plan create "Implement user authentication with JWT and tests"
 praetor plan create --from-file docs/brief.md
 cat brief.md | praetor plan create --stdin
+praetor plan create --from-template go-feature --var Name="JWT auth" --var Summary="Implement JWT auth"
 ```
 
 Useful flags:
@@ -19,7 +20,17 @@ Useful flags:
 - `--slug <slug>`: force a specific slug.
 - `--dry-run`: print generated JSON without writing a file.
 - `--no-agent`: generate a minimal valid template without calling a planner.
+- `--from-template <name>` and `--var key=value`: render a reusable plan template from project, global, or builtin registries.
 - `--force`: overwrite an existing plan file.
+
+### Export a plan bundle
+
+```bash
+praetor plan export my-plan
+praetor plan export my-plan --output ./exports/my-plan
+```
+
+The export bundle contains `plan.json`, `summary.json`, `template.json`, and `state.json` when runtime state exists.
 
 ### Run a plan
 
@@ -30,8 +41,11 @@ praetor plan run my-plan \
   --reviewer claude \
   --executor-model gpt-5-codex \
   --reviewer-model opus \
-  --budget-execute 120000 \
-  --budget-review 80000 \
+  --executor-prompt-chars 120000 \
+  --reviewer-prompt-chars 80000 \
+  --plan-cost-budget-usd 5 \
+  --task-cost-budget-usd 1 \
+  --max-parallel-tasks 2 \
   --stall-enabled \
   --stall-window 3 \
   --stall-threshold 0.67
@@ -114,10 +128,17 @@ Canonical schema file: [`docs/schemas/plan.schema.json`](schemas/plan.schema.jso
     "execution_policy": {
       "max_total_iterations": 200,
       "max_retries_per_task": 3,
+      "max_parallel_tasks": 2,
       "timeout": "1h",
-      "budget": {
-        "execute": 120000,
-        "review": 80000
+      "prompt_budget": {
+        "executor_chars": 120000,
+        "reviewer_chars": 80000
+      },
+      "cost": {
+        "plan_limit_cents": 500,
+        "task_limit_cents": 100,
+        "warn_threshold": 0.8,
+        "enforce": true
       },
       "stall_detection": {
         "enabled": false,
@@ -230,11 +251,11 @@ When `"standards"` is included in `quality.required`, the reviewer system prompt
 The effective runtime configuration is resolved in this order (highest wins):
 
 1. Explicit CLI flags
-2. Resolved Praetor config (`$PRAETOR_CONFIG` or `<praetor-home>/config.toml`, including project section)
-3. `plan.settings` (`agents` + `execution_policy`) — applied only for fields not already set by CLI or config
+2. `plan.settings` (`agents` + `execution_policy`)
+3. Resolved Praetor config (`$PRAETOR_CONFIG` or `<praetor-home>/config.toml`, including project section)
 4. Built-in defaults
 
-Config values are applied to flag variables before plan loading. Plan settings use `*Set bool` fields to detect whether a value was explicitly provided by CLI or config, and only override unset fields.
+Config values are applied to flag variables before plan loading. Only explicit CLI flags mark a field as user-set, so plan settings can override config-derived defaults but never explicit CLI overrides.
 
 ```mermaid
 ---
@@ -242,8 +263,8 @@ config:
   theme: dark
 ---
 flowchart TD
-    A[CLI flags] --> B[project config]
-    B --> C[plan.settings]
+    A[CLI flags] --> B[plan.settings]
+    B --> C[resolved config]
     C --> D[built-in defaults]
 ```
 
@@ -255,30 +276,34 @@ config:
   theme: dark
 ---
 flowchart TD
-    A[User: plan create brief] --> B[Input resolver<br>args / --from-file / --stdin / interactive]
-    B --> C{--no-agent?}
-    C -- yes --> D[Build minimal template]
-    C -- no --> E[Planner agent]
-    E --> F{Planner output valid?}
-    F -- yes --> H[Finalize plan metadata<br>normalize + enrich meta/settings]
-    F -- no --> G{Recoverable format error?<br>empty output / no JSON object}
-    G -- yes --> I[Persist first invalid output log<br>+ retry once with stricter JSON prompt]
-    I --> J{Retry output valid?}
-    J -- yes --> H
-    G -- no --> K[Persist planner failure log + return error]
-    J -- no --> K
-    D --> H
-    H --> L[Validate plan schema]
-    L --> M[Generate slug]
-    M --> N{--dry-run?}
-    N -- yes --> O[Print JSON to stdout]
-    N -- no --> P{File exists<br>and no --force?}
-    P -- yes --> Q[Return error: plan exists]
-    P -- no --> R[Write plans/slug.json]
-    R --> S[Print slug/path/task count]
+    A[User: plan create] --> B{--from-template?}
+    B -- yes --> C[Resolve template path<br>+ parse --var values]
+    C --> D[Render template JSON]
+    B -- no --> E[Input resolver<br>args / --from-file / --stdin / interactive]
+    E --> F{--no-agent?}
+    F -- yes --> G[Build minimal template]
+    F -- no --> H[Planner agent<br>with provider-native schema enforcement]
+    H --> I{Planner output valid?}
+    I -- yes --> J[Finalize plan metadata<br>normalize + enrich meta/settings]
+    I -- no --> K{Recoverable format error?<br>empty output / no JSON object}
+    K -- yes --> L[Persist first invalid output log<br>+ retry once with stricter JSON prompt]
+    L --> M{Retry output valid?}
+    M -- yes --> J
+    K -- no --> N[Persist planner failure log + return error]
+    M -- no --> N
+    G --> J
+    D --> J
+    J --> O[Validate plan schema]
+    O --> P[Generate slug]
+    P --> Q{--dry-run?}
+    Q -- yes --> R[Print JSON to stdout]
+    Q -- no --> S{File exists<br>and no --force?}
+    S -- yes --> T[Return error: plan exists]
+    S -- no --> U[Write plans/slug.json]
+    U --> V[Print slug/path/task count]
 ```
 
-Recoverable planner format errors are retried once with a stricter recovery prompt. If `--planner-timeout` is set, the timeout applies to the whole planner session, including the retry.
+Praetor enforces provider-native structured planner output when the adapter supports it, currently `claude --json-schema` and `codex exec --output-schema`. Recoverable planner format errors are retried once with a stricter recovery prompt. If `--planner-timeout` is set, the timeout applies to the whole planner session, including the retry.
 
 ## `plan run` flow
 
@@ -288,32 +313,36 @@ config:
   theme: dark
 ---
 flowchart TD
-    A[CLI: plan run] --> B[Bootstrap:<br>resolve project, probe agents,<br>recover state from snapshot]
-    B --> C[Resolve options precedence]
-    C --> D[Build runtime, event sink,<br>isolation policy]
-    D --> E[FSM loop]
-    E --> F[Select runnable task<br>+ apply per-task agent overrides]
-    F --> G[Prepare worktree isolation]
-    G --> H[Build prompt with budget manager]
-    H --> I[Execute]
-    I --> J[Stall detection — execute phase]
-    J --> K{--no-review<br>or reviewer=none?}
-    K -- yes --> Q[Skip review — auto-approve]
-    K -- no --> L{Post-task hook?}
-    L -- yes --> L2[Run hook]
-    L2 --> L3{Hook passed?}
-    L3 -- no --> R[Retry task]
-    L3 -- yes --> M[Review + pipeline gate enforcement]
-    L -- no --> M
-    M --> N[Stall detection — review phase]
-    N --> O[Apply outcome + checkpoint]
-    Q --> O
-    R --> O
-    O --> P[Persist snapshot + events + metrics]
-    P --> S{Done or blocked?}
-    S -- no --> E
-    S -- yes --> T[Compute RunOutcome]
-    T --> U[Exit code + status]
+    A[CLI: plan run] --> B[Resolve project + manifest]
+    B --> C[Probe agents + build runtime<br>event sink and isolation policy]
+    C --> D{--objective?}
+    D -- yes --> E[Planner generates or updates plan file]
+    D -- no --> F[Load plan]
+    E --> F
+    F --> G[Merge effective execution policy<br>+ recover state from snapshot]
+    G --> H[FSM loop]
+    H --> I[Select runnable task or wave<br>+ apply per-task agent overrides]
+    I --> J[Prepare worktree isolation]
+    J --> K[Build prompt with budget manager]
+    K --> L[Execute]
+    L --> M[Stall detection — execute phase]
+    M --> N{--no-review<br>or reviewer=none?}
+    N -- yes --> V[Skip review — auto-approve]
+    N -- no --> O{Post-task hook?}
+    O -- yes --> O2[Run hook]
+    O2 --> O3{Hook passed?}
+    O3 -- no --> W[Retry task]
+    O3 -- yes --> P[Review + pipeline gate enforcement]
+    O -- no --> P
+    P --> Q[Stall detection — review phase]
+    Q --> R[Apply outcome + checkpoint]
+    V --> R
+    W --> R
+    R --> S[Persist snapshot + events + metrics]
+    S --> T{Done or blocked?}
+    T -- no --> H
+    T -- yes --> U[Compute RunOutcome]
+    U --> X[Exit code + status]
 ```
 
 ### Execute → Review iteration
@@ -362,6 +391,58 @@ sequenceDiagram
 
     Pipeline->>State: Persist snapshot + events
 ```
+
+### Parallel wave execution
+
+When `max_parallel_tasks > 1`, the runner executes a dependency-ready wave concurrently, but still applies state transitions and merges in a single deterministic order.
+
+```mermaid
+---
+config:
+  theme: dark
+---
+flowchart TD
+    A[Runnable task scan] --> B[Pick up to max_parallel_tasks<br>ready tasks in plan order]
+    B --> C[Acquire per-task locks<br>+ prepare isolated workdirs]
+    C --> D[Spawn one worker per task]
+    D --> E[Execute and review in parallel]
+    E --> F[Collect outcomes]
+    F --> G[Sort results by original task index]
+    G --> H[Apply merges sequentially]
+    H --> I{Merge conflict?}
+    I -- no --> J[Emit parallel_merge<br>persist state + summary]
+    I -- yes --> K[Emit parallel_conflict<br>requeue or fail task]
+```
+
+The merge phase is intentionally single-writer. This avoids races in `state.json`, checkpoint history, cost accumulation, and summary aggregation.
+
+### Structured feedback retry loop
+
+Reviewer and gate failures generate structured `TaskFeedback` entries that are persisted per task signature and reloaded on the next executor attempt.
+
+```mermaid
+---
+config:
+  theme: dark
+---
+sequenceDiagram
+    participant Executor
+    participant Reviewer
+    participant Gates as Gate Runner
+    participant Store as Feedback Store
+    participant Prompt as Prompt Builder
+
+    Executor->>Reviewer: executor output
+    Gates->>Reviewer: gate results
+    Reviewer-->>Store: TaskFeedback JSONL append
+    Gates-->>Store: TaskFeedback JSONL append
+    Prompt->>Store: Load feedback history by task signature
+    Store-->>Prompt: ordered feedback entries
+    Prompt->>Prompt: Trim oldest feedback to fit prompt budget
+    Prompt-->>Executor: next retry prompt with structured hints
+```
+
+Feedback is stored under `feedback/<slug>/<task-signature>.jsonl`, sorted by `attempt` and `timestamp`, and truncated from the oldest entries first when the prompt budget is exceeded.
 
 ## Task state machine (with stall guard)
 
@@ -422,7 +503,7 @@ stateDiagram-v2
 | `2` | `canceled` | canceled by signal/context/timeout |
 | `3` | `partial` | mix of `done` and `failed` tasks |
 
-## Context budget manager
+## Prompt budget manager
 
 `ContextBudgetManager` keeps prompts bounded per phase.
 
@@ -440,7 +521,7 @@ Behavior:
 - Execute phase truncates retry feedback first.
 - Review phase truncates `executor_output` first, then `git_diff`.
 - Performance metrics are appended to `runtime/<run-id>/diagnostics/performance.jsonl`.
-- Truncation emits `budget_warning` events.
+- Truncation emits `prompt_budget_warning` events.
 
 ## Stall detection
 
@@ -545,11 +626,19 @@ Event schema (v1):
 ```json
 {
   "schema_version": 1,
+  "type": "agent_start",
   "event_type": "agent_start",
   "timestamp": "2026-02-27T10:30:00Z",
   "run_id": "20260227-...",
   "task_id": "TASK-001",
   "phase": "execute",
+  "role": "executor",
+  "agent": "codex",
+  "actor": {
+    "role": "executor",
+    "agent": "codex",
+    "model": "gpt-5-codex"
+  },
   "data": {}
 }
 ```
@@ -560,8 +649,16 @@ Supported event types:
 - `agent_complete`
 - `agent_error`
 - `agent_fallback`
+- `task_started`
+- `task_completed`
+- `task_failed`
 - `task_stalled`
-- `budget_warning`
+- `prompt_budget_warning`
+- `cost_budget_warning`
+- `cost_budget_exceeded`
 - `gate_result`
+- `parallel_merge`
+- `parallel_conflict`
+- `state_transition`
 
-`plan diagnose` reads these files and filters by query (`errors`, `stalls`, `fallbacks`, `costs`, `all`).
+`plan diagnose` reads these files and supports `errors`, `stalls`, `fallbacks`, `costs`, `summary`, `regressions`, and `all`. Run summaries also persist actor-level totals for cost, calls, retries, stalls, and time spent.

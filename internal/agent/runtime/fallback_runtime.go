@@ -61,8 +61,13 @@ func (f *FallbackRuntime) Run(ctx context.Context, req domain.AgentRequest) (dom
 			TaskID:        req.TaskLabel,
 			Phase:         req.Role,
 			Role:          req.Role,
-			Error:         err.Error(),
-			Message:       fmt.Sprintf("fallback to %s", fallbackID),
+			Actor: &domain.EventActor{
+				Role:  req.Role,
+				Agent: string(req.Agent),
+				Model: req.Model,
+			},
+			Error:   err.Error(),
+			Message: fmt.Sprintf("fallback to %s", fallbackID),
 		})
 	}
 

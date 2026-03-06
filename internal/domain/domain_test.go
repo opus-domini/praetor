@@ -602,6 +602,9 @@ func TestParseReviewDecisionFailWithReason(t *testing.T) {
 	if d.Reason != "needs work" {
 		t.Fatalf("Reason = %q, want %q", d.Reason, "needs work")
 	}
+	if len(d.Hints) != 1 || d.Hints[0] != "needs work" {
+		t.Fatalf("Hints = %+v, want [needs work]", d.Hints)
+	}
 }
 
 func TestParseReviewDecisionPassNoReason(t *testing.T) {
@@ -680,6 +683,20 @@ func TestParseReviewDecisionPipeInReason(t *testing.T) {
 	}
 	if d.Reason != "looks good | formatting ok" {
 		t.Fatalf("Reason = %q, want %q", d.Reason, "looks good | formatting ok")
+	}
+}
+
+func TestParseReviewDecisionFailWithHints(t *testing.T) {
+	t.Parallel()
+	d := ParseReviewDecision("FAIL|missing tests|HINT:add regression coverage|HINT:cover the error path")
+	if d.Pass {
+		t.Fatal("Pass = true, want false")
+	}
+	if len(d.Hints) != 2 {
+		t.Fatalf("Hints len = %d, want 2", len(d.Hints))
+	}
+	if d.Hints[0] != "add regression coverage" || d.Hints[1] != "cover the error path" {
+		t.Fatalf("unexpected hints: %+v", d.Hints)
 	}
 }
 

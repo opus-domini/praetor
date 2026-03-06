@@ -22,6 +22,11 @@ type Config struct {
 	MaxIterations       *int
 	MaxTransitions      *int
 	KeepLastRuns        *int
+	MaxParallelTasks    *int
+	PlanCostBudgetUSD   *float64
+	TaskCostBudgetUSD   *float64
+	CostWarnThreshold   *float64
+	CostBudgetEnforce   *bool
 	Runner              string
 	Isolation           string
 	NoReview            *bool
@@ -169,6 +174,53 @@ func configFromMap(section string, m map[string]string) (Config, error) {
 		}
 		cfg.KeepLastRuns = &value
 	}
+	if v, ok := m["max-parallel-tasks"]; ok {
+		value, err := strconv.Atoi(strings.TrimSpace(v))
+		if err != nil {
+			return Config{}, fmt.Errorf("section %q key %q: invalid integer %q", section, "max-parallel-tasks", v)
+		}
+		if value < 1 {
+			return Config{}, fmt.Errorf("section %q key %q: must be at least 1", section, "max-parallel-tasks")
+		}
+		cfg.MaxParallelTasks = &value
+	}
+	if v, ok := m["plan-cost-budget-usd"]; ok {
+		value, err := strconv.ParseFloat(strings.TrimSpace(v), 64)
+		if err != nil {
+			return Config{}, fmt.Errorf("section %q key %q: invalid number %q", section, "plan-cost-budget-usd", v)
+		}
+		if value < 0 {
+			return Config{}, fmt.Errorf("section %q key %q: cannot be negative", section, "plan-cost-budget-usd")
+		}
+		cfg.PlanCostBudgetUSD = &value
+	}
+	if v, ok := m["task-cost-budget-usd"]; ok {
+		value, err := strconv.ParseFloat(strings.TrimSpace(v), 64)
+		if err != nil {
+			return Config{}, fmt.Errorf("section %q key %q: invalid number %q", section, "task-cost-budget-usd", v)
+		}
+		if value < 0 {
+			return Config{}, fmt.Errorf("section %q key %q: cannot be negative", section, "task-cost-budget-usd")
+		}
+		cfg.TaskCostBudgetUSD = &value
+	}
+	if v, ok := m["cost-budget-warn-threshold"]; ok {
+		value, err := strconv.ParseFloat(strings.TrimSpace(v), 64)
+		if err != nil {
+			return Config{}, fmt.Errorf("section %q key %q: invalid number %q", section, "cost-budget-warn-threshold", v)
+		}
+		if value < 0 || value > 1 {
+			return Config{}, fmt.Errorf("section %q key %q: must be between 0 and 1", section, "cost-budget-warn-threshold")
+		}
+		cfg.CostWarnThreshold = &value
+	}
+	if v, ok := m["cost-budget-enforce"]; ok {
+		value, err := parseBool(v)
+		if err != nil {
+			return Config{}, fmt.Errorf("section %q key %q: %w", section, "cost-budget-enforce", err)
+		}
+		cfg.CostBudgetEnforce = &value
+	}
 	if v, ok := m["runner"]; ok {
 		cfg.Runner = strings.TrimSpace(v)
 	}
@@ -290,6 +342,21 @@ func mergeConfig(global, project Config) Config {
 	}
 	if project.KeepLastRuns != nil {
 		merged.KeepLastRuns = project.KeepLastRuns
+	}
+	if project.MaxParallelTasks != nil {
+		merged.MaxParallelTasks = project.MaxParallelTasks
+	}
+	if project.PlanCostBudgetUSD != nil {
+		merged.PlanCostBudgetUSD = project.PlanCostBudgetUSD
+	}
+	if project.TaskCostBudgetUSD != nil {
+		merged.TaskCostBudgetUSD = project.TaskCostBudgetUSD
+	}
+	if project.CostWarnThreshold != nil {
+		merged.CostWarnThreshold = project.CostWarnThreshold
+	}
+	if project.CostBudgetEnforce != nil {
+		merged.CostBudgetEnforce = project.CostBudgetEnforce
 	}
 	if project.Runner != "" {
 		merged.Runner = project.Runner

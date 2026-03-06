@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/opus-domini/praetor/internal/agent/middleware"
 	"github.com/opus-domini/praetor/internal/domain"
+	localstate "github.com/opus-domini/praetor/internal/state"
 )
 
 type taskSelection struct {
@@ -18,6 +20,7 @@ type taskSelection struct {
 	feedback  string
 	progress  string
 	taskLabel string
+	taskLock  localstate.TaskLock
 }
 
 type taskOutcomeKind string
@@ -29,30 +32,57 @@ const (
 )
 
 type taskOutcome struct {
-	kind         taskOutcomeKind
-	status       string
-	message      string
-	feedback     string
-	metrics      []domain.CostEntry
-	rollback     bool
-	forceFailed  bool
-	renderLevel  string
-	renderFormat string
-	renderArgs   []any
-	cancelErr    error
+	kind               taskOutcomeKind
+	status             string
+	message            string
+	feedback           string
+	structuredFeedback *domain.TaskFeedback
+	actor              *domain.EventActor
+	metrics            []domain.CostEntry
+	rollback           bool
+	forceFailed        bool
+	renderLevel        string
+	renderFormat       string
+	renderArgs         []any
+	cancelErr          error
 }
 
 func (r *Runner) applyTaskOutcome(ctx context.Context, run *activeRun, selected taskSelection, runID string, outcome taskOutcome) (bool, error) {
+	return r.applyTaskOutcomeWithBudgetPolicy(ctx, run, selected, runID, outcome, false)
+}
+
+func (r *Runner) applyTaskOutcomeWithBudgetPolicy(ctx context.Context, run *activeRun, selected taskSelection, runID string, outcome taskOutcome, deferPlanBudgetStop bool) (bool, error) {
+	defer func() {
+		if run != nil && run.store != nil {
+			_ = run.store.ReleaseTaskLock(selected.taskLock)
+		}
+	}()
+
 	// All task-side transitions flow through this function so retries, metrics,
 	// checkpoints, and user-visible status stay consistent across branches.
 	for _, metric := range outcome.metrics {
-		if err := run.transitions.WriteMetric(metric); err != nil {
+		if err := run.recordCostMetric(selected.index, metric); err != nil {
 			return false, err
+		}
+	}
+	if outcome.kind != taskOutcomeCanceled {
+		if taskBudgetErr := run.taskBudgetExceededError(selected.task.ID); taskBudgetErr != nil {
+			outcome = newTaskBudgetExceededOutcome(
+				selected.task.ID,
+				selected.retries+1,
+				run.costBudget.TaskCostMicros(selected.task.ID),
+				centsToMicros(run.state.ExecutionPolicy.Cost.TaskLimitCents),
+			)
 		}
 	}
 
 	switch outcome.kind {
 	case taskOutcomeCanceled:
+		emitTaskEvent(run, middleware.EventTaskFailed, selected.task.ID, "", outcome.message, outcome.actor, map[string]any{
+			"terminal": false,
+			"retry":    false,
+			"reason":   outcome.message,
+		})
 		if err := run.transitions.WriteCheckpoint(domain.CheckpointEntry{
 			Timestamp: time.Now().UTC().Format(time.RFC3339),
 			Status:    "canceled",
@@ -89,6 +119,11 @@ func (r *Runner) applyTaskOutcome(ctx context.Context, run *activeRun, selected 
 		if err := run.transitions.TransitionTask(&run.state, selected.index, nextStatus); err != nil {
 			return false, err
 		}
+		if outcome.structuredFeedback != nil {
+			if err := run.store.AppendTaskFeedback(run.slug, selected.signature, *outcome.structuredFeedback); err != nil {
+				return false, err
+			}
+		}
 
 		if outcome.rollback {
 			run.isolation.RollbackTask(context.WithoutCancel(ctx), runID, run.render)
@@ -108,6 +143,14 @@ func (r *Runner) applyTaskOutcome(ctx context.Context, run *activeRun, selected 
 			return false, err
 		}
 
+		emitTaskEvent(run, middleware.EventTaskFailed, selected.task.ID, "", outcome.message, outcome.actor, map[string]any{
+			"retry":    nextStatus == domain.TaskPending,
+			"terminal": nextStatus == domain.TaskFailed,
+			"reason":   outcome.message,
+		})
+		if outcome.actor != nil {
+			run.recordActorRetry(*outcome.actor)
+		}
 		renderArgs := append([]any{}, outcome.renderArgs...)
 		renderArgs = append(renderArgs, task.Attempt, run.options.MaxRetries)
 		renderMsg := fmt.Sprintf(outcome.renderFormat, renderArgs...)
@@ -118,8 +161,12 @@ func (r *Runner) applyTaskOutcome(ctx context.Context, run *activeRun, selected 
 			run.render.Error(renderMsg)
 		}
 		run.stats.Iterations++
+		if !deferPlanBudgetStop {
+			if err := run.planBudgetExceededError(); err != nil {
+				return false, err
+			}
+		}
 		return false, nil
-
 	case taskOutcomeComplete:
 		if err := run.isolation.CommitTask(ctx, runID); err != nil {
 			return false, err
@@ -130,10 +177,18 @@ func (r *Runner) applyTaskOutcome(ctx context.Context, run *activeRun, selected 
 		run.stats.TasksDone++
 		run.stats.Iterations++
 		_ = run.appendSnapshotEvent("task_completed", selected.task.ID, outcome.message)
+		emitTaskEvent(run, middleware.EventTaskCompleted, selected.task.ID, "", outcome.message, outcome.actor, map[string]any{
+			"task_id": selected.task.ID,
+		})
 		if err := run.persistSnapshot("task_completed", outcome.message); err != nil {
 			return false, err
 		}
 		run.render.Success(fmt.Sprintf(outcome.renderFormat, outcome.renderArgs...))
+		if !deferPlanBudgetStop {
+			if err := run.planBudgetExceededError(); err != nil {
+				return false, err
+			}
+		}
 		return false, nil
 	}
 

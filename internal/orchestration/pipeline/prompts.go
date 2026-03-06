@@ -52,7 +52,7 @@ If not completed, use RESULT: FAIL and explain why.`)
 }
 
 // BuildExecutorTaskPrompt constructs the task prompt for the executor agent.
-func BuildExecutorTaskPrompt(engine *prompt.Engine, planFile string, taskIndex int, task domain.StateTask, previousFeedback string, retryCount int, planTitle, progress, workdir string, requiredGates []string, evidenceFormat string) string {
+func BuildExecutorTaskPrompt(engine *prompt.Engine, planFile string, taskIndex int, task domain.StateTask, previousFeedback []domain.TaskFeedback, retryCount int, planTitle, progress, workdir string, requiredGates []string, evidenceFormat string) string {
 	acceptance := formatAcceptance(task.Acceptance)
 	if engine != nil {
 		dependsOn := ""
@@ -60,7 +60,7 @@ func BuildExecutorTaskPrompt(engine *prompt.Engine, planFile string, taskIndex i
 			dependsOn = strings.Join(task.DependsOn, ",")
 		}
 		if s, err := engine.Render("executor.task", prompt.ExecutorTaskData{
-			IsRetry:          previousFeedback != "" && retryCount > 0,
+			IsRetry:          len(previousFeedback) > 0 && retryCount > 0,
 			RetryAttempt:     retryCount,
 			PreviousFeedback: previousFeedback,
 			TaskTitle:        task.Title,
@@ -81,13 +81,24 @@ func BuildExecutorTaskPrompt(engine *prompt.Engine, planFile string, taskIndex i
 	}
 	var b strings.Builder
 
-	if previousFeedback != "" && retryCount > 0 {
+	if len(previousFeedback) > 0 && retryCount > 0 {
 		fmt.Fprintf(&b, "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n")
 		fmt.Fprintf(&b, "!! RETRY — attempt %d\n", retryCount+1)
 		fmt.Fprintf(&b, "!! Your previous attempt was REJECTED.\n")
 		fmt.Fprintf(&b, "!! Read the feedback below carefully and fix ALL issues.\n")
 		fmt.Fprintf(&b, "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n\n")
-		fmt.Fprintf(&b, "PREVIOUS FEEDBACK:\n%s\n\n", previousFeedback)
+		fmt.Fprintf(&b, "PREVIOUS ATTEMPTS:\n")
+		for _, item := range previousFeedback {
+			fmt.Fprintf(&b, "Attempt %d (%s - %s)\n", item.Attempt, item.Verdict, item.Phase)
+			fmt.Fprintf(&b, "Reason: %s\n", item.Reason)
+			for _, hint := range item.Hints {
+				fmt.Fprintf(&b, "- Hint: %s\n", hint)
+			}
+			if strings.TrimSpace(item.GateOutput) != "" {
+				fmt.Fprintf(&b, "Gate output (truncated):\n%s\n", strings.TrimSpace(item.GateOutput))
+			}
+			fmt.Fprintln(&b)
+		}
 	}
 
 	fmt.Fprintf(&b, "TASK\n")
@@ -160,7 +171,11 @@ FAIL|<short reason>
 Review principles:
 - PASS if task requirements are met.
 - FAIL if requirements were not met or output is invalid.
-- Prefer concise, actionable feedback.`)
+- Prefer concise, actionable feedback.
+- When rejecting, always include concrete HINT entries the executor can act on.
+
+Format rejections as:
+FAIL|<short reason>|HINT:<specific suggestion 1>|HINT:<specific suggestion 2>`)
 	if standardsGate {
 		b.WriteString("\n\nStandards validation:\n")
 		b.WriteString("- Verify changes follow project architecture and conventions.\n")

@@ -95,16 +95,25 @@ type PlanAgentConfig struct {
 }
 
 type ExecutionPolicy struct {
-	MaxTotalIterations int          `json:"max_total_iterations,omitempty"`
-	MaxRetriesPerTask  int          `json:"max_retries_per_task,omitempty"`
-	Timeout            string       `json:"timeout,omitempty"`
-	Budget             BudgetPolicy `json:"budget,omitempty"`
-	StallDetection     StallPolicy  `json:"stall_detection,omitempty"`
+	MaxTotalIterations int                `json:"max_total_iterations,omitempty"`
+	MaxRetriesPerTask  int                `json:"max_retries_per_task,omitempty"`
+	MaxParallelTasks   int                `json:"max_parallel_tasks,omitempty"`
+	Timeout            string             `json:"timeout,omitempty"`
+	PromptBudget       PromptBudgetPolicy `json:"prompt_budget,omitempty"`
+	Cost               CostPolicy         `json:"cost,omitempty"`
+	StallDetection     StallPolicy        `json:"stall_detection,omitempty"`
 }
 
-type BudgetPolicy struct {
-	Execute int `json:"execute,omitempty"`
-	Review  int `json:"review,omitempty"`
+type PromptBudgetPolicy struct {
+	ExecutorChars int `json:"executor_chars,omitempty"`
+	ReviewerChars int `json:"reviewer_chars,omitempty"`
+}
+
+type CostPolicy struct {
+	PlanLimitCents int64   `json:"plan_limit_cents,omitempty"`
+	TaskLimitCents int64   `json:"task_limit_cents,omitempty"`
+	WarnThreshold  float64 `json:"warn_threshold,omitempty"`
+	Enforce        *bool   `json:"enforce,omitempty"`
 }
 
 type StallPolicy struct {
@@ -154,6 +163,26 @@ type TaskAgents struct {
 	ReviewerModel string `json:"reviewer_model,omitempty"`
 }
 
+// EventActor identifies who produced an execution event or feedback record.
+type EventActor struct {
+	Role  string `json:"role"`
+	Agent string `json:"agent,omitempty"`
+	Model string `json:"model,omitempty"`
+}
+
+// TaskFeedback captures structured retry guidance across executor/reviewer/gates.
+type TaskFeedback struct {
+	TaskID     string     `json:"task_id"`
+	Attempt    int        `json:"attempt"`
+	Phase      string     `json:"phase"`
+	Actor      EventActor `json:"actor"`
+	Verdict    string     `json:"verdict"`
+	Reason     string     `json:"reason"`
+	Hints      []string   `json:"hints,omitempty"`
+	GateOutput string     `json:"gate_output,omitempty"`
+	Timestamp  string     `json:"timestamp"`
+}
+
 // TaskStatus tracks mutable execution status for a task.
 type TaskStatus string
 
@@ -175,16 +204,20 @@ type StateTask struct {
 	Status      TaskStatus `json:"status"`
 	Attempt     int        `json:"attempt,omitempty"`
 	Feedback    string     `json:"feedback,omitempty"`
+	CostMicros  int64      `json:"cost_micros,omitempty"`
 }
 
 // State stores mutable progress for one plan.
 type State struct {
-	PlanSlug     string      `json:"plan_slug"`
-	PlanChecksum string      `json:"plan_checksum"`
-	CreatedAt    string      `json:"created_at"`
-	UpdatedAt    string      `json:"updated_at"`
-	Outcome      RunOutcome  `json:"outcome,omitempty"`
-	Tasks        []StateTask `json:"tasks"`
+	PlanSlug           string          `json:"plan_slug"`
+	PlanChecksum       string          `json:"plan_checksum"`
+	CreatedAt          string          `json:"created_at"`
+	UpdatedAt          string          `json:"updated_at"`
+	Outcome            RunOutcome      `json:"outcome,omitempty"`
+	ExecutionPolicy    ExecutionPolicy `json:"execution_policy,omitempty"`
+	TotalCostMicros    int64           `json:"total_cost_micros,omitempty"`
+	CostWarningEmitted bool            `json:"cost_warning_emitted,omitempty"`
+	Tasks              []StateTask     `json:"tasks"`
 }
 
 // DoneCount returns how many tasks are completed.
@@ -216,70 +249,80 @@ func (s State) ActiveCount() int {
 
 // RunnerOptions controls loop execution behavior.
 type RunnerOptions struct {
-	ProjectHome         string
-	Workdir             string
-	RunnerMode          RunnerMode
-	DefaultExecutor     Agent
-	DefaultReviewer     Agent
-	ExecutorModel       string
-	ReviewerModel       string
-	PlannerAgent        Agent
-	PlannerModel        string
-	Objective           string
-	MaxRetries          int
-	MaxIterations       int
-	MaxTransitions      int
-	KeepLastRuns        int
-	Timeout             time.Duration
-	BudgetExecute       int
-	BudgetReview        int
-	StallDetection      bool
-	StallWindow         int
-	StallThreshold      float64
-	PlannerAgentSet     bool
-	PlannerModelSet     bool
-	ExecutorAgentSet    bool
-	ExecutorModelSet    bool
-	ReviewerAgentSet    bool
-	ReviewerModelSet    bool
-	MaxRetriesSet       bool
-	MaxIterationsSet    bool
-	TimeoutSet          bool
-	BudgetExecuteSet    bool
-	BudgetReviewSet     bool
-	StallDetectionSet   bool
-	StallWindowSet      bool
-	StallThresholdSet   bool
-	GateTestsCmdSet     bool
-	GateLintCmdSet      bool
-	GateStandardsCmdSet bool
-	SkipReview          bool
-	Force               bool
-	CodexBin            string
-	ClaudeBin           string
-	CopilotBin          string
-	GeminiBin           string
-	KimiBin             string
-	OpenCodeBin         string
-	OpenRouterURL       string
-	OpenRouterModel     string
-	OpenRouterKeyEnv    string
-	OllamaURL           string
-	OllamaModel         string
-	LMStudioURL         string
-	LMStudioModel       string
-	LMStudioKeyEnv      string
-	TMUXSession         string
-	Verbose             bool
-	NoColor             bool
-	Isolation           IsolationMode
-	PostTaskHook        string
-	FallbackAgent       Agent
-	FallbackOnTransient Agent
-	FallbackOnAuth      Agent
-	GateTestsCmd        string
-	GateLintCmd         string
-	GateStandardsCmd    string
+	ProjectHome            string
+	Workdir                string
+	RunnerMode             RunnerMode
+	DefaultExecutor        Agent
+	DefaultReviewer        Agent
+	ExecutorModel          string
+	ReviewerModel          string
+	PlannerAgent           Agent
+	PlannerModel           string
+	Objective              string
+	MaxRetries             int
+	MaxIterations          int
+	MaxTransitions         int
+	KeepLastRuns           int
+	MaxParallelTasks       int
+	Timeout                time.Duration
+	ExecutorPromptChars    int
+	ReviewerPromptChars    int
+	PlanCostBudgetCents    int64
+	TaskCostBudgetCents    int64
+	CostWarnThreshold      float64
+	CostBudgetEnforce      bool
+	StallDetection         bool
+	StallWindow            int
+	StallThreshold         float64
+	PlannerAgentSet        bool
+	PlannerModelSet        bool
+	ExecutorAgentSet       bool
+	ExecutorModelSet       bool
+	ReviewerAgentSet       bool
+	ReviewerModelSet       bool
+	MaxRetriesSet          bool
+	MaxIterationsSet       bool
+	MaxParallelTasksSet    bool
+	TimeoutSet             bool
+	ExecutorPromptCharsSet bool
+	ReviewerPromptCharsSet bool
+	PlanCostBudgetSet      bool
+	TaskCostBudgetSet      bool
+	CostWarnThresholdSet   bool
+	CostBudgetEnforceSet   bool
+	StallDetectionSet      bool
+	StallWindowSet         bool
+	StallThresholdSet      bool
+	GateTestsCmdSet        bool
+	GateLintCmdSet         bool
+	GateStandardsCmdSet    bool
+	SkipReview             bool
+	Force                  bool
+	CodexBin               string
+	ClaudeBin              string
+	CopilotBin             string
+	GeminiBin              string
+	KimiBin                string
+	OpenCodeBin            string
+	OpenRouterURL          string
+	OpenRouterModel        string
+	OpenRouterKeyEnv       string
+	OllamaURL              string
+	OllamaModel            string
+	LMStudioURL            string
+	LMStudioModel          string
+	LMStudioKeyEnv         string
+	TMUXSession            string
+	Verbose                bool
+	NoColor                bool
+	Isolation              IsolationMode
+	PostTaskHook           string
+	FallbackAgent          Agent
+	FallbackOnTransient    Agent
+	FallbackOnAuth         Agent
+	GateTestsCmd           string
+	GateLintCmd            string
+	GateStandardsCmd       string
 }
 
 // RunnerMode controls how external agent commands are executed.
@@ -309,6 +352,27 @@ type RunnerStats struct {
 	TasksRejected int
 	TotalCostUSD  float64
 	TotalDuration time.Duration
+}
+
+// ActorStats summarizes usage for one actor within a run.
+type ActorStats struct {
+	CostUSD float64 `json:"cost_usd"`
+	TimeS   float64 `json:"time_s"`
+	Calls   int     `json:"calls"`
+	Retries int     `json:"retries"`
+	Stalls  int     `json:"stalls"`
+}
+
+// RunSummary aggregates execution diagnostics for a completed run.
+type RunSummary struct {
+	TotalCostUSD float64               `json:"total_cost_usd"`
+	TotalTimeS   float64               `json:"total_time_s"`
+	TasksDone    int                   `json:"tasks_done"`
+	TasksFailed  int                   `json:"tasks_failed"`
+	TasksRetried int                   `json:"tasks_retried"`
+	Stalls       int                   `json:"stalls"`
+	Fallbacks    int                   `json:"fallbacks"`
+	ByActor      map[string]ActorStats `json:"by_actor,omitempty"`
 }
 
 type RunOutcome string
@@ -411,6 +475,7 @@ type AgentRuntime interface {
 // CostEntry records one agent invocation's metrics.
 type CostEntry struct {
 	Timestamp string
+	PlanSlug  string
 	RunID     string
 	TaskID    string
 	Agent     string
@@ -446,14 +511,16 @@ type RenderSink interface {
 
 // PlanStatus describes execution status of a plan.
 type PlanStatus struct {
-	PlanSlug  string
-	StateFile string
-	UpdatedAt string
-	Outcome   RunOutcome
-	Done      int
-	Failed    int
-	Active    int
-	Total     int
-	Running   bool
-	Tasks     []StateTask
+	PlanSlug        string
+	StateFile       string
+	UpdatedAt       string
+	Outcome         RunOutcome
+	Done            int
+	Failed          int
+	Active          int
+	Total           int
+	Running         bool
+	ExecutionPolicy ExecutionPolicy
+	TotalCostMicros int64
+	Tasks           []StateTask
 }

@@ -54,123 +54,24 @@ func iterationStateSelectTask(ctx context.Context, machine *iterationMachine) (i
 	}
 
 	run := machine.run
-	index, task, ok := domain.NextRunnableTask(run.state)
+	index, _, ok := domain.NextRunnableTask(run.state)
 	if !ok {
-		if run.state.ActiveCount() == 0 {
-			if run.state.FailedCount() > 0 {
-				message := fmt.Sprintf("run completed with %d failed task(s)", run.state.FailedCount())
-				_ = run.appendSnapshotEvent("completed_partial", "", message)
-				_ = run.persistSnapshot("completed_partial", message)
-				run.render.Warn(message)
-			} else {
-				_ = run.appendSnapshotEvent("completed", "", "all tasks completed")
-				_ = run.persistSnapshot("completed", "all tasks completed")
-				run.render.Success("All tasks completed")
-			}
-			machine.stop = true
+		stop, err := handleNoRunnableTasks(run)
+		machine.stop = stop
+		if stop {
 			return nil, nil
 		}
-
-		report := domain.BlockedTasksReport(run.state, 5)
-		if len(report) == 0 {
-			if err := run.transitions.WriteCheckpoint(domain.CheckpointEntry{
-				Timestamp: time.Now().UTC().Format(time.RFC3339),
-				Status:    "blocked",
-				TaskID:    "",
-				Signature: "",
-				RunID:     "",
-				Message:   "plan is blocked: open tasks exist but none are runnable",
-			}); err != nil {
-				return nil, fmt.Errorf("write blocked checkpoint: %w", err)
-			}
-			_ = run.appendSnapshotEvent("blocked", "", "plan is blocked: open tasks exist but none are runnable")
-			_ = run.persistSnapshot("blocked", "plan is blocked: open tasks exist but none are runnable")
-			return nil, errors.New("plan is blocked: open tasks exist but none are runnable")
-		}
-		if err := run.transitions.WriteCheckpoint(domain.CheckpointEntry{
-			Timestamp: time.Now().UTC().Format(time.RFC3339),
-			Status:    "blocked",
-			TaskID:    "",
-			Signature: "",
-			RunID:     "",
-			Message:   fmt.Sprintf("plan is blocked by dependencies: %s", strings.Join(report, ", ")),
-		}); err != nil {
-			return nil, fmt.Errorf("write blocked checkpoint: %w", err)
-		}
-		_ = run.appendSnapshotEvent("blocked", "", "plan is blocked by dependencies")
-		_ = run.persistSnapshot("blocked", "plan is blocked by dependencies")
-		return nil, fmt.Errorf("plan is blocked by dependencies:\n- %s", strings.Join(report, "\n- "))
-	}
-
-	// Per-task agent override (schema v2): if the plan task declares agents, use them.
-	executorAgent := run.options.DefaultExecutor
-	reviewerAgent := run.options.DefaultReviewer
-	if index < len(run.plan.Tasks) {
-		planTask := run.plan.Tasks[index]
-		if planTask.Agents != nil {
-			if planTask.Agents.Executor != "" {
-				executorAgent = domain.NormalizeAgent(domain.Agent(planTask.Agents.Executor))
-			}
-			if planTask.Agents.Reviewer != "" {
-				reviewerAgent = domain.NormalizeAgent(domain.Agent(planTask.Agents.Reviewer))
-			}
-		}
-	}
-	executor, err := resolveExecutorWithRouting(executorAgent, run.availableAgents)
-	if err != nil {
-		return nil, fmt.Errorf("task %s: %w", task.ID, err)
-	}
-	reviewer, err := resolveReviewer(reviewerAgent, run.options.SkipReview)
-	if err != nil {
-		return nil, fmt.Errorf("task %s: %w", task.ID, err)
-	}
-
-	signature := run.store.TaskSignatureForPlan(run.slug, index, task)
-	if task.Attempt >= run.options.MaxRetries {
-		return nil, fmt.Errorf("retry limit reached for task %s (%s)", task.ID, task.Title)
-	}
-
-	progress := fmt.Sprintf("%d/%d", run.state.DoneCount()+1, len(run.state.Tasks))
-	selected := taskSelection{
-		index:     index,
-		task:      task,
-		executor:  executor,
-		reviewer:  reviewer,
-		signature: signature,
-		retries:   task.Attempt,
-		feedback:  task.Feedback,
-		progress:  progress,
-	}
-
-	runDir, err := prepareRunDir(run.store.LogsDir(), task, signature)
-	if err != nil {
-		return nil, err
-	}
-	runID := filepath.Base(runDir)
-	taskWorkdir, err := run.isolation.PrepareTask(ctx, runID, task.ID)
-	if err != nil {
 		return nil, err
 	}
 
-	taskLabel := task.ID
-	if strings.TrimSpace(taskLabel) == "" {
-		taskLabel = fmt.Sprintf("#%d", index)
-	}
-	selected.taskLabel = taskLabel
-	machine.selected = selected
-	machine.runID = runID
-	machine.taskWorkdir = taskWorkdir
-	machine.persistTaskID = task.ID
-
-	_ = run.appendSnapshotEvent("task_selected", task.ID, fmt.Sprintf("task selected: %s", task.Title))
-	_ = run.persistSnapshot("task_selected", fmt.Sprintf("task selected: %s", task.ID))
-	run.render.Task(progress, taskLabel, task.Title)
-
-	if err := run.transitions.TransitionTask(&run.state, index, domain.TaskExecuting); err != nil {
+	prepared, err := machine.runner.prepareSelectedTask(ctx, run, index, 0)
+	if err != nil {
 		return nil, err
 	}
-	run.render.Phase("executor", string(selected.executor), fmt.Sprintf("attempt %d/%d", selected.retries+1, run.options.MaxRetries))
-
+	machine.selected = prepared.selection
+	machine.runID = prepared.runID
+	machine.taskWorkdir = prepared.taskWorkdir
+	machine.persistTaskID = prepared.selection.task.ID
 	return iterationStateExecuteTask, nil
 }
 
@@ -192,20 +93,39 @@ func iterationStateExecuteTask(ctx context.Context, machine *iterationMachine) (
 		}
 	}
 	executorSystemPrompt := BuildExecutorSystemPrompt(run.promptEngine, run.projectContext, allowedTools, deniedTools)
-	feedback := selected.feedback
-	truncatedSections := make([]string, 0)
-	if run.budgetManager != nil && strings.TrimSpace(feedback) != "" {
-		promptWithoutFeedback := BuildExecutorTaskPrompt(run.promptEngine, run.slug, selected.index, selected.task, "", selected.retries, run.plan.Name, selected.progress, machine.taskWorkdir, run.plan.Quality.Required, run.plan.Quality.EvidenceFormat)
-		adjustedFeedback, truncated := run.budgetManager.TruncateExecuteFeedback(promptWithoutFeedback, feedback)
-		feedback = adjustedFeedback
-		truncatedSections = append(truncatedSections, truncated...)
+	feedbackHistory, err := run.store.LoadTaskFeedback(run.slug, selected.signature)
+	if err != nil {
+		run.render.Warn(fmt.Sprintf("failed to load structured feedback: %v", err))
 	}
-	executorTaskPrompt := BuildExecutorTaskPrompt(run.promptEngine, run.slug, selected.index, selected.task, feedback, selected.retries, run.plan.Name, selected.progress, machine.taskWorkdir, run.plan.Quality.Required, run.plan.Quality.EvidenceFormat)
+	if len(feedbackHistory) == 0 && strings.TrimSpace(selected.feedback) != "" {
+		feedbackHistory = []domain.TaskFeedback{legacyFeedback(selected.task.ID, selected.retries, selected.feedback)}
+	}
+	truncatedSections := make([]string, 0)
+	if run.promptBudget != nil && len(feedbackHistory) > 0 {
+		feedbackHistory, truncatedSections = trimFeedbackHistoryForPrompt(
+			run.promptBudget.Budget(promptPhaseExecute),
+			run.promptEngine,
+			run.slug,
+			selected.index,
+			selected.task,
+			feedbackHistory,
+			selected.retries,
+			run.plan.Name,
+			selected.progress,
+			machine.taskWorkdir,
+			run.plan.Quality.Required,
+			run.plan.Quality.EvidenceFormat,
+		)
+		if len(truncatedSections) > 0 {
+			truncatedSections = append([]string{}, truncatedSections...)
+		}
+	}
+	executorTaskPrompt := BuildExecutorTaskPrompt(run.promptEngine, run.slug, selected.index, selected.task, feedbackHistory, selected.retries, run.plan.Name, selected.progress, machine.taskWorkdir, run.plan.Quality.Required, run.plan.Quality.EvidenceFormat)
 	if err := run.appendPerformanceEntry(promptPhaseExecute, executorTaskPrompt, truncatedSections); err != nil {
 		run.render.Warn(fmt.Sprintf("failed to write performance metric: %v", err))
 	}
-	if run.options.Verbose && run.budgetManager != nil {
-		run.render.Info(fmt.Sprintf("execute budget: %d/%d chars", len(executorTaskPrompt), run.budgetManager.Budget(promptPhaseExecute)))
+	if run.options.Verbose && run.promptBudget != nil {
+		run.render.Info(fmt.Sprintf("execute prompt budget: %d/%d chars", len(executorTaskPrompt), run.promptBudget.Budget(promptPhaseExecute)))
 	}
 	_ = writeText(filepath.Join(runDir, "executor.system.txt"), executorSystemPrompt)
 	_ = writeText(filepath.Join(runDir, "executor.prompt.txt"), executorTaskPrompt)
@@ -217,6 +137,7 @@ func iterationStateExecuteTask(ctx context.Context, machine *iterationMachine) (
 			executorModel = a.ExecutorModel
 		}
 	}
+	executorActor := taskActor("executor", selected.executor, executorModel)
 	execResult, execErr := run.runtime.Run(ctx, domain.AgentRequest{
 		Role:             "execute",
 		Agent:            selected.executor,
@@ -242,7 +163,6 @@ func iterationStateExecuteTask(ctx context.Context, machine *iterationMachine) (
 		Verbose:          run.options.Verbose,
 	})
 	machine.executorOutput = execResult.Output
-	run.totalCost += execResult.CostUSD
 	_ = writeText(filepath.Join(runDir, "executor.output.txt"), machine.executorOutput)
 	logRuntimeStrategy(run, selected.task.ID, selected.signature, machine.runID, "executor", execResult.Strategy)
 
@@ -251,14 +171,25 @@ func iterationStateExecuteTask(ctx context.Context, machine *iterationMachine) (
 	if execErr != nil {
 		if isCancellationErr(execErr) || ctx.Err() != nil {
 			cancelErr := cancellationCause(ctx, execErr)
-			machine.setOutcome(taskOutcome{kind: taskOutcomeCanceled, message: cancelErr.Error(), cancelErr: cancelErr})
+			machine.setOutcome(taskOutcome{kind: taskOutcomeCanceled, message: cancelErr.Error(), cancelErr: cancelErr, actor: executorActor})
 			return iterationStateApplyOutcome, nil //nolint:nilerr // error captured in outcome
 		}
 		machine.setOutcome(taskOutcome{
-			kind:         taskOutcomeRetry,
-			status:       "executor_crashed",
-			message:      fmt.Sprintf("executor process failed: %v", execErr),
-			feedback:     fmt.Sprintf("executor process failed: %v", execErr),
+			kind:     taskOutcomeRetry,
+			status:   "executor_crashed",
+			message:  fmt.Sprintf("executor process failed: %v", execErr),
+			feedback: fmt.Sprintf("executor process failed: %v", execErr),
+			structuredFeedback: buildTaskFeedback(
+				selected.task.ID,
+				selected.retries+1,
+				promptPhaseExecute,
+				*executorActor,
+				"fail",
+				fmt.Sprintf("executor process failed: %v", execErr),
+				[]string{"Investigate the executor failure and rerun the task with a narrower change set."},
+				"",
+			),
+			actor:        executorActor,
 			rollback:     true,
 			renderLevel:  "error",
 			renderFormat: "Executor failed: %v (retry %d/%d)",
@@ -295,10 +226,21 @@ func iterationStateExecuteTask(ctx context.Context, machine *iterationMachine) (
 		}
 		emitParseErrorClassEvent(run, selected.task.ID, promptPhaseExecute, parseClass, feedback)
 		machine.setOutcome(taskOutcome{
-			kind:         taskOutcomeRetry,
-			status:       status,
-			message:      fmt.Sprintf("executor reported RESULT: %s", result),
-			feedback:     feedback,
+			kind:     taskOutcomeRetry,
+			status:   status,
+			message:  fmt.Sprintf("executor reported RESULT: %s", result),
+			feedback: feedback,
+			structuredFeedback: buildTaskFeedback(
+				selected.task.ID,
+				selected.retries+1,
+				promptPhaseExecute,
+				*executorActor,
+				"fail",
+				feedback,
+				[]string{"Return a valid RESULT block and address the reported executor failure."},
+				"",
+			),
+			actor:        executorActor,
 			rollback:     true,
 			forceFailed:  forceFailed,
 			renderLevel:  "error",
@@ -318,7 +260,7 @@ func iterationStateExecuteTask(ctx context.Context, machine *iterationMachine) (
 		return iterationStateApplyOutcome, nil
 	}
 
-	if err := run.transitions.WriteMetric(domain.CostEntry{
+	if err := run.recordCostMetric(selected.index, domain.CostEntry{
 		Timestamp: time.Now().UTC().Format(time.RFC3339),
 		RunID:     machine.runID,
 		TaskID:    selected.task.ID,
@@ -330,6 +272,15 @@ func iterationStateExecuteTask(ctx context.Context, machine *iterationMachine) (
 	}); err != nil {
 		return nil, fmt.Errorf("write executor metric: %w", err)
 	}
+	if planBudgetErr := run.planBudgetExceededError(); planBudgetErr != nil {
+		machine.setOutcome(taskOutcome{
+			kind:      taskOutcomeCanceled,
+			message:   planBudgetErr.Error(),
+			cancelErr: planBudgetErr,
+			actor:     executorActor,
+		})
+		return iterationStateApplyOutcome, nil //nolint:nilerr // error captured in outcome
+	}
 
 	if run.options.PostTaskHook != "" {
 		run.render.Phase("hook", "post-task", run.options.PostTaskHook)
@@ -337,14 +288,25 @@ func iterationStateExecuteTask(ctx context.Context, machine *iterationMachine) (
 		if !hookPassed {
 			if ctx.Err() != nil {
 				cancelErr := cancellationCause(ctx, nil)
-				machine.setOutcome(taskOutcome{kind: taskOutcomeCanceled, message: cancelErr.Error(), cancelErr: cancelErr})
+				machine.setOutcome(taskOutcome{kind: taskOutcomeCanceled, message: cancelErr.Error(), cancelErr: cancelErr, actor: executorActor})
 				return iterationStateApplyOutcome, nil //nolint:nilerr // error captured in outcome
 			}
 			machine.setOutcome(taskOutcome{
-				kind:         taskOutcomeRetry,
-				status:       "hook_failed",
-				message:      "post-task hook failed",
-				feedback:     hookFeedback,
+				kind:     taskOutcomeRetry,
+				status:   "hook_failed",
+				message:  "post-task hook failed",
+				feedback: hookFeedback,
+				structuredFeedback: buildTaskFeedback(
+					selected.task.ID,
+					selected.retries+1,
+					"hook",
+					domain.EventActor{Role: "system", Agent: "post-task-hook"},
+					"fail",
+					hookFeedback,
+					[]string{"Fix the post-task hook failure before retrying."},
+					"",
+				),
+				actor:        &domain.EventActor{Role: "system", Agent: "post-task-hook"},
 				rollback:     true,
 				renderLevel:  "error",
 				renderFormat: "Post-task hook failed (retry %d/%d)",
@@ -357,6 +319,7 @@ func iterationStateExecuteTask(ctx context.Context, machine *iterationMachine) (
 		machine.setOutcome(taskOutcome{
 			kind:         taskOutcomeComplete,
 			message:      fmt.Sprintf("task completed: %s", selected.task.Title),
+			actor:        executorActor,
 			renderFormat: "Completed: %s",
 			renderArgs:   []any{selected.taskLabel},
 		})
@@ -382,9 +345,9 @@ func iterationStateReviewTask(ctx context.Context, machine *iterationMachine) (i
 	executorOutputForPrompt := machine.executorOutput
 	gitDiffForPrompt := gitDiff
 	truncatedSections := make([]string, 0)
-	if run.budgetManager != nil {
+	if run.promptBudget != nil {
 		overhead := BuildReviewerTaskPrompt(run.promptEngine, run.slug, selected.task, "", machine.taskWorkdir, run.plan.Name, selected.progress, "")
-		execOut, diff, truncated := run.budgetManager.TruncateReviewSections(overhead, executorOutputForPrompt, gitDiffForPrompt)
+		execOut, diff, truncated := run.promptBudget.TruncateReviewSections(overhead, executorOutputForPrompt, gitDiffForPrompt)
 		executorOutputForPrompt = execOut
 		gitDiffForPrompt = diff
 		truncatedSections = append(truncatedSections, truncated...)
@@ -397,22 +360,34 @@ func iterationStateReviewTask(ctx context.Context, machine *iterationMachine) (i
 	if err := run.appendPerformanceEntry(promptPhaseReview, reviewerTaskPrompt, truncatedSections); err != nil {
 		run.render.Warn(fmt.Sprintf("failed to write performance metric: %v", err))
 	}
-	if run.options.Verbose && run.budgetManager != nil {
-		run.render.Info(fmt.Sprintf("review budget: %d/%d chars", len(reviewerTaskPrompt), run.budgetManager.Budget(promptPhaseReview)))
+	if run.options.Verbose && run.promptBudget != nil {
+		run.render.Info(fmt.Sprintf("review prompt budget: %d/%d chars", len(reviewerTaskPrompt), run.promptBudget.Budget(promptPhaseReview)))
 	}
 	_ = writeText(filepath.Join(runDir, "reviewer.system.txt"), reviewerSystemPrompt)
 	_ = writeText(filepath.Join(runDir, "reviewer.prompt.txt"), reviewerTaskPrompt)
 
-	if gateReason, blocked := executeHostGates(ctx, run, selected.task.ID, machine.taskWorkdir, machine.executorOutput); blocked {
+	if gateFailure, blocked := executeHostGates(ctx, run, selected.task.ID, machine.taskWorkdir, machine.executorOutput); blocked {
+		gateFeedback := buildTaskFeedback(
+			selected.task.ID,
+			selected.retries+1,
+			string(PhaseGate),
+			*gateActor(gateFailure.name),
+			"fail",
+			gateFailure.reason,
+			[]string{"Resolve the failing gate before asking for another review."},
+			gateFailure.detail,
+		)
 		machine.setOutcome(taskOutcome{
-			kind:         taskOutcomeRetry,
-			status:       "review_rejected",
-			message:      gateReason,
-			feedback:     gateReason,
-			rollback:     true,
-			renderLevel:  "warn",
-			renderFormat: "Review rejected: %s (retry %d/%d)",
-			renderArgs:   []any{gateReason},
+			kind:               taskOutcomeRetry,
+			status:             "review_rejected",
+			message:            gateFailure.reason,
+			feedback:           gateFailure.reason,
+			structuredFeedback: gateFeedback,
+			actor:              gateActor(gateFailure.name),
+			rollback:           true,
+			renderLevel:        "warn",
+			renderFormat:       "Review rejected: %s (retry %d/%d)",
+			renderArgs:         []any{gateFailure.reason},
 		})
 		return iterationStateApplyOutcome, nil
 	}
@@ -424,6 +399,7 @@ func iterationStateReviewTask(ctx context.Context, machine *iterationMachine) (i
 			reviewerModel = a.ReviewerModel
 		}
 	}
+	reviewerActor := taskActor("reviewer", selected.reviewer, reviewerModel)
 	reviewResult, reviewErr := run.runtime.Run(ctx, domain.AgentRequest{
 		Role:             "review",
 		Agent:            selected.reviewer,
@@ -449,7 +425,6 @@ func iterationStateReviewTask(ctx context.Context, machine *iterationMachine) (i
 		Verbose:          run.options.Verbose,
 	})
 	reviewerOutput := reviewResult.Output
-	run.totalCost += reviewResult.CostUSD
 	_ = writeText(filepath.Join(runDir, "reviewer.output.txt"), reviewerOutput)
 	logRuntimeStrategy(run, selected.task.ID, selected.signature, machine.runID, "reviewer", reviewResult.Strategy)
 
@@ -458,14 +433,25 @@ func iterationStateReviewTask(ctx context.Context, machine *iterationMachine) (i
 	if reviewErr != nil {
 		if isCancellationErr(reviewErr) || ctx.Err() != nil {
 			cancelErr := cancellationCause(ctx, reviewErr)
-			machine.setOutcome(taskOutcome{kind: taskOutcomeCanceled, message: cancelErr.Error(), cancelErr: cancelErr})
+			machine.setOutcome(taskOutcome{kind: taskOutcomeCanceled, message: cancelErr.Error(), cancelErr: cancelErr, actor: reviewerActor})
 			return iterationStateApplyOutcome, nil //nolint:nilerr // error captured in outcome
 		}
 		machine.setOutcome(taskOutcome{
-			kind:         taskOutcomeRetry,
-			status:       "reviewer_crashed",
-			message:      fmt.Sprintf("reviewer process failed: %v", reviewErr),
-			feedback:     fmt.Sprintf("reviewer process failed: %v", reviewErr),
+			kind:     taskOutcomeRetry,
+			status:   "reviewer_crashed",
+			message:  fmt.Sprintf("reviewer process failed: %v", reviewErr),
+			feedback: fmt.Sprintf("reviewer process failed: %v", reviewErr),
+			structuredFeedback: buildTaskFeedback(
+				selected.task.ID,
+				selected.retries+1,
+				promptPhaseReview,
+				*reviewerActor,
+				"fail",
+				fmt.Sprintf("reviewer process failed: %v", reviewErr),
+				[]string{"Retry review after resolving the reviewer runtime failure."},
+				"",
+			),
+			actor:        reviewerActor,
 			rollback:     true,
 			renderLevel:  "error",
 			renderFormat: "Reviewer failed: %v (retry %d/%d)",
@@ -484,7 +470,7 @@ func iterationStateReviewTask(ctx context.Context, machine *iterationMachine) (i
 		return iterationStateApplyOutcome, nil
 	}
 
-	if err := run.transitions.WriteMetric(domain.CostEntry{
+	if err := run.recordCostMetric(selected.index, domain.CostEntry{
 		Timestamp: time.Now().UTC().Format(time.RFC3339),
 		RunID:     machine.runID,
 		TaskID:    selected.task.ID,
@@ -513,10 +499,21 @@ func iterationStateReviewTask(ctx context.Context, machine *iterationMachine) (i
 		}
 		emitParseErrorClassEvent(run, selected.task.ID, promptPhaseReview, parseClass, decision.Reason)
 		machine.setOutcome(taskOutcome{
-			kind:         taskOutcomeRetry,
-			status:       status,
-			message:      decision.Reason,
-			feedback:     decision.Reason,
+			kind:     taskOutcomeRetry,
+			status:   status,
+			message:  decision.Reason,
+			feedback: decision.Reason,
+			structuredFeedback: buildTaskFeedback(
+				selected.task.ID,
+				selected.retries+1,
+				promptPhaseReview,
+				*reviewerActor,
+				"fail",
+				decision.Reason,
+				decision.Hints,
+				"",
+			),
+			actor:        reviewerActor,
 			rollback:     true,
 			forceFailed:  forceFailed,
 			renderLevel:  "warn",
@@ -529,6 +526,7 @@ func iterationStateReviewTask(ctx context.Context, machine *iterationMachine) (i
 	machine.setOutcome(taskOutcome{
 		kind:         taskOutcomeComplete,
 		message:      fmt.Sprintf("task completed: %s", selected.task.Title),
+		actor:        reviewerActor,
 		renderFormat: "Completed: %s",
 		renderArgs:   []any{selected.taskLabel},
 	})
@@ -601,15 +599,73 @@ func evaluateStallOutcome(run *activeRun, selected taskSelection, phase, output 
 	if run == nil || run.stallDetector == nil || !run.options.StallDetection {
 		return taskOutcome{}, false
 	}
+	run.mu.Lock()
 	stalled, similarity := run.stallDetector.Observe(selected.task.ID, phase, output)
 	if !stalled {
+		run.mu.Unlock()
 		return taskOutcome{}, false
 	}
 
 	key := selected.task.ID + ":" + phase
 	level := run.stallEscalations[key] + 1
 	run.stallEscalations[key] = level
+	run.mu.Unlock()
 	action := "mark_failed"
+	actor := &domain.EventActor{Role: strings.TrimSpace(phase)}
+	if phase == promptPhaseReview {
+		actor = taskActor("reviewer", selected.reviewer, "")
+	}
+	if phase == promptPhaseExecute {
+		actor = taskActor("executor", selected.executor, "")
+	}
+	if run.options.MaxParallelTasks > 1 {
+		if level <= 2 {
+			action = "retry"
+			emitTaskStalledEvent(run, selected.task.ID, phase, actor, similarity, action)
+			return taskOutcome{
+				kind:     taskOutcomeRetry,
+				status:   "stalled_retry",
+				message:  fmt.Sprintf("task stalled (similarity %.2f): retry scheduled", similarity),
+				feedback: "Stall detected: output repeated across attempts. Regenerate with a different strategy.",
+				structuredFeedback: buildTaskFeedback(
+					selected.task.ID,
+					selected.retries+1,
+					phase,
+					*actor,
+					"fail",
+					fmt.Sprintf("task stalled (similarity %.2f): retry scheduled", similarity),
+					[]string{"Regenerate the solution using a materially different approach."},
+					"",
+				),
+				actor:        actor,
+				rollback:     true,
+				renderLevel:  "warn",
+				renderFormat: "Task stalled (retry %d/%d)",
+			}, true
+		}
+		emitTaskStalledEvent(run, selected.task.ID, phase, actor, similarity, action)
+		return taskOutcome{
+			kind:     taskOutcomeRetry,
+			status:   "stalled",
+			message:  fmt.Sprintf("task marked failed due to stall (similarity %.2f)", similarity),
+			feedback: "Task failed: repeated outputs detected (stalled).",
+			structuredFeedback: buildTaskFeedback(
+				selected.task.ID,
+				selected.retries+1,
+				phase,
+				*actor,
+				"fail",
+				fmt.Sprintf("task marked failed due to stall (similarity %.2f)", similarity),
+				[]string{"Restart from the unresolved requirement instead of reiterating previous output."},
+				"",
+			),
+			actor:        actor,
+			rollback:     true,
+			forceFailed:  true,
+			renderLevel:  "error",
+			renderFormat: "Task stalled and failed (retry %d/%d)",
+		}, true
+	}
 
 	if level == 1 {
 		if fallbackAgent, ok := stallFallbackAgent(run, phase); ok {
@@ -620,12 +676,23 @@ func evaluateStallOutcome(run *activeRun, selected taskSelection, phase, output 
 			case promptPhaseReview:
 				run.options.DefaultReviewer = fallbackAgent
 			}
-			emitTaskStalledEvent(run, selected.task.ID, phase, similarity, action)
+			emitTaskStalledEvent(run, selected.task.ID, phase, actor, similarity, action)
 			return taskOutcome{
-				kind:         taskOutcomeRetry,
-				status:       "stalled_retry",
-				message:      fmt.Sprintf("task stalled (similarity %.2f): switched to fallback agent %s", similarity, fallbackAgent),
-				feedback:     "Stall detected: output repeated across attempts. Regenerate with a different strategy.",
+				kind:     taskOutcomeRetry,
+				status:   "stalled_retry",
+				message:  fmt.Sprintf("task stalled (similarity %.2f): switched to fallback agent %s", similarity, fallbackAgent),
+				feedback: "Stall detected: output repeated across attempts. Regenerate with a different strategy.",
+				structuredFeedback: buildTaskFeedback(
+					selected.task.ID,
+					selected.retries+1,
+					phase,
+					*actor,
+					"fail",
+					fmt.Sprintf("task stalled (similarity %.2f): switched to fallback agent %s", similarity, fallbackAgent),
+					[]string{"Regenerate the solution using a materially different approach."},
+					"",
+				),
+				actor:        actor,
 				rollback:     true,
 				renderLevel:  "warn",
 				renderFormat: "Task stalled (retry %d/%d)",
@@ -633,32 +700,54 @@ func evaluateStallOutcome(run *activeRun, selected taskSelection, phase, output 
 		}
 	}
 
-	if level <= 2 && run.budgetManager != nil {
+	if level <= 2 && run.promptBudget != nil {
 		action = "budget_reduced"
 		switch phase {
 		case promptPhaseExecute:
-			run.budgetManager.executeChars = maxInt(run.budgetManager.executeChars/2, 1000)
+			run.promptBudget.executeChars = maxInt(run.promptBudget.executeChars/2, 1000)
 		default:
-			run.budgetManager.reviewChars = maxInt(run.budgetManager.reviewChars/2, 1000)
+			run.promptBudget.reviewChars = maxInt(run.promptBudget.reviewChars/2, 1000)
 		}
-		emitTaskStalledEvent(run, selected.task.ID, phase, similarity, action)
+		emitTaskStalledEvent(run, selected.task.ID, phase, actor, similarity, action)
 		return taskOutcome{
-			kind:         taskOutcomeRetry,
-			status:       "stalled_retry",
-			message:      fmt.Sprintf("task stalled (similarity %.2f): reduced context budget", similarity),
-			feedback:     "Stall detected: output repeated across attempts. Focus only on unresolved issues.",
+			kind:     taskOutcomeRetry,
+			status:   "stalled_retry",
+			message:  fmt.Sprintf("task stalled (similarity %.2f): reduced context budget", similarity),
+			feedback: "Stall detected: output repeated across attempts. Focus only on unresolved issues.",
+			structuredFeedback: buildTaskFeedback(
+				selected.task.ID,
+				selected.retries+1,
+				phase,
+				*actor,
+				"fail",
+				fmt.Sprintf("task stalled (similarity %.2f): reduced context budget", similarity),
+				[]string{"Focus on the remaining unresolved issue and avoid repeating prior output."},
+				"",
+			),
+			actor:        actor,
 			rollback:     true,
 			renderLevel:  "warn",
 			renderFormat: "Task stalled (retry %d/%d)",
 		}, true
 	}
 
-	emitTaskStalledEvent(run, selected.task.ID, phase, similarity, action)
+	emitTaskStalledEvent(run, selected.task.ID, phase, actor, similarity, action)
 	return taskOutcome{
-		kind:         taskOutcomeRetry,
-		status:       "stalled",
-		message:      fmt.Sprintf("task marked failed due to stall (similarity %.2f)", similarity),
-		feedback:     "Task failed: repeated outputs detected (stalled).",
+		kind:     taskOutcomeRetry,
+		status:   "stalled",
+		message:  fmt.Sprintf("task marked failed due to stall (similarity %.2f)", similarity),
+		feedback: "Task failed: repeated outputs detected (stalled).",
+		structuredFeedback: buildTaskFeedback(
+			selected.task.ID,
+			selected.retries+1,
+			phase,
+			*actor,
+			"fail",
+			fmt.Sprintf("task marked failed due to stall (similarity %.2f)", similarity),
+			[]string{"Restart from the unresolved requirement instead of reiterating previous output."},
+			"",
+		),
+		actor:        actor,
 		rollback:     true,
 		forceFailed:  true,
 		renderLevel:  "error",
@@ -686,9 +775,20 @@ func stallFallbackAgent(run *activeRun, phase string) (domain.Agent, bool) {
 	return "", false
 }
 
-func emitTaskStalledEvent(run *activeRun, taskID, phase string, similarity float64, action string) {
+type gateFailure struct {
+	name   string
+	reason string
+	detail string
+}
+
+func emitTaskStalledEvent(run *activeRun, taskID, phase string, actor *domain.EventActor, similarity float64, action string) {
 	if run == nil || run.eventSink == nil {
 		return
+	}
+	if actor != nil {
+		run.mu.Lock()
+		run.recordActorStall(*actor)
+		run.mu.Unlock()
 	}
 	run.eventSink.Emit(middleware.ExecutionEvent{
 		SchemaVersion: 1,
@@ -698,6 +798,7 @@ func emitTaskStalledEvent(run *activeRun, taskID, phase string, similarity float
 		RunID:         run.runID,
 		TaskID:        strings.TrimSpace(taskID),
 		Phase:         strings.TrimSpace(phase),
+		Actor:         actor,
 		Similarity:    similarity,
 		WindowSize:    run.options.StallWindow,
 		Action:        strings.TrimSpace(action),
@@ -727,14 +828,14 @@ func hasGate(gates []string, name string) bool {
 	return false
 }
 
-func executeHostGates(ctx context.Context, run *activeRun, taskID, workdir, executorOutput string) (string, bool) {
+func executeHostGates(ctx context.Context, run *activeRun, taskID, workdir, executorOutput string) (*gateFailure, bool) {
 	if run == nil {
-		return "", false
+		return nil, false
 	}
 	required := run.plan.Quality.Required
 	optional := run.plan.Quality.Optional
 	if len(required) == 0 && len(optional) == 0 {
-		return "", false
+		return nil, false
 	}
 
 	commandMap := map[string]string{
@@ -782,11 +883,15 @@ func executeHostGates(ctx context.Context, run *activeRun, taskID, workdir, exec
 			if strings.TrimSpace(detail) != "" {
 				reason = fmt.Sprintf("%s (%s)", reason, strings.TrimSpace(detail))
 			}
-			return reason, true
+			return &gateFailure{
+				name:   strings.TrimSpace(result.Name),
+				reason: reason,
+				detail: detail,
+			}, true
 		}
 	}
 
-	return "", false
+	return nil, false
 }
 
 func emitParseErrorClassEvent(run *activeRun, taskID, phase, class, message string) {
@@ -827,6 +932,7 @@ func emitGateResultEvent(run *activeRun, taskID, gateName, status, detail string
 		RunID:         run.runID,
 		TaskID:        strings.TrimSpace(taskID),
 		Phase:         promptPhaseReview,
+		Actor:         gateActor(gateName),
 		Action:        strings.TrimSpace(status),
 		Message:       strings.TrimSpace(detail),
 		Data: map[string]any{

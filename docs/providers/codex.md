@@ -1,6 +1,6 @@
 # Codex
 
-Adapter for [OpenAI Codex CLI](https://github.com/openai/codex) (`@openai/codex`). Uses the `exec --json` subcommand for structured JSONL output.
+Adapter for [OpenAI Codex CLI](https://github.com/openai/codex) (`@openai/codex`). Uses the `exec --json` subcommand for structured JSONL output and `--output-schema` for planner enforcement.
 
 ## Overview
 
@@ -15,7 +15,29 @@ Adapter for [OpenAI Codex CLI](https://github.com/openai/codex) (`@openai/codex`
 
 ## Command construction
 
-### Pipeline path (Plan, Review, Execute in pipeline)
+### Planner path (`Plan()`)
+
+```
+codex exec --json \
+  --sandbox read-only \
+  --skip-git-repo-check \
+  --config approval_policy="never" \
+  --ephemeral \
+  --output-schema <schema-file> \
+  --output-last-message <result-file> \
+  [--cd <workdir>] \
+  [--model <model>] \
+  <prompt>
+```
+
+- Prompt is a positional argument.
+- `UsePTY = false` — Codex doesn't require a TTY.
+- `--sandbox read-only` prevents the planner from mutating the workspace.
+- `--output-schema` constrains the final response to the plan shape.
+- `--output-last-message` gives Praetor a deterministic final payload even while stdout remains JSONL.
+- `--ephemeral` avoids persisting planner sessions to disk.
+
+### Pipeline path (Review and Execute in pipeline)
 
 ```
 codex exec --json \
@@ -62,12 +84,12 @@ Multiple `agent_message` items are concatenated with newlines.
 
 | Phase | Method | Path | System prompt |
 |---|---|---|---|
-| Plan | `Plan()` | Pipeline | Concatenated into prompt via `ComposePrompt()` |
+| Plan | `Plan()` | JSONL + output schema | Concatenated into prompt via `ComposePrompt()` |
 | Execute | `Execute()` | Pipeline | Concatenated into prompt via `ComposePrompt()` |
 | Execute (one-shot) | `Execute(OneShot=true)` | One-shot | Concatenated into prompt via `ComposePrompt()` |
 | Review | `Review()` | Pipeline | Concatenated into prompt via `ComposePrompt()` |
 
-For `Plan()`, the prompt is rendered using the `adapter.plan.tmpl` template (or hardcoded fallback). The adapter extracts the JSON manifest from the output via `ExtractJSONObject()`.
+For `Plan()`, the prompt is rendered using the `adapter.plan.tmpl` template (or hardcoded fallback). Praetor uses Codex's native `--output-schema` contract plus `--output-last-message` to capture the final plan payload deterministically.
 
 For `Review()`, the adapter calls `ParseReview()` on the output to extract `DECISION: PASS/FAIL` and `REASON:` lines.
 

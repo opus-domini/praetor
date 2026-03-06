@@ -5,8 +5,19 @@
 !! Read the feedback below carefully and fix ALL issues.
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
-PREVIOUS FEEDBACK:
-{{ .PreviousFeedback }}
+PREVIOUS ATTEMPTS:
+{{- range .PreviousFeedback }}
+### Attempt {{ .Attempt }} ({{ .Verdict }} - {{ .Phase }})
+Reason: {{ .Reason }}
+{{- range .Hints }}
+- Hint: {{ . }}
+{{- end }}
+{{- if .GateOutput }}
+Gate output (truncated):
+{{ .GateOutput }}
+{{- end }}
+
+{{- end }}
 
 {{ end -}}
 TASK

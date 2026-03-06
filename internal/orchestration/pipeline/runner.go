@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/opus-domini/praetor/internal/agent"
@@ -32,6 +33,7 @@ func NewRunner(runtime domain.AgentRuntime) *Runner {
 }
 
 type activeRun struct {
+	mu      *sync.Mutex
 	slug    string
 	plan    domain.Plan
 	options domain.RunnerOptions
@@ -51,15 +53,18 @@ type activeRun struct {
 	projectContext    string
 	state             domain.State
 	stats             domain.RunnerStats
+	summary           domain.RunSummary
 	totalCost         float64
 	loopStart         time.Time
 	stateTransitions  int
 	stopRequested     bool
 	stopReason        string
+	eventsPath        string
 	eventSink         middleware.EventSink
 	availableAgents   []agent.ID
 	promptEngine      *prompt.Engine
-	budgetManager     *ContextBudgetManager
+	promptBudget      *ContextBudgetManager
+	costBudget        *CostAccumulator
 	performancePath   string
 	stallDetector     *StallDetector
 	stallEscalations  map[string]int
@@ -82,6 +87,7 @@ func (r *Runner) Run(ctx context.Context, render domain.RenderSink, slug string,
 
 	if run.state.ActiveCount() == 0 {
 		run.stats.Outcome = determineRunOutcome(run.state, nil)
+		run.stats.TotalCostUSD = run.totalCost
 		run.state.Outcome = run.stats.Outcome
 		_ = run.store.WriteState(run.slug, run.state)
 		run.render.Success(fmt.Sprintf("All tasks already completed: %s", run.slug))
@@ -92,6 +98,7 @@ func (r *Runner) Run(ctx context.Context, render domain.RenderSink, slug string,
 		run.stats.TotalCostUSD = run.totalCost
 		run.stats.TotalDuration = time.Since(run.loopStart)
 		run.stats.Outcome = determineRunOutcome(run.state, err)
+		run.finalizeSummary(run.eventsPath)
 		run.state.Outcome = run.stats.Outcome
 		_ = run.store.WriteState(run.slug, run.state)
 		_ = run.appendSnapshotEvent("failed", "", err.Error())
@@ -123,7 +130,7 @@ func (r *Runner) bootstrapRun(ctx context.Context, render domain.RenderSink, slu
 	}
 
 	cleanupRuntime := func() {}
-	run := activeRun{slug: slug}
+	run := activeRun{mu: &sync.Mutex{}, slug: slug}
 
 	normalized, err := normalizeRunnerOptions(options)
 	if err != nil {
@@ -188,6 +195,7 @@ func (r *Runner) bootstrapRun(ctx context.Context, render domain.RenderSink, slu
 	} else {
 		render.Warn(fmt.Sprintf("failed to create event sink: %v", sinkErr))
 	}
+	run.eventsPath = eventsPath
 	run.eventSink = eventSink
 
 	runtime := r.runtime
@@ -308,6 +316,7 @@ func (r *Runner) bootstrapRun(ctx context.Context, render domain.RenderSink, slu
 		StateFile: store.StateFile(slug),
 	}
 	run.stats = stats
+	run.summary = domain.RunSummary{ByActor: make(map[string]domain.ActorStats)}
 
 	snapshotStore := localstate.NewLocalSnapshotStore(store.RuntimeDir(), run.runID)
 	if err := snapshotStore.Init(slug, run.state.PlanChecksum); err != nil {
@@ -317,7 +326,13 @@ func (r *Runner) bootstrapRun(ctx context.Context, render domain.RenderSink, slu
 		return run, lock, cleanupRuntime, err
 	}
 	run.snapshot = snapshotStore
-	run.budgetManager = NewContextBudgetManager(run.options.BudgetExecute, run.options.BudgetReview)
+	run.promptBudget = NewContextBudgetManager(run.options.ExecutorPromptChars, run.options.ReviewerPromptChars)
+	run.state.ExecutionPolicy = buildExecutionPolicy(run.options)
+	run.costBudget = newSeededCostAccumulator(run.state)
+	run.totalCost = microsToUSD(run.state.TotalCostMicros)
+	if err := run.store.WriteState(slug, run.state); err != nil {
+		return run, lock, cleanupRuntime, err
+	}
 	diagnosticsDir := filepath.Join(snapshotStore.RootDir(), "diagnostics")
 	if err := os.MkdirAll(diagnosticsDir, 0o755); err != nil {
 		return run, lock, cleanupRuntime, err
@@ -357,12 +372,14 @@ func (r *Runner) bootstrapRun(ctx context.Context, render domain.RenderSink, slu
 	}
 	render.KV("Planner:", formatAgentWithModel(run.options.PlannerAgent, run.options.PlannerModel))
 	render.KV("Retries:", fmt.Sprintf("%d per task", run.options.MaxRetries))
-	render.KV("Budget:", fmt.Sprintf("execute=%d review=%d", run.options.BudgetExecute, run.options.BudgetReview))
+	render.KV("Prompt Budget:", fmt.Sprintf("executor=%d reviewer=%d", run.options.ExecutorPromptChars, run.options.ReviewerPromptChars))
+	render.KV("Cost Policy:", describeCostPolicy(run.state.ExecutionPolicy.Cost))
 	if run.options.StallDetection {
 		render.KV("Stall:", fmt.Sprintf("on (window=%d threshold=%.2f)", run.options.StallWindow, run.options.StallThreshold))
 	} else {
 		render.KV("Stall:", "off")
 	}
+	render.KV("Parallel:", fmt.Sprintf("%d task(s) per wave", run.options.MaxParallelTasks))
 	render.KV("Slug:", slug)
 	render.KV("State:", stats.StateFile)
 	render.KV("Progress:", fmt.Sprintf("%d/%d done", run.state.DoneCount(), len(run.state.Tasks)))
@@ -380,7 +397,6 @@ func (r *Runner) bootstrapRun(ctx context.Context, render domain.RenderSink, slu
 
 	run.transitions = NewTransitionRecorder(store, slug)
 	run.loopStart = time.Now()
-	run.totalCost = 0
 	if err := run.persistSnapshot("bootstrap", "run initialized"); err != nil {
 		return run, lock, cleanupRuntime, err
 	}
@@ -452,6 +468,12 @@ func runnerStateCheckGuards(ctx context.Context, runner *Runner, run *activeRun)
 		}
 		return nil, ctxErr
 	}
+	if err := run.emitCostWarningIfNeeded(); err != nil {
+		return nil, err
+	}
+	if err := run.planBudgetExceededError(); err != nil {
+		return nil, err
+	}
 	if err := run.persistSnapshot("loop", "iteration start"); err != nil {
 		return nil, err
 	}
@@ -490,6 +512,7 @@ func runnerStateFinalize(_ context.Context, _ *Runner, run *activeRun) (runnerSt
 	if strings.Contains(run.stopReason, "max iterations reached") {
 		run.stats.Outcome = domain.RunFailed
 	}
+	run.finalizeSummary(run.eventsPath)
 	run.state.Outcome = run.stats.Outcome
 	if err := run.store.WriteState(run.slug, run.state); err != nil {
 		return nil, err
@@ -507,6 +530,10 @@ func determineRunOutcome(state domain.State, runErr error) domain.RunOutcome {
 		if errors.Is(runErr, context.Canceled) || errors.Is(runErr, context.DeadlineExceeded) {
 			return domain.RunCanceled
 		}
+		var budgetErr *budgetExceededError
+		if errors.As(runErr, &budgetErr) {
+			return domain.RunCanceled
+		}
 		return domain.RunFailed
 	}
 	if state.ActiveCount() == 0 {
@@ -519,6 +546,9 @@ func determineRunOutcome(state domain.State, runErr error) domain.RunOutcome {
 }
 
 func (r *Runner) runIteration(ctx context.Context, run *activeRun) (bool, error) {
+	if run.options.MaxParallelTasks > 1 {
+		return r.runParallelWave(ctx, run)
+	}
 	machine := iterationMachine{
 		runner: r,
 		run:    run,
@@ -528,6 +558,68 @@ func (r *Runner) runIteration(ctx context.Context, run *activeRun) (bool, error)
 		return false, err
 	}
 	return machine.stop, nil
+}
+
+func buildExecutionPolicy(opts domain.RunnerOptions) domain.ExecutionPolicy {
+	policy := domain.ExecutionPolicy{
+		MaxTotalIterations: opts.MaxIterations,
+		MaxRetriesPerTask:  opts.MaxRetries,
+		MaxParallelTasks:   opts.MaxParallelTasks,
+		PromptBudget: domain.PromptBudgetPolicy{
+			ExecutorChars: opts.ExecutorPromptChars,
+			ReviewerChars: opts.ReviewerPromptChars,
+		},
+		Cost: domain.CostPolicy{
+			PlanLimitCents: opts.PlanCostBudgetCents,
+			TaskLimitCents: opts.TaskCostBudgetCents,
+			WarnThreshold:  opts.CostWarnThreshold,
+			Enforce:        boolPtr(opts.CostBudgetEnforce),
+		},
+		StallDetection: domain.StallPolicy{
+			Enabled:   opts.StallDetection,
+			Window:    opts.StallWindow,
+			Threshold: opts.StallThreshold,
+		},
+	}
+	if opts.Timeout > 0 {
+		policy.Timeout = opts.Timeout.String()
+	}
+	return policy
+}
+
+func newSeededCostAccumulator(state domain.State) *CostAccumulator {
+	accumulator := NewCostAccumulator(state.ExecutionPolicy.Cost)
+	taskCosts := make(map[string]int64, len(state.Tasks))
+	for _, task := range state.Tasks {
+		taskID := strings.TrimSpace(task.ID)
+		if taskID == "" {
+			continue
+		}
+		taskCosts[taskID] = task.CostMicros
+	}
+	accumulator.Seed(state.TotalCostMicros, taskCosts, state.CostWarningEmitted)
+	return accumulator
+}
+
+func describeCostPolicy(policy domain.CostPolicy) string {
+	parts := make([]string, 0, 4)
+	if policy.PlanLimitCents > 0 {
+		parts = append(parts, "plan="+formatUSDFromMicros(centsToMicros(policy.PlanLimitCents)))
+	} else {
+		parts = append(parts, "plan=unlimited")
+	}
+	if policy.TaskLimitCents > 0 {
+		parts = append(parts, "task="+formatUSDFromMicros(centsToMicros(policy.TaskLimitCents)))
+	}
+	if policy.WarnThreshold > 0 {
+		parts = append(parts, fmt.Sprintf("warn=%.0f%%", policy.WarnThreshold*100))
+	}
+	if policy.Enforce != nil && !*policy.Enforce {
+		parts = append(parts, "mode=warn-only")
+	} else {
+		parts = append(parts, "mode=enforce")
+	}
+	return strings.Join(parts, " ")
 }
 
 func normalizeRunnerOptions(options domain.RunnerOptions) (domain.RunnerOptions, error) {
@@ -557,6 +649,9 @@ func normalizeRunnerOptions(options domain.RunnerOptions) (domain.RunnerOptions,
 	}
 	if normalized.KeepLastRuns < 0 {
 		return domain.RunnerOptions{}, errors.New("keep-last-runs cannot be negative")
+	}
+	if normalized.MaxParallelTasks < 0 {
+		return domain.RunnerOptions{}, errors.New("max parallel tasks cannot be negative")
 	}
 	if normalized.Timeout < 0 {
 		return domain.RunnerOptions{}, errors.New("timeout cannot be negative")
@@ -643,11 +738,29 @@ func normalizeRunnerOptions(options domain.RunnerOptions) (domain.RunnerOptions,
 	if strings.TrimSpace(normalized.LMStudioKeyEnv) == "" {
 		normalized.LMStudioKeyEnv = "LMSTUDIO_API_KEY"
 	}
-	if normalized.BudgetExecute <= 0 {
-		normalized.BudgetExecute = 120000
+	if normalized.ExecutorPromptChars <= 0 {
+		normalized.ExecutorPromptChars = 120000
 	}
-	if normalized.BudgetReview <= 0 {
-		normalized.BudgetReview = 80000
+	if normalized.ReviewerPromptChars <= 0 {
+		normalized.ReviewerPromptChars = 80000
+	}
+	if normalized.MaxParallelTasks <= 0 {
+		normalized.MaxParallelTasks = 1
+	}
+	if normalized.PlanCostBudgetCents < 0 {
+		return domain.RunnerOptions{}, errors.New("plan cost budget cannot be negative")
+	}
+	if normalized.TaskCostBudgetCents < 0 {
+		return domain.RunnerOptions{}, errors.New("task cost budget cannot be negative")
+	}
+	if normalized.CostWarnThreshold <= 0 {
+		normalized.CostWarnThreshold = 0.80
+	}
+	if normalized.CostWarnThreshold > 1 {
+		return domain.RunnerOptions{}, errors.New("cost warn threshold must be <= 1")
+	}
+	if !normalized.CostBudgetEnforceSet {
+		normalized.CostBudgetEnforce = true
 	}
 	if normalized.StallWindow <= 0 {
 		normalized.StallWindow = 3
@@ -659,6 +772,9 @@ func normalizeRunnerOptions(options domain.RunnerOptions) (domain.RunnerOptions,
 		return domain.RunnerOptions{}, errors.New("stall threshold must be <= 1")
 	}
 	if normalized.RunnerMode == domain.RunnerTMUX {
+		if normalized.MaxParallelTasks > 1 {
+			return domain.RunnerOptions{}, errors.New("tmux runner does not support max parallel tasks > 1")
+		}
 		if !isTMUXCompatibleAgent(normalized.DefaultExecutor) {
 			return domain.RunnerOptions{}, fmt.Errorf("runner mode %q does not support executor %q", normalized.RunnerMode, normalized.DefaultExecutor)
 		}
@@ -737,6 +853,9 @@ func mergeRunnerOptionsWithPlan(options domain.RunnerOptions, plan domain.Plan) 
 	if !options.MaxIterationsSet && policy.MaxTotalIterations > 0 {
 		merged.MaxIterations = policy.MaxTotalIterations
 	}
+	if !options.MaxParallelTasksSet && policy.MaxParallelTasks > 0 {
+		merged.MaxParallelTasks = policy.MaxParallelTasks
+	}
 	if !options.TimeoutSet && strings.TrimSpace(policy.Timeout) != "" {
 		timeout, err := time.ParseDuration(strings.TrimSpace(policy.Timeout))
 		if err != nil {
@@ -744,11 +863,23 @@ func mergeRunnerOptionsWithPlan(options domain.RunnerOptions, plan domain.Plan) 
 		}
 		merged.Timeout = timeout
 	}
-	if !options.BudgetExecuteSet && policy.Budget.Execute > 0 {
-		merged.BudgetExecute = policy.Budget.Execute
+	if !options.ExecutorPromptCharsSet && policy.PromptBudget.ExecutorChars > 0 {
+		merged.ExecutorPromptChars = policy.PromptBudget.ExecutorChars
 	}
-	if !options.BudgetReviewSet && policy.Budget.Review > 0 {
-		merged.BudgetReview = policy.Budget.Review
+	if !options.ReviewerPromptCharsSet && policy.PromptBudget.ReviewerChars > 0 {
+		merged.ReviewerPromptChars = policy.PromptBudget.ReviewerChars
+	}
+	if !options.PlanCostBudgetSet && policy.Cost.PlanLimitCents > 0 {
+		merged.PlanCostBudgetCents = policy.Cost.PlanLimitCents
+	}
+	if !options.TaskCostBudgetSet && policy.Cost.TaskLimitCents > 0 {
+		merged.TaskCostBudgetCents = policy.Cost.TaskLimitCents
+	}
+	if !options.CostWarnThresholdSet && policy.Cost.WarnThreshold > 0 {
+		merged.CostWarnThreshold = policy.Cost.WarnThreshold
+	}
+	if !options.CostBudgetEnforceSet && policy.Cost.Enforce != nil {
+		merged.CostBudgetEnforce = *policy.Cost.Enforce
 	}
 	if !options.StallDetectionSet {
 		merged.StallDetection = policy.StallDetection.Enabled
@@ -996,14 +1127,29 @@ func enrichGeneratedPlan(plan domain.Plan, opts domain.RunnerOptions) domain.Pla
 	if policy.MaxTotalIterations < 0 {
 		policy.MaxTotalIterations = 0
 	}
+	if policy.MaxParallelTasks <= 0 {
+		policy.MaxParallelTasks = opts.MaxParallelTasks
+	}
 	if strings.TrimSpace(policy.Timeout) == "" && opts.Timeout > 0 {
 		policy.Timeout = opts.Timeout.String()
 	}
-	if policy.Budget.Execute <= 0 {
-		policy.Budget.Execute = opts.BudgetExecute
+	if policy.PromptBudget.ExecutorChars <= 0 {
+		policy.PromptBudget.ExecutorChars = opts.ExecutorPromptChars
 	}
-	if policy.Budget.Review <= 0 {
-		policy.Budget.Review = opts.BudgetReview
+	if policy.PromptBudget.ReviewerChars <= 0 {
+		policy.PromptBudget.ReviewerChars = opts.ReviewerPromptChars
+	}
+	if policy.Cost.PlanLimitCents <= 0 {
+		policy.Cost.PlanLimitCents = opts.PlanCostBudgetCents
+	}
+	if policy.Cost.TaskLimitCents <= 0 {
+		policy.Cost.TaskLimitCents = opts.TaskCostBudgetCents
+	}
+	if policy.Cost.WarnThreshold <= 0 {
+		policy.Cost.WarnThreshold = opts.CostWarnThreshold
+	}
+	if policy.Cost.Enforce == nil {
+		policy.Cost.Enforce = boolPtr(opts.CostBudgetEnforce)
 	}
 	if policy.StallDetection.Window <= 0 {
 		policy.StallDetection.Window = opts.StallWindow
@@ -1036,6 +1182,11 @@ func normalizeAcceptanceItems(items []string) []string {
 		normalized = append(normalized, item)
 	}
 	return normalized
+}
+
+func boolPtr(value bool) *bool {
+	v := value
+	return &v
 }
 
 func writeGeneratedPlanFile(path string, plan domain.Plan) error {
@@ -1079,6 +1230,8 @@ func (run *activeRun) persistSnapshot(phase, message string) error {
 	if run == nil || run.snapshot == nil {
 		return nil
 	}
+	run.mu.Lock()
+	defer run.mu.Unlock()
 	snapshot := localstate.LocalSnapshot{
 		RunID:             run.runID,
 		PlanSlug:          run.slug,
@@ -1092,6 +1245,7 @@ func (run *activeRun) persistSnapshot(phase, message string) error {
 		Outcome:           run.stats.Outcome,
 		Iteration:         run.stats.Iterations,
 		Timestamp:         time.Now().UTC().Format(time.RFC3339),
+		Summary:           run.summary,
 		State:             run.state,
 	}
 	return run.snapshot.Save(snapshot)
@@ -1101,6 +1255,8 @@ func (run *activeRun) appendSnapshotEvent(status, taskID, message string) error 
 	if run == nil || run.snapshot == nil {
 		return nil
 	}
+	run.mu.Lock()
+	defer run.mu.Unlock()
 	return run.snapshot.AppendEvent(localstate.SnapshotEvent{
 		Timestamp: time.Now().UTC().Format(time.RFC3339),
 		RunID:     run.runID,

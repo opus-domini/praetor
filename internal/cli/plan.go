@@ -47,11 +47,13 @@ Use "praetor plan run <slug>" to execute a plan.`,
 	cmd.AddCommand(newPlanPathCmd())
 	cmd.AddCommand(newPlanEvalCmd())
 	cmd.AddCommand(newPlanDiagnoseCmd())
+	cmd.AddCommand(newPlanExportCmd())
 	return cmd
 }
 
 func newPlanCreateCmd() *cobra.Command {
 	var fromFile string
+	var fromTemplate string
 	var fromStdin bool
 	var dryRun bool
 	var noAgent bool
@@ -60,15 +62,17 @@ func newPlanCreateCmd() *cobra.Command {
 	var plannerAgent string
 	var plannerModel string
 	var plannerTimeout time.Duration
+	var templateVars []string
 	var force bool
 
 	cmd := &cobra.Command{
 		Use:   "create [brief]",
 		Short: "Create a plan from text or markdown input",
-		Long:  `Create a plan from a textual brief (arg, file, stdin, or interactive prompt).`,
+		Long:  `Create a plan from a textual brief (arg, file, stdin, interactive prompt, or template).`,
 		Example: `  praetor plan create "Implement JWT auth and tests"
   praetor plan create --from-file docs/brief.md
   cat brief.md | praetor plan create --stdin
+  praetor plan create --from-template go-feature --var Name=auth --var Summary="Implement JWT auth"
   praetor plan create "Refactor billing" --dry-run`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -84,11 +88,6 @@ func newPlanCreateCmd() *cobra.Command {
 				return err
 			}
 			if err := store.Init(); err != nil {
-				return err
-			}
-
-			brief, err := resolvePlanCreateBrief(args, fromFile, fromStdin, cmd.InOrStdin(), out)
-			if err != nil {
 				return err
 			}
 
@@ -111,10 +110,59 @@ func newPlanCreateCmd() *cobra.Command {
 
 			effectivePlannerModel := strings.TrimSpace(plannerModel)
 			plan := domain.Plan{}
-			if noAgent {
+			brief := ""
+			if strings.TrimSpace(fromTemplate) != "" {
+				if strings.TrimSpace(fromFile) != "" || fromStdin {
+					return errors.New("--from-template cannot be combined with --from-file or --stdin")
+				}
+				if noAgent {
+					return errors.New("--from-template cannot be combined with --no-agent")
+				}
+
+				templatePath, findErr := config.FindTemplate(fromTemplate, projectRoot)
+				if findErr != nil {
+					return findErr
+				}
+				vars, varsErr := parseTemplateVars(templateVars)
+				if varsErr != nil {
+					return varsErr
+				}
+				if len(args) > 0 {
+					brief = strings.TrimSpace(args[0])
+					if brief != "" {
+						if strings.TrimSpace(vars["Name"]) == "" {
+							vars["Name"] = derivePlanName(brief)
+						}
+						if strings.TrimSpace(vars["Summary"]) == "" {
+							vars["Summary"] = derivePlanSummary(brief)
+						}
+						if strings.TrimSpace(vars["Description"]) == "" {
+							vars["Description"] = brief
+						}
+					}
+				}
+
+				render.Header("Plan Template")
+				render.KV("Template:", templatePath)
+				render.KV("Planner:", effectivePlanner)
+				templated, renderErr := config.RenderTemplate(templatePath, vars)
+				if renderErr != nil {
+					return renderErr
+				}
+				plan = *templated
+				render.Success("Template rendered successfully.")
+			} else if noAgent {
+				brief, err = resolvePlanCreateBrief(args, fromFile, fromStdin, cmd.InOrStdin(), out)
+				if err != nil {
+					return err
+				}
 				render.Info("Using template mode (--no-agent).")
 				plan = buildNoAgentPlanTemplate(brief, effectivePlanner, effectivePlannerModel)
 			} else {
+				brief, err = resolvePlanCreateBrief(args, fromFile, fromStdin, cmd.InOrStdin(), out)
+				if err != nil {
+					return err
+				}
 				plannerModelLabel := strings.TrimSpace(effectivePlannerModel)
 				if plannerModelLabel == "" {
 					plannerModelLabel = "default"
@@ -140,9 +188,13 @@ func newPlanCreateCmd() *cobra.Command {
 			}
 
 			author := resolvePlanCreatedBy()
+			source := ternary(noAgent, "manual", "agent")
+			if strings.TrimSpace(fromTemplate) != "" {
+				source = "template:" + strings.TrimSpace(strings.TrimSuffix(fromTemplate, ".json"))
+			}
 			if err := finalizePlanMetadata(&plan, planFinalizeInput{
 				Brief:        brief,
-				Source:       ternary(noAgent, "manual", "agent"),
+				Source:       source,
 				CreatedBy:    author,
 				PlannerAgent: domain.Agent(effectivePlanner),
 				PlannerModel: effectivePlannerModel,
@@ -202,14 +254,115 @@ func newPlanCreateCmd() *cobra.Command {
 
 	cmd.Flags().StringVar(&fromFile, "from-file", "", "Read plan brief from a text/markdown file")
 	cmd.Flags().BoolVar(&fromStdin, "stdin", false, "Read plan brief from stdin")
+	cmd.Flags().StringVar(&fromTemplate, "from-template", "", "Render a reusable plan template by name")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Print generated plan JSON without writing file")
 	cmd.Flags().BoolVar(&noAgent, "no-agent", false, "Generate a minimal plan template without calling a planner agent")
 	cmd.Flags().StringVar(&slugOverride, "slug", "", "Explicit slug override (default: auto-generated from plan name)")
 	cmd.Flags().StringVar(&plannerAgent, "planner", "", "Planner agent override (default: config planner or claude)")
 	cmd.Flags().StringVar(&plannerModel, "planner-model", "", "Planner model override")
 	cmd.Flags().DurationVar(&plannerTimeout, "planner-timeout", 0, "Planner generation timeout (e.g. 3m, 10m); 0 disables timeout")
+	cmd.Flags().StringArrayVar(&templateVars, "var", nil, "Template variable in key=value form (repeatable)")
 	cmd.Flags().BoolVar(&force, "force", false, "Overwrite an existing plan file")
 	cmd.Flags().BoolVar(&noColor, "no-color", false, "Disable colored output")
+	return cmd
+}
+
+func newPlanExportCmd() *cobra.Command {
+	var outputDir string
+	var force bool
+
+	cmd := &cobra.Command{
+		Use:     "export <slug>",
+		Short:   "Export a plan bundle with plan, state, summary, and template",
+		Example: "  praetor plan export my-plan\n  praetor plan export my-plan --output ./exports/my-plan",
+		Args:    cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cmd.SilenceUsage = true
+			projectRoot, err := workspace.ResolveProjectRoot(".")
+			if err != nil {
+				return err
+			}
+			store, err := resolveStore(".")
+			if err != nil {
+				return err
+			}
+			if err := store.Init(); err != nil {
+				return err
+			}
+
+			slug := strings.TrimSpace(args[0])
+			planPath := store.PlanFile(slug)
+			planBytes, err := os.ReadFile(planPath)
+			if err != nil {
+				return fmt.Errorf("read plan file: %w", err)
+			}
+			plan, err := domain.LoadPlan(planPath)
+			if err != nil {
+				return err
+			}
+			status, err := store.Status(slug)
+			if err != nil {
+				return err
+			}
+
+			if strings.TrimSpace(outputDir) == "" {
+				outputDir = filepath.Join(projectRoot, ".praetor", "exports", slug)
+			}
+			outputDir, err = filepath.Abs(outputDir)
+			if err != nil {
+				return fmt.Errorf("resolve export directory: %w", err)
+			}
+			if _, err := os.Stat(outputDir); err == nil {
+				if !force {
+					return fmt.Errorf("export directory already exists: %s (use --force to overwrite)", outputDir)
+				}
+				if removeErr := os.RemoveAll(outputDir); removeErr != nil {
+					return fmt.Errorf("remove existing export directory: %w", removeErr)
+				}
+			} else if !errors.Is(err, os.ErrNotExist) {
+				return fmt.Errorf("stat export directory: %w", err)
+			}
+			if err := os.MkdirAll(outputDir, 0o755); err != nil {
+				return fmt.Errorf("create export directory: %w", err)
+			}
+
+			if err := writeRawFile(filepath.Join(outputDir, "plan.json"), planBytes); err != nil {
+				return err
+			}
+			statePath := store.StateFile(slug)
+			if stateBytes, readErr := os.ReadFile(statePath); readErr == nil {
+				if err := writeRawFile(filepath.Join(outputDir, "state.json"), stateBytes); err != nil {
+					return err
+				}
+			} else if !errors.Is(readErr, os.ErrNotExist) {
+				return fmt.Errorf("read state file: %w", readErr)
+			}
+
+			summary, err := buildPlanExportSummary(store, status, plan)
+			if err != nil {
+				return err
+			}
+			if err := domain.WriteJSONFile(filepath.Join(outputDir, "summary.json"), summary); err != nil {
+				return err
+			}
+
+			templatePlan := buildExportTemplate(plan)
+			if err := domain.WriteJSONFile(filepath.Join(outputDir, "template.json"), templatePlan); err != nil {
+				return err
+			}
+
+			render := NewRenderer(cmd.OutOrStdout(), false)
+			render.Header("Plan Export")
+			render.KV("Slug:", slug)
+			render.KV("Output:", outputDir)
+			render.KV("Files:", exportedFilesLabel(summary.HasState))
+			render.Success("Plan exported successfully.")
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&outputDir, "output", "", "Export directory (default: .praetor/exports/<slug>)")
+	cmd.Flags().BoolVar(&force, "force", false, "Overwrite an existing export directory")
 	return cmd
 }
 
@@ -282,6 +435,7 @@ func newPlanPathCmd() *cobra.Command {
 
 func newPlanStatusCmd() *cobra.Command {
 	var noColor bool
+	var verbose bool
 
 	cmd := &cobra.Command{
 		Use:     "status <slug>",
@@ -299,11 +453,22 @@ func newPlanStatusCmd() *cobra.Command {
 				return err
 			}
 			r := NewRenderer(cmd.OutOrStdout(), noColor)
-			return printPlanStatus(r, status)
+			if err := printPlanStatus(r, status); err != nil {
+				return err
+			}
+			if !verbose {
+				return nil
+			}
+			snapshot, _, err := localstate.LoadLatestLocalSnapshot(store.RuntimeDir(), args[0])
+			if err != nil {
+				return err
+			}
+			return printPlanRunSummary(cmd.OutOrStdout(), r, snapshot.Summary)
 		},
 	}
 
 	cmd.Flags().BoolVar(&noColor, "no-color", false, "Disable colored output")
+	cmd.Flags().BoolVar(&verbose, "verbose", false, "Show latest run summary with actor breakdown")
 	return cmd
 }
 
@@ -662,15 +827,25 @@ func printCostsTable(cmd *cobra.Command, records []map[string]any) error {
 }
 
 type diagnoseSummary struct {
-	EventsTotal          int            `json:"events_total"`
-	Errors               int            `json:"errors"`
-	Stalls               int            `json:"stalls"`
-	Fallbacks            int            `json:"fallbacks"`
-	GateFailures         int            `json:"gate_failures"`
-	TotalCostUSD         float64        `json:"total_cost_usd"`
-	AvgPromptChars       float64        `json:"avg_prompt_chars"`
-	AvgEstimatedTokens   float64        `json:"avg_estimated_tokens"`
-	TopFailureCategories map[string]int `json:"top_failure_categories"`
+	EventsTotal          int                `json:"events_total"`
+	Errors               int                `json:"errors"`
+	Stalls               int                `json:"stalls"`
+	Fallbacks            int                `json:"fallbacks"`
+	GateFailures         int                `json:"gate_failures"`
+	BudgetWarnings       int                `json:"budget_warnings"`
+	BudgetExceeded       int                `json:"budget_exceeded"`
+	TotalCostUSD         float64            `json:"total_cost_usd"`
+	PlanLimitUSD         float64            `json:"plan_limit_usd,omitempty"`
+	TaskLimitUSD         float64            `json:"task_limit_usd,omitempty"`
+	CostBudgetEnforce    bool               `json:"cost_budget_enforce"`
+	AvgPromptChars       float64            `json:"avg_prompt_chars"`
+	AvgEstimatedTokens   float64            `json:"avg_estimated_tokens"`
+	MostRetriesActor     string             `json:"most_retries_actor,omitempty"`
+	MostRetriesCount     int                `json:"most_retries_count,omitempty"`
+	MostStallsActor      string             `json:"most_stalls_actor,omitempty"`
+	MostStallsCount      int                `json:"most_stalls_count,omitempty"`
+	CostByActor          map[string]float64 `json:"cost_by_actor,omitempty"`
+	TopFailureCategories map[string]int     `json:"top_failure_categories"`
 }
 
 type diagnoseRegressionCheck struct {
@@ -692,16 +867,23 @@ type diagnoseRegression struct {
 func buildDiagnoseSummary(events, perf []map[string]any) diagnoseSummary {
 	summary := diagnoseSummary{
 		EventsTotal:          len(events),
+		CostByActor:          make(map[string]float64),
 		TopFailureCategories: make(map[string]int),
 	}
+	retriesByActor := make(map[string]int)
+	stallsByActor := make(map[string]int)
 	for _, event := range events {
 		eventType := strings.ToLower(strings.TrimSpace(eventTypeName(event)))
+		actorKey := eventActorKey(event)
 		if strings.Contains(eventType, "error") {
 			summary.Errors++
 			summary.TopFailureCategories[eventType]++
 		}
 		if eventType == "task_stalled" {
 			summary.Stalls++
+			if actorKey != "" {
+				stallsByActor[actorKey]++
+			}
 			summary.TopFailureCategories[eventType]++
 		}
 		if eventType == "agent_fallback" {
@@ -714,8 +896,46 @@ func buildDiagnoseSummary(events, perf []map[string]any) diagnoseSummary {
 				summary.TopFailureCategories["gate_fail"]++
 			}
 		}
+		if eventType == "cost_budget_warning" {
+			summary.BudgetWarnings++
+		}
+		if eventType == "cost_budget_exceeded" {
+			summary.BudgetExceeded++
+			summary.TopFailureCategories["cost_budget_exceeded"]++
+		}
 		summary.TotalCostUSD += anyFloat(event["cost_usd"])
+		if actorKey != "" && anyFloat(event["cost_usd"]) > 0 {
+			summary.CostByActor[actorKey] += anyFloat(event["cost_usd"])
+		}
+		if eventType == "task_failed" {
+			if data, ok := event["data"].(map[string]any); ok {
+				if retry, ok := data["retry"].(bool); ok && retry && actorKey != "" {
+					retriesByActor[actorKey]++
+				}
+			}
+		}
+		if data, ok := event["data"].(map[string]any); ok {
+			if limit := anyInt64(data["plan_limit_cents"]); limit > 0 {
+				summary.PlanLimitUSD = float64(limit) / 100
+			}
+			if limit := anyInt64(data["task_limit_cents"]); limit > 0 {
+				summary.TaskLimitUSD = float64(limit) / 100
+			}
+			if limit := anyInt64(data["limit_micros"]); limit > 0 {
+				scope := strings.ToLower(strings.TrimSpace(stringValue(data["scope"])))
+				if scope == "task" {
+					summary.TaskLimitUSD = float64(limit) / 1_000_000
+				} else {
+					summary.PlanLimitUSD = float64(limit) / 1_000_000
+				}
+			}
+			if enforce, ok := data["cost_budget_enforce"].(bool); ok {
+				summary.CostBudgetEnforce = enforce
+			}
+		}
 	}
+	summary.MostRetriesActor, summary.MostRetriesCount = maxActorCount(retriesByActor)
+	summary.MostStallsActor, summary.MostStallsCount = maxActorCount(stallsByActor)
 	if len(perf) > 0 {
 		var promptChars float64
 		var tokens float64
@@ -840,8 +1060,35 @@ func printSummaryTable(cmd *cobra.Command, summary diagnoseSummary) error {
 	if _, err := fmt.Fprintf(out, "Errors: %d  Stalls: %d  Fallbacks: %d  Gate failures: %d\n", summary.Errors, summary.Stalls, summary.Fallbacks, summary.GateFailures); err != nil {
 		return err
 	}
+	if _, err := fmt.Fprintf(out, "Budget warnings: %d  Budget exceeded: %d\n", summary.BudgetWarnings, summary.BudgetExceeded); err != nil {
+		return err
+	}
 	if _, err := fmt.Fprintf(out, "Total cost: $%.4f  Avg prompt chars: %.2f  Avg est tokens: %.2f\n", summary.TotalCostUSD, summary.AvgPromptChars, summary.AvgEstimatedTokens); err != nil {
 		return err
+	}
+	if summary.MostRetriesActor != "" {
+		if _, err := fmt.Fprintf(out, "Most retries: %s (%d)\n", summary.MostRetriesActor, summary.MostRetriesCount); err != nil {
+			return err
+		}
+	}
+	if summary.MostStallsActor != "" {
+		if _, err := fmt.Fprintf(out, "Most stalls: %s (%d)\n", summary.MostStallsActor, summary.MostStallsCount); err != nil {
+			return err
+		}
+	}
+	if summary.PlanLimitUSD > 0 {
+		mode := "warn-only"
+		if summary.CostBudgetEnforce {
+			mode = "enforce"
+		}
+		if _, err := fmt.Fprintf(out, "Plan budget: $%.2f (%s)\n", summary.PlanLimitUSD, mode); err != nil {
+			return err
+		}
+	}
+	if summary.TaskLimitUSD > 0 {
+		if _, err := fmt.Fprintf(out, "Task budget: $%.2f\n", summary.TaskLimitUSD); err != nil {
+			return err
+		}
 	}
 	if len(summary.TopFailureCategories) > 0 {
 		if _, err := fmt.Fprintln(out, "Top failure categories:"); err != nil {
@@ -854,6 +1101,21 @@ func printSummaryTable(cmd *cobra.Command, summary diagnoseSummary) error {
 		sort.Strings(keys)
 		for _, key := range keys {
 			if _, err := fmt.Fprintf(out, "- %s: %d\n", key, summary.TopFailureCategories[key]); err != nil {
+				return err
+			}
+		}
+	}
+	if len(summary.CostByActor) > 0 {
+		keys := make([]string, 0, len(summary.CostByActor))
+		for key := range summary.CostByActor {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		if _, err := fmt.Fprintln(out, "Cost by actor:"); err != nil {
+			return err
+		}
+		for _, key := range keys {
+			if _, err := fmt.Fprintf(out, "- %s: $%.4f\n", key, summary.CostByActor[key]); err != nil {
 				return err
 			}
 		}
@@ -958,6 +1220,65 @@ func anyInt(value any) int {
 	}
 }
 
+func anyInt64(value any) int64 {
+	switch v := value.(type) {
+	case int:
+		return int64(v)
+	case int64:
+		return v
+	case float64:
+		return int64(v)
+	case string:
+		parsed, err := strconv.ParseInt(strings.TrimSpace(v), 10, 64)
+		if err == nil {
+			return parsed
+		}
+		return 0
+	default:
+		return 0
+	}
+}
+
+func eventActorKey(event map[string]any) string {
+	if actor, ok := event["actor"].(map[string]any); ok {
+		role := strings.TrimSpace(stringValue(actor["role"]))
+		agent := strings.TrimSpace(stringValue(actor["agent"]))
+		if role != "" || agent != "" {
+			if role == "" {
+				role = "unknown"
+			}
+			if agent == "" {
+				agent = "unknown"
+			}
+			return role + ":" + agent
+		}
+	}
+	role := strings.TrimSpace(stringValue(event["role"]))
+	agent := strings.TrimSpace(stringValue(event["agent"]))
+	if role == "" && agent == "" {
+		return ""
+	}
+	if role == "" {
+		role = "unknown"
+	}
+	if agent == "" {
+		agent = "unknown"
+	}
+	return role + ":" + agent
+}
+
+func maxActorCount(values map[string]int) (string, int) {
+	bestKey := ""
+	bestValue := 0
+	for key, value := range values {
+		if value > bestValue || (value == bestValue && key < bestKey) {
+			bestKey = key
+			bestValue = value
+		}
+	}
+	return bestKey, bestValue
+}
+
 func resolveStore(projectDir string) (*localstate.Store, error) {
 	root, err := localstate.ResolveProjectHome("", projectDir)
 	if err != nil {
@@ -985,6 +1306,26 @@ type planFinalizeInput struct {
 	CreatedBy    string
 	PlannerAgent domain.Agent
 	PlannerModel string
+}
+
+type planExportSummary struct {
+	PlanSlug        string                 `json:"plan_slug"`
+	PlanName        string                 `json:"plan_name"`
+	ExportedAt      string                 `json:"exported_at"`
+	UpdatedAt       string                 `json:"updated_at,omitempty"`
+	Outcome         domain.RunOutcome      `json:"outcome,omitempty"`
+	Total           int                    `json:"total"`
+	Done            int                    `json:"done"`
+	Failed          int                    `json:"failed"`
+	Active          int                    `json:"active"`
+	Running         bool                   `json:"running"`
+	HasState        bool                   `json:"has_state"`
+	LatestRunID     string                 `json:"latest_run_id,omitempty"`
+	ExecutionPolicy domain.ExecutionPolicy `json:"execution_policy,omitempty"`
+	TotalCostUSD    float64                `json:"total_cost_usd"`
+	PlanLimitUSD    float64                `json:"plan_limit_usd,omitempty"`
+	TaskLimitUSD    float64                `json:"task_limit_usd,omitempty"`
+	RunSummary      domain.RunSummary      `json:"run_summary,omitempty"`
 }
 
 var planSlugRegex = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?$`)
@@ -1354,6 +1695,26 @@ func writePlannerFailureLog(logRoot, output string) (string, error) {
 	return path, nil
 }
 
+func parseTemplateVars(values []string) (map[string]string, error) {
+	vars := make(map[string]string, len(values))
+	for _, raw := range values {
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
+			continue
+		}
+		key, value, found := strings.Cut(raw, "=")
+		if !found {
+			return nil, fmt.Errorf("invalid template variable %q (expected key=value)", raw)
+		}
+		key = strings.TrimSpace(key)
+		if key == "" {
+			return nil, fmt.Errorf("invalid template variable %q (empty key)", raw)
+		}
+		vars[key] = strings.TrimSpace(value)
+	}
+	return vars, nil
+}
+
 func buildNoAgentPlanTemplate(brief, plannerAgent, plannerModel string) domain.Plan {
 	name := derivePlanName(brief)
 	summary := derivePlanSummary(brief)
@@ -1498,6 +1859,121 @@ func resolvePlanCreatedBy() string {
 	return ""
 }
 
+func buildPlanExportSummary(store *localstate.Store, status domain.PlanStatus, plan domain.Plan) (planExportSummary, error) {
+	summary := planExportSummary{
+		PlanSlug:        status.PlanSlug,
+		PlanName:        plan.Name,
+		ExportedAt:      time.Now().UTC().Format(time.RFC3339),
+		UpdatedAt:       status.UpdatedAt,
+		Outcome:         status.Outcome,
+		Total:           status.Total,
+		Done:            status.Done,
+		Failed:          status.Failed,
+		Active:          status.Active,
+		Running:         status.Running,
+		HasState:        status.StateFile != "",
+		ExecutionPolicy: status.ExecutionPolicy,
+		TotalCostUSD:    formatUSDFloat(status.TotalCostMicros),
+		PlanLimitUSD:    formatUSDBudgetFloat(status.ExecutionPolicy.Cost.PlanLimitCents),
+		TaskLimitUSD:    formatUSDBudgetFloat(status.ExecutionPolicy.Cost.TaskLimitCents),
+	}
+
+	snapshot, path, err := localstate.LoadLatestLocalSnapshot(store.RuntimeDir(), status.PlanSlug)
+	if err != nil {
+		return planExportSummary{}, fmt.Errorf("load latest snapshot: %w", err)
+	}
+	if path != "" {
+		summary.LatestRunID = snapshot.RunID
+		summary.RunSummary = snapshot.Summary
+		if summary.UpdatedAt == "" {
+			summary.UpdatedAt = snapshot.Timestamp
+		}
+		if summary.Outcome == "" {
+			summary.Outcome = snapshot.Outcome
+		}
+	}
+	if summary.RunSummary.TotalCostUSD == 0 && summary.TotalCostUSD > 0 {
+		summary.RunSummary.TotalCostUSD = summary.TotalCostUSD
+	}
+	if summary.RunSummary.TasksDone == 0 {
+		summary.RunSummary.TasksDone = summary.Done
+	}
+	if summary.RunSummary.TasksFailed == 0 {
+		summary.RunSummary.TasksFailed = summary.Failed
+	}
+	return summary, nil
+}
+
+func buildExportTemplate(plan domain.Plan) domain.Plan {
+	templatePlan := plan
+	templatePlan.Meta = domain.PlanMeta{}
+	nameValue := strings.TrimSpace(plan.Name)
+	summaryValue := strings.TrimSpace(plan.Summary)
+
+	if nameValue != "" {
+		templatePlan.Name = "{{.Name}}"
+	}
+	if summaryValue != "" {
+		templatePlan.Summary = "{{.Summary}}"
+	}
+	for i := range templatePlan.Tasks {
+		templatePlan.Tasks[i].Title = replaceTemplatePlaceholder(templatePlan.Tasks[i].Title, nameValue, "{{.Name}}")
+		templatePlan.Tasks[i].Title = replaceTemplatePlaceholder(templatePlan.Tasks[i].Title, summaryValue, "{{.Summary}}")
+		description := templatePlan.Tasks[i].Description
+		if strings.TrimSpace(description) == summaryValue && summaryValue != "" {
+			templatePlan.Tasks[i].Description = "{{.Description}}"
+			continue
+		}
+		description = replaceTemplatePlaceholder(description, nameValue, "{{.Name}}")
+		description = replaceTemplatePlaceholder(description, summaryValue, "{{.Summary}}")
+		templatePlan.Tasks[i].Description = description
+	}
+	return templatePlan
+}
+
+func replaceTemplatePlaceholder(value, original, placeholder string) string {
+	original = strings.TrimSpace(original)
+	if original == "" {
+		return value
+	}
+	return strings.ReplaceAll(value, original, placeholder)
+}
+
+func formatUSDFloat(micros int64) float64 {
+	if micros <= 0 {
+		return 0
+	}
+	return float64(micros) / 1_000_000
+}
+
+func formatUSDBudgetFloat(cents int64) float64 {
+	if cents <= 0 {
+		return 0
+	}
+	return float64(cents) / 100
+}
+
+func exportedFilesLabel(hasState bool) string {
+	if hasState {
+		return "plan.json, state.json, summary.json, template.json"
+	}
+	return "plan.json, summary.json, template.json"
+}
+
+func writeRawFile(path string, data []byte) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("create output directory: %w", err)
+	}
+	tmpPath := path + ".tmp"
+	if err := os.WriteFile(tmpPath, data, 0o644); err != nil {
+		return fmt.Errorf("write tmp file %s: %w", tmpPath, err)
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		return fmt.Errorf("rename tmp file %s: %w", path, err)
+	}
+	return nil
+}
+
 func isValidPlanSlug(slug string) bool {
 	return planSlugRegex.MatchString(strings.TrimSpace(slug))
 }
@@ -1538,12 +2014,30 @@ func printPlanStatus(r *Renderer, status domain.PlanStatus) error {
 	if status.StateFile == "" {
 		r.KV("State:", "not started")
 		r.KV("Tasks:", fmt.Sprintf("%d (all pending)", status.Total))
+		if costLine := formatPlanStatusCost(status); costLine != "" {
+			r.KV("Cost:", costLine)
+		}
+		if status.ExecutionPolicy.MaxParallelTasks > 1 {
+			r.KV("Parallel:", fmt.Sprintf("%d task(s) per wave", status.ExecutionPolicy.MaxParallelTasks))
+		}
 		return nil
 	}
 
 	r.KV("State:", status.StateFile)
 	r.KV("Updated:", fallback(status.UpdatedAt, "-"))
 	r.KV("Progress:", fmt.Sprintf("%d/%d tasks done", status.Done, status.Total))
+	if costLine := formatPlanStatusCost(status); costLine != "" {
+		r.KV("Cost:", costLine)
+	}
+	if taskLimit := status.ExecutionPolicy.Cost.TaskLimitCents; taskLimit > 0 {
+		r.KV("Task Cost Limit:", formatUSDFromMicrosCLI(centsToMicrosCLI(taskLimit)))
+	}
+	if status.ExecutionPolicy.MaxParallelTasks > 1 {
+		r.KV("Parallel:", fmt.Sprintf("%d task(s) per wave", status.ExecutionPolicy.MaxParallelTasks))
+	}
+	if !costBudgetEnforcedCLI(status.ExecutionPolicy.Cost) {
+		r.KV("Cost Mode:", "warn-only")
+	}
 	if status.Outcome != "" {
 		outcome := string(status.Outcome)
 		if status.Outcome == domain.RunSuccess {
@@ -1602,4 +2096,70 @@ func fallback(value, defaultValue string) string {
 		return defaultValue
 	}
 	return value
+}
+
+func formatPlanStatusCost(status domain.PlanStatus) string {
+	total := formatUSDFromMicrosCLI(status.TotalCostMicros)
+	limitCents := status.ExecutionPolicy.Cost.PlanLimitCents
+	if limitCents <= 0 {
+		if status.TotalCostMicros == 0 {
+			return ""
+		}
+		return total + " (no plan limit)"
+	}
+	limitMicros := centsToMicrosCLI(limitCents)
+	percent := 0.0
+	if limitMicros > 0 {
+		percent = (float64(status.TotalCostMicros) / float64(limitMicros)) * 100
+	}
+	return fmt.Sprintf("%s / %s (%.1f%%)", total, formatUSDFromMicrosCLI(limitMicros), percent)
+}
+
+func formatUSDFromMicrosCLI(micros int64) string {
+	return fmt.Sprintf("$%.4f", float64(micros)/1_000_000)
+}
+
+func centsToMicrosCLI(cents int64) int64 {
+	if cents <= 0 {
+		return 0
+	}
+	return cents * 10_000
+}
+
+func costBudgetEnforcedCLI(policy domain.CostPolicy) bool {
+	return policy.Enforce == nil || *policy.Enforce
+}
+
+func printPlanRunSummary(out io.Writer, r *Renderer, summary domain.RunSummary) error {
+	if summary.TotalTimeS == 0 && summary.TotalCostUSD == 0 && len(summary.ByActor) == 0 &&
+		summary.TasksDone == 0 && summary.TasksFailed == 0 && summary.TasksRetried == 0 &&
+		summary.Stalls == 0 && summary.Fallbacks == 0 {
+		return nil
+	}
+	r.Header("Run Summary")
+	r.KV("Tasks:", fmt.Sprintf("done=%d failed=%d retried=%d", summary.TasksDone, summary.TasksFailed, summary.TasksRetried))
+	r.KV("Cost:", fmt.Sprintf("$%.4f", summary.TotalCostUSD))
+	r.KV("Time:", fmt.Sprintf("%.1fs", summary.TotalTimeS))
+	r.KV("Signals:", fmt.Sprintf("stalls=%d fallbacks=%d", summary.Stalls, summary.Fallbacks))
+	if len(summary.ByActor) == 0 {
+		return nil
+	}
+
+	keys := make([]string, 0, len(summary.ByActor))
+	for key := range summary.ByActor {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
+	if _, err := fmt.Fprintln(out, "\nActor                 Calls  Retries  Stalls   Cost       Time"); err != nil {
+		return err
+	}
+	for _, key := range keys {
+		stats := summary.ByActor[key]
+		if _, err := fmt.Fprintf(out, "%-20s %5d  %7d  %6d  $%0.4f  %0.1fs\n",
+			key, stats.Calls, stats.Retries, stats.Stalls, stats.CostUSD, stats.TimeS); err != nil {
+			return err
+		}
+	}
+	return nil
 }

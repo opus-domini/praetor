@@ -1,5 +1,7 @@
 package prompt
 
+import "github.com/opus-domini/praetor/internal/domain"
+
 // ExecutorSystemData holds template data for the executor system prompt.
 type ExecutorSystemData struct {
 	ProjectContext string
@@ -11,7 +13,7 @@ type ExecutorSystemData struct {
 type ExecutorTaskData struct {
 	IsRetry          bool
 	RetryAttempt     int
-	PreviousFeedback string
+	PreviousFeedback []domain.TaskFeedback
 	TaskTitle        string
 	TaskID           string
 	TaskIndex        int

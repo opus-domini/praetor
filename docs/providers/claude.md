@@ -1,6 +1,6 @@
 # Claude
 
-Adapter for [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (`@anthropic-ai/claude-code`). Uses the `stream-json` output format for structured JSONL streaming with cost tracking.
+Adapter for [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (`@anthropic-ai/claude-code`). Uses provider-native structured output for planning and `stream-json` for pipeline execution/review with cost tracking.
 
 ## Overview
 
@@ -15,7 +15,28 @@ Adapter for [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (`@ant
 
 ## Command construction
 
-### Streaming path (Plan, Review, Execute in pipeline)
+### Planner path (`Plan()`)
+
+```
+claude -p \
+  --no-session-persistence \
+  --verbose \
+  --output-format json \
+  --tools "" \
+  --disable-slash-commands \
+  --json-schema '<plan-schema-json>' \
+  [--model <model>] \
+  [--append-system-prompt <systemPrompt>] \
+  <prompt>
+```
+
+- Prompt is a positional argument.
+- `UsePTY = false` to force a single validated result.
+- `--json-schema` constrains the final response to the plan shape.
+- `--tools ""` and `--disable-slash-commands` prevent planner-side tool execution and skill expansion.
+- Praetor intentionally does **not** use Claude's interactive plan mode, because that returns planning-event envelopes instead of a deterministic planner payload.
+
+### Streaming path (Review and Execute in pipeline)
 
 ```
 claude -p \
@@ -58,11 +79,13 @@ The adapter reads a JSONL stream from stdout. Each line is a JSON event with a `
 
 ### One-shot (`json`)
 
-Single JSON object:
+Claude returns a result envelope. When schema output is enabled, the final structured payload is carried in `structured_output`:
 
 ```json
 {
+  "type": "result",
   "result": "...",
+  "structured_output": { "...": "..." },
   "model": "...",
   "cost_usd": 0.042
 }
@@ -74,18 +97,18 @@ Falls back to raw stdout if JSON parsing fails.
 
 | Phase | Method | Path | System prompt |
 |---|---|---|---|
-| Plan | `Plan()` | Streaming | `adapter.plan.claude.tmpl` via `--append-system-prompt` |
+| Plan | `Plan()` | One-shot JSON schema | `adapter.plan.claude.tmpl` via `--append-system-prompt` |
 | Execute | `Execute()` | Streaming | Via `--append-system-prompt` if provided |
 | Execute (one-shot) | `Execute(OneShot=true)` | One-shot JSON | Via `--append-system-prompt` if provided |
 | Review | `Review()` | Streaming | Via `--append-system-prompt` if provided |
 
-For `Plan()`, the prompt is rendered using the `adapter.plan.claude.tmpl` template (or hardcoded fallback if no prompt engine is available). The system prompt instructs Claude to return valid JSON only.
+For `Plan()`, the prompt is rendered using the `adapter.plan.claude.tmpl` template (or hardcoded fallback if no prompt engine is available). Praetor does not rely only on prompt wording: it also enforces Claude's native `--json-schema` contract and disables planner tools.
 
 For `Review()`, the adapter calls `ParseReview()` on the output to extract `DECISION: PASS/FAIL` and `REASON:` lines.
 
 ## Cost tracking
 
-Claude's `stream-json` format includes `cost_usd` in result events. This is propagated through `PlanResponse.CostUSD`, `ExecuteResponse.CostUSD`, and `ReviewResponse.CostUSD` for the metrics middleware and cost ledger.
+Claude's `json` and `stream-json` formats include `cost_usd`. This is propagated through `PlanResponse.CostUSD`, `ExecuteResponse.CostUSD`, and `ReviewResponse.CostUSD` for the metrics middleware and cost ledger.
 
 ## tmux integration
 

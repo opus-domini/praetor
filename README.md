@@ -33,24 +33,28 @@ It orchestrates 9 AI agent providers through a single execution surface with dep
 ## Core Capabilities
 
 - **Plan execution** — run JSON plans with dependencies via `praetor plan run`.
+- **Plan templates** — bootstrap plans from project, global, or builtin templates with `praetor plan create --from-template`, then package them with `praetor plan export`.
 - **Agents** — 9 built-in providers: `claude`, `codex`, `copilot`, `gemini`, `kimi`, `lmstudio`, `opencode`, `openrouter`, and `ollama`.
 - **Plan-and-Execute** — optional planner phase (`--objective`) followed by execute/review gates.
 - **FSM runtime** — loop modeled as explicit states with `max-iterations` and `max-transitions` guard rails.
 - **Runner modes** — `tmux`, `direct`, and `pty` under a unified runtime contract.
 - **Fallback engine** — error-classified failover: per-agent mapping, transient, and auth fallback modes.
 - **Stall detection** — sliding-window similarity detection with escalation (fallback agent → budget reduction → fail).
-- **Context budget** — character-level prompt truncation for executor and reviewer phases.
+- **Prompt budget** — character-level prompt truncation for executor and reviewer phases.
+- **Cost governance** — plan/task USD budgets with warnings, summaries, and optional hard enforcement.
+- **Parallel waves** — dependency-aware concurrent task execution with deterministic merge ordering and conflict requeue.
 - **Intelligent routing** — live health-probe-based auto-selection when the preferred agent is unavailable.
 - **Quality gates** — required and optional gate enforcement in plan execution.
 - **Host-executed gates** — `tests`, `lint`, `standards` run locally with structured results and diagnostics.
 - **Operational evals** — local flow analysis via `praetor plan eval` (plan level) and `praetor eval` (project level).
 - **Workspace context** — automatic manifest discovery from `praetor.yaml` / `praetor.md`.
 - **Prompt templates** — 8 embedded templates with project-level overlay via `.praetor/prompts/`.
+- **Structured feedback** — reviewer and gate feedback persisted as JSONL and reinjected into retry prompts.
 - **Post-task hooks** — arbitrary script execution after executor, before reviewer (`--hook`).
 - **Recovery** — automatic snapshot inspection plus manual `praetor plan resume`.
 - **Retention** — local runtime pruning with `--keep-last-runs`.
-- **Observability** — JSONL event stream, performance diagnostics, checkpoint history, cost ledger, and per-task logs.
-- **Health checks** — `praetor doctor` probes all agents for availability and version info.
+- **Observability** — JSONL event stream, performance diagnostics, checkpoint history, cost ledger, actor summaries, and per-task logs.
+- **Health checks** — `praetor doctor` returns structured checks, binary/endpoint paths, parsed versions, and remediation hints.
 - **Configuration** — persistent config with `praetor config` (show, set, path, edit, init).
 
 ## Providers
@@ -112,17 +116,25 @@ praetor doctor
 # Create a plan from a brief (agent-assisted by default)
 praetor plan create "Implement JWT auth with tests and docs"
 
+# Or render a reusable template from project/global/builtin registry
+praetor plan create --from-template go-feature \
+  --var Name=auth \
+  --var Summary="Implement JWT auth"
+
 # Run plan (default runner: tmux)
 praetor plan run implement-jwt-auth-with-tests-and-docs
 ```
 
-### Run with direct mode (no tmux)
+### Run with cost and parallel guard rails
 
 ```bash
 praetor plan run my-plan \
   --runner direct \
   --executor codex \
   --reviewer claude \
+  --plan-cost-budget-usd 5 \
+  --task-cost-budget-usd 1 \
+  --max-parallel-tasks 2 \
   --max-retries 3 \
   --max-transitions 200
 ```
@@ -138,9 +150,17 @@ praetor plan run my-plan \
 ### Check status and resume
 
 ```bash
+praetor plan status my-plan --verbose
 praetor plan status my-plan
 praetor plan list
 praetor plan resume my-plan
+```
+
+### Export a plan bundle
+
+```bash
+praetor plan export my-plan
+praetor plan export my-plan --output ./.praetor/exports/my-plan --force
 ```
 
 ### Diagnose a run
@@ -177,6 +197,7 @@ praetor exec --provider openrouter --model anthropic/claude-sonnet-4 "Review thi
 |---|---|
 | `praetor plan run <slug>` | Execute orchestration pipeline |
 | `praetor plan create [brief]` | Create a plan from text/markdown input |
+| `praetor plan export <slug>` | Export plan, state, summary, and reusable template |
 | `praetor plan status <slug>` | Inspect state and progress |
 | `praetor plan list` | List tracked plans for current project |
 | `praetor plan show <slug>` | Print plan JSON to stdout |
@@ -204,6 +225,8 @@ praetor exec --provider openrouter --model anthropic/claude-sonnet-4 "Review thi
 - Home directory: `$PRAETOR_HOME` > `$XDG_CONFIG_HOME/praetor` > `~/.config/praetor`.
 - All state is isolated per git project under `<home>/projects/<project-key>/`.
 - Plans are identified by slug and stored in `<project>/plans/<slug>.json`.
+- Plan templates are resolved from `<project-root>/.praetor/templates/`, `<praetor-home>/templates/`, then builtin templates.
+- Structured feedback and runtime artifacts live under `<project>/feedback/<slug>/` and `<project>/runtime/<run-id>/`.
 - Manifest discovery order: `praetor.yaml` > `praetor.yml` > `praetor.md`.
 
 ## Documentation

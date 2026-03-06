@@ -34,11 +34,17 @@ Updating one file updates all agents simultaneously. No drift between agent beha
 
 | Command | Description | Allowed Tools |
 |---|---|---|
-| `praetor-plan-create` | Create a structured execution plan | Read, Glob, Grep, git |
-| `praetor-plan-run` | Execute an existing praetor plan | praetor CLI only |
+| `praetor-plan-create` | Create a structured execution plan from a brief or reusable template | Read, Glob, Grep, git |
+| `praetor-plan-run` | Execute an existing praetor plan with review, gates, and runtime policies | praetor CLI only |
 | `praetor-review-task` | Review executor output against criteria | Read, Grep, make test/lint |
-| `praetor-doctor` | Check agent provider health | praetor doctor |
-| `praetor-diagnose` | Debug a plan run | praetor CLI, Read |
+| `praetor-doctor` | Check agent provider health with structured environment diagnostics | praetor doctor |
+| `praetor-diagnose` | Debug a plan run with summary, actor, and cost diagnostics | praetor CLI, Read |
+
+Operational notes:
+
+- `praetor-plan-create` can drive `praetor plan create --from-template <name>` when the request maps to a reusable plan scaffold.
+- `praetor-diagnose` can query `summary` to inspect actor-level retries, stalls, and cost distribution.
+- `praetor-doctor` surfaces binary paths, endpoint details, parsed versions, and hints from `checks[]`.
 
 Each command declares which tools the agent is allowed to use, implementing a **least-privilege model** for AI agents.
 

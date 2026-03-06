@@ -18,8 +18,7 @@
       "additionalProperties": false,
       "properties": {
         "source": {
-          "type": "string",
-          "enum": ["manual", "agent"]
+          "type": "string"
         },
         "created_at": {
           "type": "string",
@@ -88,15 +87,29 @@
               "type": "integer",
               "minimum": 1
             },
+            "max_parallel_tasks": {
+              "type": "integer",
+              "minimum": 1
+            },
             "timeout": {
               "type": "string"
             },
-            "budget": {
+            "prompt_budget": {
               "type": "object",
               "additionalProperties": false,
               "properties": {
-                "execute": {"type": "integer", "minimum": 1},
-                "review": {"type": "integer", "minimum": 1}
+                "executor_chars": {"type": "integer", "minimum": 1},
+                "reviewer_chars": {"type": "integer", "minimum": 1}
+              }
+            },
+            "cost": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "plan_limit_cents": {"type": "integer", "minimum": 1},
+                "task_limit_cents": {"type": "integer", "minimum": 1},
+                "warn_threshold": {"type": "number", "minimum": 0, "maximum": 1},
+                "enforce": {"type": "boolean"}
               }
             },
             "stall_detection": {

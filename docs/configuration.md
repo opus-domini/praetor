@@ -56,6 +56,8 @@ Sets a config key and persists it to the config file. Values are validated again
 ```bash
 praetor config set executor claude
 praetor config set max-retries 5
+praetor config set max-parallel-tasks 3
+praetor config set plan-cost-budget-usd 15
 praetor config set timeout 30m
 praetor config set no-review true
 
@@ -134,7 +136,12 @@ Rules:
 | `max-iterations` | int | `0` | Maximum loop iterations (0 = unlimited) |
 | `max-transitions` | int | `0` | Maximum FSM state transitions (0 = unlimited) |
 | `keep-last-runs` | int | `20` | Keep only the most recent N runs (0 = no pruning) |
+| `max-parallel-tasks` | int | `1` | Maximum number of independent tasks to execute concurrently per wave |
 | `timeout` | duration | `0s` | Run timeout (e.g. 30m, 2h); 0 = no timeout |
+| `plan-cost-budget-usd` | float | `0` | Plan-level cost budget in USD (0 = disabled) |
+| `task-cost-budget-usd` | float | `0` | Per-task cost budget in USD (0 = disabled) |
+| `cost-budget-warn-threshold` | float | `0.8` | Emit warnings when cumulative cost reaches this fraction of the configured budget |
+| `cost-budget-enforce` | bool | `true` | Stop execution when a configured cost budget is exceeded |
 
 ### Runtime
 
@@ -186,7 +193,7 @@ Rules:
 The effective runtime configuration follows this precedence (highest wins):
 
 ```
-CLI flags > project config section > global config > plan.settings > defaults
+CLI flags > plan.settings > project config section > global config > defaults
 ```
 
 ```mermaid
@@ -195,19 +202,25 @@ config:
   theme: dark
 ---
 flowchart TD
-    A[CLI flags] --> B[project config section]
-    B --> C[global config]
-    C --> D[plan.settings]
+    A[CLI flags] --> B[plan.settings]
+    B --> C[project config section]
+    C --> D[global config]
     D --> E[built-in defaults]
 ```
 
 This means:
 
 1. Explicit CLI flags always win.
-2. Project section `[projects."<path>"]` overrides global config.
-3. Global config section values are applied before plan loading.
-4. Plan-level settings (`settings.agents`, `settings.execution_policy`) only apply for fields not already set by CLI or config (checked via `*Set bool` fields).
+2. Plan-level settings (`settings.agents`, `settings.execution_policy`) override config-derived defaults for that specific plan.
+3. Project section `[projects."<path>"]` overrides global config.
+4. Global config section values are applied before plan loading.
 5. Built-in defaults are the final fallback.
+
+Implementation note:
+
+- Config values are copied into command defaults before the plan is loaded.
+- Only explicit CLI flags mark a field as "user set".
+- As a result, `plan.settings` can override config values, but never explicit CLI flags.
 
 ## Example configurations
 
@@ -226,7 +239,11 @@ executor = "codex"
 reviewer = "claude"
 planner = "claude"
 max-retries = 5
+max-parallel-tasks = 2
 timeout = "1h"
+plan-cost-budget-usd = 20
+task-cost-budget-usd = 3
+cost-budget-warn-threshold = 0.75
 runner = "tmux"
 isolation = "worktree"
 
@@ -255,6 +272,7 @@ lmstudio-url = "http://localhost:1234"
 executor = "claude"
 hook = "./scripts/lint.sh"
 no-review = true
+cost-budget-enforce = false
 
 # Project: longer timeout for large refactors
 [projects."/home/hugo/legacy-monolith"]
