@@ -116,6 +116,9 @@ praetor doctor
 # Create a plan from a brief (agent-assisted by default)
 praetor plan create "Implement JWT auth with tests and docs"
 
+# Or use the interactive wizard in a TTY to probe available providers and choose planner/executor/reviewer first
+praetor plan create
+
 # Or render a reusable template from project/global/builtin registry
 praetor plan create --from-template feature \
   --var Name=auth \

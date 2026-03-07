@@ -8,6 +8,7 @@ Praetor orchestrates plans with a strict JSON schema and a Plan -> Execute -> Re
 
 ```bash
 praetor plan create "Implement user authentication with JWT and tests"
+praetor plan create
 praetor plan create --from-file docs/brief.md
 cat brief.md | praetor plan create --stdin
 praetor plan create --from-template feature --var Name="JWT auth" --var Summary="Implement JWT auth"
@@ -15,7 +16,9 @@ praetor plan create --from-template feature --var Name="JWT auth" --var Summary=
 
 Useful flags:
 
+- In an interactive TTY with no explicit brief source, `praetor plan create` opens a wizard, probes local provider availability, and lets you choose `planner`, `executor`, and `reviewer` before capturing the brief.
 - `--planner <agent>` and `--planner-model <model>`: override planner defaults.
+- `--executor <agent>` and `--reviewer <agent>`: write explicit execution defaults into the generated plan.
 - `--planner-timeout <duration>`: cap total planner generation time (e.g. `5m`, `12m`); `0` disables timeout.
 - `--slug <slug>`: force a specific slug.
 - `--dry-run`: print generated JSON without writing a file.

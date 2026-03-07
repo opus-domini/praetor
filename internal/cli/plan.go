@@ -60,6 +60,8 @@ func newPlanCreateCmd() *cobra.Command {
 	var noColor bool
 	var slugOverride string
 	var plannerAgent string
+	var executorAgent string
+	var reviewerAgent string
 	var plannerModel string
 	var plannerTimeout time.Duration
 	var templateVars []string
@@ -96,21 +98,33 @@ func newPlanCreateCmd() *cobra.Command {
 				return cfgErr
 			}
 
-			effectivePlanner := strings.TrimSpace(plannerAgent)
-			if effectivePlanner == "" {
-				effectivePlanner = strings.TrimSpace(cfg.Planner)
+			agents, err := resolvePlanCreateAgentSelection(cfg, plannerAgent, executorAgent, reviewerAgent)
+			if err != nil {
+				return err
 			}
-			if effectivePlanner == "" {
-				effectivePlanner = string(domain.AgentClaude)
-			}
-			effectivePlanner = string(domain.NormalizeAgent(domain.Agent(effectivePlanner)))
-			if _, ok := domain.ValidExecutors[domain.Agent(effectivePlanner)]; !ok {
-				return fmt.Errorf("invalid planner agent %q", effectivePlanner)
-			}
-
 			effectivePlannerModel := strings.TrimSpace(plannerModel)
+			plannerExplicit := cmd.Flags().Changed("planner")
+			executorExplicit := cmd.Flags().Changed("executor")
+			reviewerExplicit := cmd.Flags().Changed("reviewer")
 			plan := domain.Plan{}
 			brief := ""
+			wizardUsed := false
+			if shouldUsePlanCreateWizard(args, fromFile, fromStdin, fromTemplate, noAgent, cmd.InOrStdin(), out) {
+				wizardResult, wizardErr := runPlanCreateWizard(cmd.Context(), cmd.InOrStdin(), out, agents, cfg)
+				switch {
+				case wizardErr == nil:
+					agents = wizardResult.Agents
+					brief = strings.TrimSpace(wizardResult.Brief)
+					wizardUsed = true
+					plannerExplicit = true
+					executorExplicit = true
+					reviewerExplicit = true
+				case errors.Is(wizardErr, errPlanCreateWizardCanceled):
+					return wizardErr
+				default:
+					render.Warn(fmt.Sprintf("Interactive wizard unavailable (%v). Falling back to plain brief input.", wizardErr))
+				}
+			}
 			if strings.TrimSpace(fromTemplate) != "" {
 				if strings.TrimSpace(fromFile) != "" || fromStdin {
 					return errors.New("--from-template cannot be combined with --from-file or --stdin")
@@ -144,7 +158,9 @@ func newPlanCreateCmd() *cobra.Command {
 
 				render.Header("Plan Template")
 				render.KV("Template:", templatePath)
-				render.KV("Planner:", effectivePlanner)
+				render.KV("Planner:", string(agents.Planner))
+				render.KV("Executor:", string(agents.Executor))
+				render.KV("Reviewer:", string(agents.Reviewer))
 				templated, renderErr := config.RenderTemplate(templatePath, vars)
 				if renderErr != nil {
 					return renderErr
@@ -152,28 +168,36 @@ func newPlanCreateCmd() *cobra.Command {
 				plan = *templated
 				render.Success("Template rendered successfully.")
 			} else if noAgent {
-				brief, err = resolvePlanCreateBrief(args, fromFile, fromStdin, cmd.InOrStdin(), out)
-				if err != nil {
-					return err
+				if !wizardUsed {
+					brief, err = resolvePlanCreateBrief(args, fromFile, fromStdin, cmd.InOrStdin(), out)
+					if err != nil {
+						return err
+					}
 				}
 				render.Info("Using template mode (--no-agent).")
-				plan = buildNoAgentPlanTemplate(brief, effectivePlanner, effectivePlannerModel)
+				plan = buildNoAgentPlanTemplate(brief, string(agents.Planner), effectivePlannerModel, string(agents.Executor), string(agents.Reviewer))
 			} else {
-				brief, err = resolvePlanCreateBrief(args, fromFile, fromStdin, cmd.InOrStdin(), out)
-				if err != nil {
-					return err
+				if !wizardUsed {
+					brief, err = resolvePlanCreateBrief(args, fromFile, fromStdin, cmd.InOrStdin(), out)
+					if err != nil {
+						return err
+					}
 				}
 				plannerModelLabel := strings.TrimSpace(effectivePlannerModel)
 				if plannerModelLabel == "" {
 					plannerModelLabel = "default"
 				}
 				render.Header("Plan Generation")
-				render.KV("Planner:", effectivePlanner)
+				render.KV("Planner:", string(agents.Planner))
+				render.KV("Executor:", string(agents.Executor))
+				render.KV("Reviewer:", string(agents.Reviewer))
 				render.KV("Model:", plannerModelLabel)
 				render.Info("Brief captured. Starting planner generation...")
 				plan, err = createPlanWithAgent(cmd.Context(), planCreateAgentRequest{
 					Brief:          brief,
-					PlannerAgent:   domain.Agent(effectivePlanner),
+					PlannerAgent:   agents.Planner,
+					ExecutorAgent:  agents.Executor,
+					ReviewerAgent:  agents.Reviewer,
 					PlannerModel:   effectivePlannerModel,
 					PlannerTimeout: plannerTimeout,
 					ProjectRoot:    projectRoot,
@@ -193,11 +217,16 @@ func newPlanCreateCmd() *cobra.Command {
 				source = "template:" + strings.TrimSpace(strings.TrimSuffix(fromTemplate, ".json"))
 			}
 			if err := finalizePlanMetadata(&plan, planFinalizeInput{
-				Brief:        brief,
-				Source:       source,
-				CreatedBy:    author,
-				PlannerAgent: domain.Agent(effectivePlanner),
-				PlannerModel: effectivePlannerModel,
+				Brief:         brief,
+				Source:        source,
+				CreatedBy:     author,
+				PlannerAgent:  agents.Planner,
+				PlannerModel:  effectivePlannerModel,
+				ForcePlanner:  !noAgent && strings.TrimSpace(fromTemplate) == "" || plannerExplicit,
+				ExecutorAgent: agents.Executor,
+				ForceExecutor: executorExplicit || wizardUsed,
+				ReviewerAgent: agents.Reviewer,
+				ForceReviewer: reviewerExplicit || wizardUsed,
 			}); err != nil {
 				return err
 			}
@@ -259,6 +288,8 @@ func newPlanCreateCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&noAgent, "no-agent", false, "Generate a minimal plan template without calling a planner agent")
 	cmd.Flags().StringVar(&slugOverride, "slug", "", "Explicit slug override (default: auto-generated from plan name)")
 	cmd.Flags().StringVar(&plannerAgent, "planner", "", "Planner agent override (default: config planner or claude)")
+	cmd.Flags().StringVar(&executorAgent, "executor", "", "Default executor agent to write into the generated plan")
+	cmd.Flags().StringVar(&reviewerAgent, "reviewer", "", "Default reviewer agent to write into the generated plan")
 	cmd.Flags().StringVar(&plannerModel, "planner-model", "", "Planner model override")
 	cmd.Flags().DurationVar(&plannerTimeout, "planner-timeout", 0, "Planner generation timeout (e.g. 3m, 10m); 0 disables timeout")
 	cmd.Flags().StringArrayVar(&templateVars, "var", nil, "Template variable in key=value form (repeatable)")
@@ -1290,6 +1321,8 @@ func resolveStore(projectDir string) (*localstate.Store, error) {
 type planCreateAgentRequest struct {
 	Brief          string
 	PlannerAgent   domain.Agent
+	ExecutorAgent  domain.Agent
+	ReviewerAgent  domain.Agent
 	PlannerModel   string
 	PlannerTimeout time.Duration
 	ProjectRoot    string
@@ -1301,11 +1334,16 @@ type planCreateAgentRequest struct {
 const plannerCreateMaxAttempts = 2
 
 type planFinalizeInput struct {
-	Brief        string
-	Source       string
-	CreatedBy    string
-	PlannerAgent domain.Agent
-	PlannerModel string
+	Brief         string
+	Source        string
+	CreatedBy     string
+	PlannerAgent  domain.Agent
+	PlannerModel  string
+	ForcePlanner  bool
+	ExecutorAgent domain.Agent
+	ForceExecutor bool
+	ReviewerAgent domain.Agent
+	ForceReviewer bool
 }
 
 type planExportSummary struct {
@@ -1462,6 +1500,11 @@ func createPlanWithAgent(ctx context.Context, req planCreateAgentRequest) (domai
 	if manifest, manifestErr := workspace.ReadManifest(req.ProjectRoot); manifestErr == nil {
 		projectContext = manifest.Context
 	}
+	projectContext = composePlanCreateProjectContext(projectContext, planCreateAgentSelection{
+		Planner:  req.PlannerAgent,
+		Executor: req.ExecutorAgent,
+		Reviewer: req.ReviewerAgent,
+	})
 	plannerCtx := ctx
 	var cancel context.CancelFunc
 	if req.PlannerTimeout > 0 {
@@ -1715,7 +1758,7 @@ func parseTemplateVars(values []string) (map[string]string, error) {
 	return vars, nil
 }
 
-func buildNoAgentPlanTemplate(brief, plannerAgent, plannerModel string) domain.Plan {
+func buildNoAgentPlanTemplate(brief, plannerAgent, plannerModel, executorAgent, reviewerAgent string) domain.Plan {
 	name := derivePlanName(brief)
 	summary := derivePlanSummary(brief)
 	return domain.Plan{
@@ -1724,8 +1767,8 @@ func buildNoAgentPlanTemplate(brief, plannerAgent, plannerModel string) domain.P
 		Settings: domain.PlanSettings{
 			Agents: domain.PlanAgents{
 				Planner:  domain.PlanAgentConfig{Agent: domain.Agent(plannerAgent), Model: strings.TrimSpace(plannerModel)},
-				Executor: domain.PlanAgentConfig{Agent: domain.AgentCodex},
-				Reviewer: domain.PlanAgentConfig{Agent: domain.AgentClaude},
+				Executor: domain.PlanAgentConfig{Agent: domain.NormalizeAgent(domain.Agent(executorAgent))},
+				Reviewer: domain.PlanAgentConfig{Agent: domain.NormalizeAgent(domain.Agent(reviewerAgent))},
 			},
 		},
 		Tasks: []domain.Task{
@@ -1773,16 +1816,23 @@ func finalizePlanMetadata(plan *domain.Plan, in planFinalizeInput) error {
 		plan.Meta.Generator.PromptHash = "sha256:" + hex.EncodeToString(sum[:])
 	}
 
-	if planner := domain.NormalizeAgent(plan.Settings.Agents.Planner.Agent); planner == "" {
+	if in.ForcePlanner && domain.NormalizeAgent(in.PlannerAgent) != "" {
+		plan.Settings.Agents.Planner.Agent = domain.NormalizeAgent(in.PlannerAgent)
+		plan.Settings.Agents.Planner.Model = strings.TrimSpace(in.PlannerModel)
+	} else if planner := domain.NormalizeAgent(plan.Settings.Agents.Planner.Agent); planner == "" {
 		plan.Settings.Agents.Planner.Agent = domain.NormalizeAgent(in.PlannerAgent)
 	}
 	if strings.TrimSpace(plan.Settings.Agents.Planner.Model) == "" {
 		plan.Settings.Agents.Planner.Model = strings.TrimSpace(in.PlannerModel)
 	}
-	if executor := domain.NormalizeAgent(plan.Settings.Agents.Executor.Agent); executor == "" {
+	if in.ForceExecutor && domain.NormalizeAgent(in.ExecutorAgent) != "" {
+		plan.Settings.Agents.Executor.Agent = domain.NormalizeAgent(in.ExecutorAgent)
+	} else if executor := domain.NormalizeAgent(plan.Settings.Agents.Executor.Agent); executor == "" {
 		plan.Settings.Agents.Executor.Agent = domain.AgentCodex
 	}
-	if reviewer := domain.NormalizeAgent(plan.Settings.Agents.Reviewer.Agent); reviewer == "" {
+	if in.ForceReviewer && domain.NormalizeAgent(in.ReviewerAgent) != "" {
+		plan.Settings.Agents.Reviewer.Agent = domain.NormalizeAgent(in.ReviewerAgent)
+	} else if reviewer := domain.NormalizeAgent(plan.Settings.Agents.Reviewer.Agent); reviewer == "" {
 		plan.Settings.Agents.Reviewer.Agent = domain.AgentClaude
 	}
 
