@@ -1,0 +1,30 @@
+{
+  "name": "{{.Name}}",
+  "summary": "{{.Summary}}",
+  "settings": {
+    "agents": {
+      "executor": {"agent": "codex"},
+      "reviewer": {"agent": "claude"}
+    }
+  },
+  "tasks": [
+    {
+      "id": "TASK-001",
+      "title": "Refactor {{.Name}}",
+      "description": "{{.Description}}",
+      "acceptance": [
+        "The target code is simplified without changing intended behavior",
+        "Architecture and file placement remain coherent"
+      ]
+    },
+    {
+      "id": "TASK-002",
+      "title": "Strengthen validation for {{.Name}}",
+      "depends_on": ["TASK-001"],
+      "acceptance": [
+        "Relevant tests cover the refactored behavior",
+        "Lint or static validation passes"
+      ]
+    }
+  ]
+}

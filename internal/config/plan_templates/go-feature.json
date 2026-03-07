@@ -1,0 +1,30 @@
+{
+  "name": "{{.Name}}",
+  "summary": "{{.Summary}}",
+  "settings": {
+    "agents": {
+      "executor": {"agent": "codex"},
+      "reviewer": {"agent": "claude"}
+    }
+  },
+  "tasks": [
+    {
+      "id": "TASK-001",
+      "title": "Implement {{.Name}}",
+      "description": "{{.Description}}",
+      "acceptance": [
+        "The feature is implemented end-to-end",
+        "Relevant tests for the feature are added or updated"
+      ]
+    },
+    {
+      "id": "TASK-002",
+      "title": "Validate {{.Name}}",
+      "depends_on": ["TASK-001"],
+      "acceptance": [
+        "Targeted tests pass",
+        "Lint passes for the touched code"
+      ]
+    }
+  ]
+}

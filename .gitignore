@@ -18,6 +18,8 @@
 !/go.sum
 !/go.mod
 !/.mise.toml
+!/internal/config/plan_templates/
+!/internal/config/plan_templates/*.json
 
 !/.README.md
 !/CONTRIBUTING.md

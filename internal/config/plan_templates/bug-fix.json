@@ -1,0 +1,39 @@
+{
+  "name": "{{.Name}}",
+  "summary": "{{.Summary}}",
+  "settings": {
+    "agents": {
+      "executor": {"agent": "codex"},
+      "reviewer": {"agent": "claude"}
+    }
+  },
+  "tasks": [
+    {
+      "id": "TASK-001",
+      "title": "Investigate {{.Name}}",
+      "description": "{{.Description}}",
+      "acceptance": [
+        "The root cause is identified",
+        "The bug is reproducible or explained with concrete evidence"
+      ]
+    },
+    {
+      "id": "TASK-002",
+      "title": "Fix {{.Name}}",
+      "depends_on": ["TASK-001"],
+      "acceptance": [
+        "The bug is fixed in code",
+        "Risky side effects are addressed in the implementation"
+      ]
+    },
+    {
+      "id": "TASK-003",
+      "title": "Add regression coverage for {{.Name}}",
+      "depends_on": ["TASK-002"],
+      "acceptance": [
+        "A regression test fails before the fix and passes after it",
+        "Relevant validation commands pass"
+      ]
+    }
+  ]
+}
