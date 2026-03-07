@@ -1,0 +1,39 @@
+{
+  "name": "{{.Name}}",
+  "summary": "{{.Summary}}",
+  "settings": {
+    "agents": {
+      "executor": {"agent": "codex"},
+      "reviewer": {"agent": "claude"}
+    }
+  },
+  "tasks": [
+    {
+      "id": "TASK-001",
+      "title": "Define implementation shape for {{.Name}}",
+      "description": "{{.Description}}",
+      "acceptance": [
+        "The feature scope and constraints are captured in the implementation plan",
+        "Interfaces, touched areas, or integration points are identified before coding begins"
+      ]
+    },
+    {
+      "id": "TASK-002",
+      "title": "Implement {{.Name}}",
+      "depends_on": ["TASK-001"],
+      "acceptance": [
+        "The feature is implemented end-to-end",
+        "Edge cases and integration details are handled in the implementation"
+      ]
+    },
+    {
+      "id": "TASK-003",
+      "title": "Validate {{.Name}}",
+      "depends_on": ["TASK-002"],
+      "acceptance": [
+        "Relevant tests are added or updated",
+        "Lint and targeted validation commands pass for the touched code"
+      ]
+    }
+  ]
+}

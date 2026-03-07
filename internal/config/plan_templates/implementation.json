@@ -1,0 +1,39 @@
+{
+  "name": "{{.Name}}",
+  "summary": "{{.Summary}}",
+  "settings": {
+    "agents": {
+      "executor": {"agent": "codex"},
+      "reviewer": {"agent": "claude"}
+    }
+  },
+  "tasks": [
+    {
+      "id": "TASK-001",
+      "title": "Prepare the implementation approach for {{.Name}}",
+      "description": "{{.Description}}",
+      "acceptance": [
+        "The sequence of code changes is defined before execution",
+        "Dependencies, migration needs, or integration touchpoints are identified"
+      ]
+    },
+    {
+      "id": "TASK-002",
+      "title": "Execute the implementation for {{.Name}}",
+      "depends_on": ["TASK-001"],
+      "acceptance": [
+        "The target behavior is implemented in code",
+        "The implementation is coherent with the surrounding architecture"
+      ]
+    },
+    {
+      "id": "TASK-003",
+      "title": "Polish and integrate {{.Name}}",
+      "depends_on": ["TASK-002"],
+      "acceptance": [
+        "Residual inconsistencies or follow-up changes are resolved",
+        "The resulting implementation is ready for formal validation"
+      ]
+    }
+  ]
+}

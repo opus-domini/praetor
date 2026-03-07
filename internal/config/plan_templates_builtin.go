@@ -13,6 +13,9 @@ var builtinPlanTemplates embed.FS
 
 func builtinTemplateData(name string) ([]byte, bool) {
 	name = normalizeTemplateName(name)
+	if alias, ok := builtinTemplateAliases[name]; ok {
+		name = alias
+	}
 	content, err := builtinPlanTemplates.ReadFile("plan_templates/" + name + ".json")
 	if err != nil {
 		return nil, false

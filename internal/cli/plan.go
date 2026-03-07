@@ -72,7 +72,7 @@ func newPlanCreateCmd() *cobra.Command {
 		Example: `  praetor plan create "Implement JWT auth and tests"
   praetor plan create --from-file docs/brief.md
   cat brief.md | praetor plan create --stdin
-  praetor plan create --from-template go-feature --var Name=auth --var Summary="Implement JWT auth"
+  praetor plan create --from-template feature --var Name=auth --var Summary="Implement JWT auth"
   praetor plan create "Refactor billing" --dry-run`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {

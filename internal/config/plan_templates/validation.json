@@ -1,0 +1,39 @@
+{
+  "name": "{{.Name}}",
+  "summary": "{{.Summary}}",
+  "settings": {
+    "agents": {
+      "executor": {"agent": "codex"},
+      "reviewer": {"agent": "claude"}
+    }
+  },
+  "tasks": [
+    {
+      "id": "TASK-001",
+      "title": "Define the validation matrix for {{.Name}}",
+      "description": "{{.Description}}",
+      "acceptance": [
+        "The required test, lint, review, or verification paths are identified",
+        "Success criteria are explicit before validation starts"
+      ]
+    },
+    {
+      "id": "TASK-002",
+      "title": "Execute validation for {{.Name}}",
+      "depends_on": ["TASK-001"],
+      "acceptance": [
+        "Relevant automated and manual checks are run",
+        "Failures are captured with concrete evidence"
+      ]
+    },
+    {
+      "id": "TASK-003",
+      "title": "Close validation findings for {{.Name}}",
+      "depends_on": ["TASK-002"],
+      "acceptance": [
+        "Critical findings are fixed or explicitly accepted",
+        "Residual risk and follow-up actions are documented"
+      ]
+    }
+  ]
+}

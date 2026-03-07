@@ -41,12 +41,24 @@ func TestFindTemplateRespectsPriorityOrder(t *testing.T) {
 func TestFindTemplateFallsBackToBuiltin(t *testing.T) {
 	t.Parallel()
 
-	path, err := FindTemplate("go-feature", t.TempDir())
+	path, err := FindTemplate("feature", t.TempDir())
 	if err != nil {
 		t.Fatalf("find builtin template: %v", err)
 	}
-	if path != "builtin:go-feature" {
-		t.Fatalf("builtin path = %q, want %q", path, "builtin:go-feature")
+	if path != "builtin:feature" {
+		t.Fatalf("builtin path = %q, want %q", path, "builtin:feature")
+	}
+}
+
+func TestFindTemplateBuiltinAlias(t *testing.T) {
+	t.Parallel()
+
+	path, err := FindTemplate("go-feature", t.TempDir())
+	if err != nil {
+		t.Fatalf("find builtin alias: %v", err)
+	}
+	if path != "builtin:feature" {
+		t.Fatalf("builtin alias path = %q, want %q", path, "builtin:feature")
 	}
 }
 
@@ -128,7 +140,7 @@ func TestRenderTemplateRequiresAllVariables(t *testing.T) {
 func TestBuiltinTemplatesRenderValidPlans(t *testing.T) {
 	t.Parallel()
 
-	for _, name := range []string{"go-feature", "bug-fix", "refactor"} {
+	for _, name := range []string{"feature", "bug-fix", "refactor", "discovery", "implementation", "validation", "release"} {
 		name := name
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

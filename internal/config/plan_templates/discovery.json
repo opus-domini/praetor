@@ -1,0 +1,39 @@
+{
+  "name": "{{.Name}}",
+  "summary": "{{.Summary}}",
+  "settings": {
+    "agents": {
+      "executor": {"agent": "codex"},
+      "reviewer": {"agent": "claude"}
+    }
+  },
+  "tasks": [
+    {
+      "id": "TASK-001",
+      "title": "Map the current state of {{.Name}}",
+      "description": "{{.Description}}",
+      "acceptance": [
+        "The current architecture, behavior, or workflow is documented with concrete evidence",
+        "Relevant files, systems, or dependencies are identified"
+      ]
+    },
+    {
+      "id": "TASK-002",
+      "title": "Define scope, constraints, and risks for {{.Name}}",
+      "depends_on": ["TASK-001"],
+      "acceptance": [
+        "The target outcome is clearly scoped",
+        "Constraints, assumptions, and major risks are recorded"
+      ]
+    },
+    {
+      "id": "TASK-003",
+      "title": "Produce an implementation-ready recommendation for {{.Name}}",
+      "depends_on": ["TASK-002"],
+      "acceptance": [
+        "The recommendation is actionable by engineering",
+        "Open questions and follow-up decisions are explicitly called out"
+      ]
+    }
+  ]
+}

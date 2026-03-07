@@ -23,7 +23,7 @@ func TestPlanCreateFromTemplateCreatesPlanFile(t *testing.T) {
 	root := NewRootCmd()
 	root.SetArgs([]string{
 		"plan", "create",
-		"--from-template", "go-feature",
+		"--from-template", "feature",
 		"--var", "Name=Auth API",
 		"--var", "Summary=Implement JWT authentication",
 		"--var", "Description=Implement JWT authentication end-to-end",
@@ -46,11 +46,11 @@ func TestPlanCreateFromTemplateCreatesPlanFile(t *testing.T) {
 	if plan.Name != "Auth API" {
 		t.Fatalf("plan name = %q, want %q", plan.Name, "Auth API")
 	}
-	if len(plan.Tasks) != 2 {
-		t.Fatalf("task count = %d, want 2", len(plan.Tasks))
+	if len(plan.Tasks) != 3 {
+		t.Fatalf("task count = %d, want 3", len(plan.Tasks))
 	}
-	if plan.Meta.Source != "template:go-feature" {
-		t.Fatalf("plan source = %q, want %q", plan.Meta.Source, "template:go-feature")
+	if plan.Meta.Source != "template:feature" {
+		t.Fatalf("plan source = %q, want %q", plan.Meta.Source, "template:feature")
 	}
 }
 
@@ -65,7 +65,7 @@ func TestPlanCreateFromTemplateFailsOnMissingVariable(t *testing.T) {
 	root := NewRootCmd()
 	root.SetArgs([]string{
 		"plan", "create",
-		"--from-template", "go-feature",
+		"--from-template", "feature",
 		"--var", "Name=Auth API",
 		"--no-color",
 	})

@@ -1,0 +1,39 @@
+{
+  "name": "{{.Name}}",
+  "summary": "{{.Summary}}",
+  "settings": {
+    "agents": {
+      "executor": {"agent": "codex"},
+      "reviewer": {"agent": "claude"}
+    }
+  },
+  "tasks": [
+    {
+      "id": "TASK-001",
+      "title": "Prepare release readiness for {{.Name}}",
+      "description": "{{.Description}}",
+      "acceptance": [
+        "Release prerequisites, migration needs, and rollback concerns are identified",
+        "Documentation or operator-facing changes are listed"
+      ]
+    },
+    {
+      "id": "TASK-002",
+      "title": "Ship {{.Name}}",
+      "depends_on": ["TASK-001"],
+      "acceptance": [
+        "The release steps are executed in the correct order",
+        "User-facing and operational artifacts are updated"
+      ]
+    },
+    {
+      "id": "TASK-003",
+      "title": "Verify post-release health for {{.Name}}",
+      "depends_on": ["TASK-002"],
+      "acceptance": [
+        "Post-release signals are checked",
+        "Any follow-up actions are captured with clear ownership"
+      ]
+    }
+  ]
+}

@@ -15,6 +15,10 @@ import (
 
 const builtinTemplatePrefix = "builtin:"
 
+var builtinTemplateAliases = map[string]string{
+	"go-feature": "feature",
+}
+
 type TemplateInfo struct {
 	Name   string `json:"name"`
 	Source string `json:"source"`
@@ -34,6 +38,9 @@ func FindTemplate(name string, projectRoot string) (string, error) {
 		}
 	}
 	if _, ok := builtinTemplateData(name); ok {
+		if alias, exists := builtinTemplateAliases[name]; exists {
+			name = alias
+		}
 		return builtinTemplatePrefix + name, nil
 	}
 	return "", fmt.Errorf("template %q not found", name)
@@ -141,6 +148,9 @@ func loadTemplateContent(tmplPath string) ([]byte, error) {
 	tmplPath = strings.TrimSpace(tmplPath)
 	if strings.HasPrefix(tmplPath, builtinTemplatePrefix) {
 		name := strings.TrimPrefix(tmplPath, builtinTemplatePrefix)
+		if alias, ok := builtinTemplateAliases[normalizeTemplateName(name)]; ok {
+			name = alias
+		}
 		content, ok := builtinTemplateData(name)
 		if !ok {
 			return nil, fmt.Errorf("builtin template %q not found", name)

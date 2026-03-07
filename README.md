@@ -117,7 +117,7 @@ praetor doctor
 praetor plan create "Implement JWT auth with tests and docs"
 
 # Or render a reusable template from project/global/builtin registry
-praetor plan create --from-template go-feature \
+praetor plan create --from-template feature \
   --var Name=auth \
   --var Summary="Implement JWT auth"
 
@@ -226,6 +226,7 @@ praetor exec --provider openrouter --model anthropic/claude-sonnet-4 "Review thi
 - All state is isolated per git project under `<home>/projects/<project-key>/`.
 - Plans are identified by slug and stored in `<project>/plans/<slug>.json`.
 - Plan templates are resolved from `<project-root>/.praetor/templates/`, `<praetor-home>/templates/`, then builtin templates.
+- Builtin templates are software-engineering oriented: `feature`, `bug-fix`, `refactor`, `discovery`, `implementation`, `validation`, and `release`.
 - Structured feedback and runtime artifacts live under `<project>/feedback/<slug>/` and `<project>/runtime/<run-id>/`.
 - Manifest discovery order: `praetor.yaml` > `praetor.yml` > `praetor.md`.
 

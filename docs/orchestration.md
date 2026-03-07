@@ -10,7 +10,7 @@ Praetor orchestrates plans with a strict JSON schema and a Plan -> Execute -> Re
 praetor plan create "Implement user authentication with JWT and tests"
 praetor plan create --from-file docs/brief.md
 cat brief.md | praetor plan create --stdin
-praetor plan create --from-template go-feature --var Name="JWT auth" --var Summary="Implement JWT auth"
+praetor plan create --from-template feature --var Name="JWT auth" --var Summary="Implement JWT auth"
 ```
 
 Useful flags:
@@ -21,6 +21,7 @@ Useful flags:
 - `--dry-run`: print generated JSON without writing a file.
 - `--no-agent`: generate a minimal valid template without calling a planner.
 - `--from-template <name>` and `--var key=value`: render a reusable plan template from project, global, or builtin registries.
+  Builtin templates are software-engineering oriented: `feature`, `bug-fix`, `refactor`, `discovery`, `implementation`, `validation`, and `release`.
 - `--force`: overwrite an existing plan file.
 
 ### Export a plan bundle
