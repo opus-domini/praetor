@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbles/table"
 	"github.com/opus-domini/praetor/internal/config"
 	"github.com/opus-domini/praetor/internal/domain"
 	"github.com/opus-domini/praetor/internal/orchestration/pipeline"
@@ -306,7 +307,7 @@ func newPlanExportCmd() *cobra.Command {
 		Use:     "export <slug>",
 		Short:   "Export a plan bundle with plan, state, summary, and template",
 		Example: "  praetor plan export my-plan\n  praetor plan export my-plan --output ./exports/my-plan",
-		Args:    cobra.ExactArgs(1),
+		Args:    planSlugArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cmd.SilenceUsage = true
 			projectRoot, err := workspace.ResolveProjectRoot(".")
@@ -321,7 +322,10 @@ func newPlanExportCmd() *cobra.Command {
 				return err
 			}
 
-			slug := strings.TrimSpace(args[0])
+			slug, err := resolvePlanSlug(cmd, store, args, "export")
+			if err != nil {
+				return err
+			}
 			planPath := store.PlanFile(slug)
 			planBytes, err := os.ReadFile(planPath)
 			if err != nil {
@@ -402,7 +406,7 @@ func newPlanEditCmd() *cobra.Command {
 		Use:     "edit <slug>",
 		Short:   "Open a plan in $EDITOR",
 		Example: `  praetor plan edit my-feature`,
-		Args:    cobra.ExactArgs(1),
+		Args:    planSlugArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cmd.SilenceUsage = true
 			store, err := resolveStore(".")
@@ -410,9 +414,13 @@ func newPlanEditCmd() *cobra.Command {
 				return err
 			}
 
-			path := store.PlanFile(args[0])
+			slug, err := resolvePlanSlug(cmd, store, args, "edit")
+			if err != nil {
+				return err
+			}
+			path := store.PlanFile(slug)
 			if _, err := os.Stat(path); err != nil {
-				return fmt.Errorf("plan not found: %s", args[0])
+				return fmt.Errorf("plan not found: %s", slug)
 			}
 			return openEditor(path)
 		},
@@ -425,7 +433,7 @@ func newPlanShowCmd() *cobra.Command {
 		Use:     "show <slug>",
 		Short:   "Print plan JSON to stdout",
 		Example: `  praetor plan show my-feature`,
-		Args:    cobra.ExactArgs(1),
+		Args:    planSlugArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cmd.SilenceUsage = true
 			store, err := resolveStore(".")
@@ -433,10 +441,14 @@ func newPlanShowCmd() *cobra.Command {
 				return err
 			}
 
-			path := store.PlanFile(args[0])
+			slug, err := resolvePlanSlug(cmd, store, args, "show")
+			if err != nil {
+				return err
+			}
+			path := store.PlanFile(slug)
 			data, err := os.ReadFile(path)
 			if err != nil {
-				return fmt.Errorf("plan not found: %s", args[0])
+				return fmt.Errorf("plan not found: %s", slug)
 			}
 			_, err = fmt.Fprint(cmd.OutOrStdout(), string(data))
 			return err
@@ -450,14 +462,18 @@ func newPlanPathCmd() *cobra.Command {
 		Use:     "path <slug>",
 		Short:   "Print absolute path of a plan file",
 		Example: `  praetor plan path my-feature`,
-		Args:    cobra.ExactArgs(1),
+		Args:    planSlugArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cmd.SilenceUsage = true
 			store, err := resolveStore(".")
 			if err != nil {
 				return err
 			}
-			_, err = fmt.Fprintln(cmd.OutOrStdout(), store.PlanFile(args[0]))
+			slug, err := resolvePlanSlug(cmd, store, args, "print its path")
+			if err != nil {
+				return err
+			}
+			_, err = fmt.Fprintln(cmd.OutOrStdout(), store.PlanFile(slug))
 			return err
 		},
 	}
@@ -472,14 +488,18 @@ func newPlanStatusCmd() *cobra.Command {
 		Use:     "status <slug>",
 		Short:   "Show execution status for a plan",
 		Example: `  praetor plan status my-feature`,
-		Args:    cobra.ExactArgs(1),
+		Args:    planSlugArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cmd.SilenceUsage = true
 			store, err := resolveStore(".")
 			if err != nil {
 				return err
 			}
-			status, err := store.Status(args[0])
+			slug, err := resolvePlanSlug(cmd, store, args, "check its status")
+			if err != nil {
+				return err
+			}
+			status, err := store.Status(slug)
 			if err != nil {
 				return err
 			}
@@ -490,11 +510,11 @@ func newPlanStatusCmd() *cobra.Command {
 			if !verbose {
 				return nil
 			}
-			snapshot, _, err := localstate.LoadLatestLocalSnapshot(store.RuntimeDir(), args[0])
+			snapshot, _, err := localstate.LoadLatestLocalSnapshot(store.RuntimeDir(), slug)
 			if err != nil {
 				return err
 			}
-			return printPlanRunSummary(cmd.OutOrStdout(), r, snapshot.Summary)
+			return printPlanRunSummary(cmd, r, snapshot.Summary)
 		},
 	}
 
@@ -528,18 +548,59 @@ func newPlanListCmd() *cobra.Command {
 				r.Info(fmt.Sprintf("No plans found in %s", store.PlansDir()))
 				return nil
 			}
-
-			r.Dim(fmt.Sprintf("  %-30s %5s %5s %5s %5s  %s", "Plan", "Done", "Fail", "Left", "Total", "Status"))
-			for _, status := range statuses {
-				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  %-30s %5d %5d %5d %5d  %s\n",
-					status.PlanSlug, status.Done, status.Failed, status.Active, status.Total, planStatusLabel(status))
-			}
-			return nil
+			return printPlanListTable(cmd, store, statuses, noColor)
 		},
 	}
 
 	cmd.Flags().BoolVar(&noColor, "no-color", false, "Disable colored output")
 	return cmd
+}
+
+func printPlanListTable(cmd *cobra.Command, store *localstate.Store, statuses []domain.PlanStatus, noColor bool) error {
+	rows := make([]table.Row, 0, len(statuses))
+	for _, status := range statuses {
+		meta := readPlanSelectionMetadata(store.PlanFile(status.PlanSlug))
+		rows = append(rows, table.Row{
+			status.PlanSlug,
+			firstNonEmpty(strings.TrimSpace(meta.Name), "-"),
+			planListProgressLabel(status),
+			planStatusLabel(status),
+			firstNonEmpty(strings.TrimSpace(status.UpdatedAt), "-"),
+		})
+	}
+
+	return renderTableView(cmd, tableViewSpec{
+		Title: "Tracked Plans",
+		Summary: []string{
+			fmt.Sprintf("Project plans: %d", len(statuses)),
+			fmt.Sprintf("Store: %s", store.PlansDir()),
+		},
+		Columns: []tableViewColumnSpec{
+			{Title: "Slug", MinWidth: 14, MaxWidth: 28},
+			{Title: "Name", MinWidth: 18, MaxWidth: 34},
+			{Title: "Progress", MinWidth: 10, MaxWidth: 12},
+			{Title: "Status", MinWidth: 12, MaxWidth: 14},
+			{Title: "Updated", MinWidth: 20, MaxWidth: 24},
+		},
+		Rows: rows,
+		PlainRender: func() error {
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  %-30s %5s %5s %5s %5s  %s\n", "Plan", "Done", "Fail", "Left", "Total", "Status")
+			for _, status := range statuses {
+				if _, err := fmt.Fprintf(cmd.OutOrStdout(), "  %-30s %5d %5d %5d %5d  %s\n",
+					status.PlanSlug, status.Done, status.Failed, status.Active, status.Total, planStatusLabel(status)); err != nil {
+					return err
+				}
+			}
+			return nil
+		},
+	})
+}
+
+func planListProgressLabel(status domain.PlanStatus) string {
+	if status.Total <= 0 {
+		return "-"
+	}
+	return fmt.Sprintf("%d/%d", status.Done, status.Total)
 }
 
 func newPlanResetCmd() *cobra.Command {
@@ -550,11 +611,14 @@ func newPlanResetCmd() *cobra.Command {
 		Use:     "reset <slug>",
 		Short:   "Clear execution state for a plan",
 		Example: `  praetor plan reset my-feature`,
-		Args:    cobra.ExactArgs(1),
+		Args:    planSlugArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cmd.SilenceUsage = true
-			slug := args[0]
 			store, err := resolveStore(".")
+			if err != nil {
+				return err
+			}
+			slug, err := resolvePlanSlug(cmd, store, args, "reset")
 			if err != nil {
 				return err
 			}
@@ -595,11 +659,14 @@ func newPlanResumeCmd() *cobra.Command {
 		Use:     "resume <slug>",
 		Short:   "Restore the latest local snapshot state for a plan",
 		Example: `  praetor plan resume my-feature`,
-		Args:    cobra.ExactArgs(1),
+		Args:    planSlugArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cmd.SilenceUsage = true
-			slug := args[0]
 			store, err := resolveStore(".")
+			if err != nil {
+				return err
+			}
+			slug, err := resolvePlanSlug(cmd, store, args, "resume")
 			if err != nil {
 				return err
 			}
@@ -641,11 +708,14 @@ func newPlanDiagnoseCmd() *cobra.Command {
 		Use:     "diagnose <slug>",
 		Short:   "Inspect runtime diagnostics for a plan run",
 		Example: "  praetor plan diagnose my-plan --query errors\n  praetor plan diagnose my-plan --query summary --format json\n  praetor plan diagnose my-plan --query regressions --baseline .local-plans/baseline.json",
-		Args:    cobra.ExactArgs(1),
+		Args:    planSlugArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cmd.SilenceUsage = true
-			slug := strings.TrimSpace(args[0])
 			store, err := resolveStore(".")
+			if err != nil {
+				return err
+			}
+			slug, err := resolvePlanSlug(cmd, store, args, "diagnose")
 			if err != nil {
 				return err
 			}
@@ -813,48 +883,84 @@ func printJSONL(cmd *cobra.Command, records []map[string]any) error {
 }
 
 func printEventsTable(cmd *cobra.Command, events []map[string]any) error {
-	if len(events) == 0 {
-		_, err := fmt.Fprintln(cmd.OutOrStdout(), "No diagnostic events found for this query.")
-		return err
-	}
-	if _, err := fmt.Fprintf(cmd.OutOrStdout(), "%-22s %-16s %-12s %-10s %s\n", "Timestamp", "Event", "Task", "Phase", "Message"); err != nil {
-		return err
-	}
+	rows := make([]table.Row, 0, len(events))
 	for _, event := range events {
 		timestamp := stringValue(event["timestamp"])
 		eventType := eventTypeName(event)
 		taskID := stringValue(event["task_id"])
 		phase := stringValue(event["phase"])
 		message := firstNonEmpty(stringValue(event["message"]), stringValue(event["error"]))
-		if _, err := fmt.Fprintf(cmd.OutOrStdout(), "%-22s %-16s %-12s %-10s %s\n", timestamp, eventType, taskID, phase, message); err != nil {
-			return err
-		}
+		rows = append(rows, table.Row{timestamp, eventType, taskID, phase, message})
 	}
-	return nil
+	return renderTableView(cmd, tableViewSpec{
+		Title:   "Diagnostic Events",
+		Summary: []string{fmt.Sprintf("Records: %d", len(events))},
+		Columns: []tableViewColumnSpec{
+			{Title: "Timestamp", MinWidth: 20, MaxWidth: 24},
+			{Title: "Event", MinWidth: 14, MaxWidth: 18},
+			{Title: "Task", MinWidth: 10, MaxWidth: 14},
+			{Title: "Phase", MinWidth: 10, MaxWidth: 12},
+			{Title: "Message", MinWidth: 24, MaxWidth: 52},
+		},
+		Rows:  rows,
+		Empty: "No diagnostic events found for this query.",
+		PlainRender: func() error {
+			if len(events) == 0 {
+				_, err := fmt.Fprintln(cmd.OutOrStdout(), "No diagnostic events found for this query.")
+				return err
+			}
+			if _, err := fmt.Fprintf(cmd.OutOrStdout(), "%-22s %-16s %-12s %-10s %s\n", "Timestamp", "Event", "Task", "Phase", "Message"); err != nil {
+				return err
+			}
+			for _, row := range rows {
+				if _, err := fmt.Fprintf(cmd.OutOrStdout(), "%-22s %-16s %-12s %-10s %s\n", row[0], row[1], row[2], row[3], row[4]); err != nil {
+					return err
+				}
+			}
+			return nil
+		},
+	})
 }
 
 func printCostsTable(cmd *cobra.Command, records []map[string]any) error {
-	if len(records) == 0 {
-		_, err := fmt.Fprintln(cmd.OutOrStdout(), "No cost/performance metrics found.")
-		return err
-	}
-	if _, err := fmt.Fprintf(cmd.OutOrStdout(), "%-10s %-8s %-12s %-12s %s\n", "Iteration", "Phase", "Chars", "EstTokens", "Truncated"); err != nil {
-		return err
-	}
+	rows := make([]table.Row, 0, len(records))
 	for _, record := range records {
-		if _, err := fmt.Fprintf(
-			cmd.OutOrStdout(),
-			"%-10s %-8s %-12s %-12s %s\n",
+		rows = append(rows, table.Row{
 			stringValue(record["iteration"]),
 			stringValue(record["phase"]),
 			stringValue(record["prompt_chars"]),
 			stringValue(record["estimated_tokens"]),
 			joinAnyArray(record["sections_truncated"]),
-		); err != nil {
-			return err
-		}
+		})
 	}
-	return nil
+	return renderTableView(cmd, tableViewSpec{
+		Title:   "Cost And Performance",
+		Summary: []string{fmt.Sprintf("Records: %d", len(records))},
+		Columns: []tableViewColumnSpec{
+			{Title: "Iteration", MinWidth: 10, MaxWidth: 10},
+			{Title: "Phase", MinWidth: 8, MaxWidth: 10},
+			{Title: "Chars", MinWidth: 12, MaxWidth: 12},
+			{Title: "EstTokens", MinWidth: 12, MaxWidth: 12},
+			{Title: "Truncated", MinWidth: 20, MaxWidth: 40},
+		},
+		Rows:  rows,
+		Empty: "No cost/performance metrics found.",
+		PlainRender: func() error {
+			if len(records) == 0 {
+				_, err := fmt.Fprintln(cmd.OutOrStdout(), "No cost/performance metrics found.")
+				return err
+			}
+			if _, err := fmt.Fprintf(cmd.OutOrStdout(), "%-10s %-8s %-12s %-12s %s\n", "Iteration", "Phase", "Chars", "EstTokens", "Truncated"); err != nil {
+				return err
+			}
+			for _, row := range rows {
+				if _, err := fmt.Fprintf(cmd.OutOrStdout(), "%-10s %-8s %-12s %-12s %s\n", row[0], row[1], row[2], row[3], row[4]); err != nil {
+					return err
+				}
+			}
+			return nil
+		},
+	})
 }
 
 type diagnoseSummary struct {
@@ -1155,34 +1261,67 @@ func printSummaryTable(cmd *cobra.Command, summary diagnoseSummary) error {
 }
 
 func printRegressionTable(cmd *cobra.Command, regression diagnoseRegression) error {
-	out := cmd.OutOrStdout()
-	if _, err := fmt.Fprintf(out, "Baseline: %s\n", regression.BaselinePath); err != nil {
-		return err
-	}
-	if _, err := fmt.Fprintf(out, "Verdict: %s\n", strings.ToUpper(strings.TrimSpace(regression.Verdict))); err != nil {
-		return err
-	}
-	if _, err := fmt.Fprintf(out, "%-24s %-10s %-10s %-10s %-10s %s\n", "Metric", "Baseline", "Current", "Delta", "Threshold", "Status"); err != nil {
-		return err
-	}
+	rows := make([]table.Row, 0, len(regression.Checks))
 	for _, check := range regression.Checks {
-		if _, err := fmt.Fprintf(out, "%-24s %-10.4f %-10.4f %-10.4f %-10.4f %s\n",
-			check.Metric,
-			check.Baseline,
-			check.Current,
-			check.Delta,
-			check.Threshold,
-			strings.ToUpper(strings.TrimSpace(check.Status)),
-		); err != nil {
-			return err
+		status := strings.ToUpper(strings.TrimSpace(check.Status))
+		if msg := strings.TrimSpace(check.Message); msg != "" {
+			status = status + " • " + msg
 		}
-		if strings.TrimSpace(check.Message) != "" {
-			if _, err := fmt.Fprintf(out, "  %s\n", strings.TrimSpace(check.Message)); err != nil {
+		rows = append(rows, table.Row{
+			check.Metric,
+			fmt.Sprintf("%.4f", check.Baseline),
+			fmt.Sprintf("%.4f", check.Current),
+			fmt.Sprintf("%.4f", check.Delta),
+			fmt.Sprintf("%.4f", check.Threshold),
+			status,
+		})
+	}
+	return renderTableView(cmd, tableViewSpec{
+		Title: "Regression Check",
+		Summary: []string{
+			fmt.Sprintf("Baseline: %s", regression.BaselinePath),
+			fmt.Sprintf("Verdict: %s", strings.ToUpper(strings.TrimSpace(regression.Verdict))),
+		},
+		Columns: []tableViewColumnSpec{
+			{Title: "Metric", MinWidth: 18, MaxWidth: 28},
+			{Title: "Baseline", MinWidth: 10, MaxWidth: 10},
+			{Title: "Current", MinWidth: 10, MaxWidth: 10},
+			{Title: "Delta", MinWidth: 10, MaxWidth: 10},
+			{Title: "Threshold", MinWidth: 10, MaxWidth: 10},
+			{Title: "Status", MinWidth: 14, MaxWidth: 42},
+		},
+		Rows: rows,
+		PlainRender: func() error {
+			out := cmd.OutOrStdout()
+			if _, err := fmt.Fprintf(out, "Baseline: %s\n", regression.BaselinePath); err != nil {
 				return err
 			}
-		}
-	}
-	return nil
+			if _, err := fmt.Fprintf(out, "Verdict: %s\n", strings.ToUpper(strings.TrimSpace(regression.Verdict))); err != nil {
+				return err
+			}
+			if _, err := fmt.Fprintf(out, "%-24s %-10s %-10s %-10s %-10s %s\n", "Metric", "Baseline", "Current", "Delta", "Threshold", "Status"); err != nil {
+				return err
+			}
+			for _, check := range regression.Checks {
+				if _, err := fmt.Fprintf(out, "%-24s %-10.4f %-10.4f %-10.4f %-10.4f %s\n",
+					check.Metric,
+					check.Baseline,
+					check.Current,
+					check.Delta,
+					check.Threshold,
+					strings.ToUpper(strings.TrimSpace(check.Status)),
+				); err != nil {
+					return err
+				}
+				if strings.TrimSpace(check.Message) != "" {
+					if _, err := fmt.Fprintf(out, "  %s\n", strings.TrimSpace(check.Message)); err != nil {
+						return err
+					}
+				}
+			}
+			return nil
+		},
+	})
 }
 
 func stringValue(value any) string {
@@ -2180,7 +2319,8 @@ func costBudgetEnforcedCLI(policy domain.CostPolicy) bool {
 	return policy.Enforce == nil || *policy.Enforce
 }
 
-func printPlanRunSummary(out io.Writer, r *Renderer, summary domain.RunSummary) error {
+func printPlanRunSummary(cmd *cobra.Command, r *Renderer, summary domain.RunSummary) error {
+	out := cmd.OutOrStdout()
 	if summary.TotalTimeS == 0 && summary.TotalCostUSD == 0 && len(summary.ByActor) == 0 &&
 		summary.TasksDone == 0 && summary.TasksFailed == 0 && summary.TasksRetried == 0 &&
 		summary.Stalls == 0 && summary.Fallbacks == 0 {
@@ -2200,16 +2340,45 @@ func printPlanRunSummary(out io.Writer, r *Renderer, summary domain.RunSummary) 
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
-
-	if _, err := fmt.Fprintln(out, "\nActor                 Calls  Retries  Stalls   Cost       Time"); err != nil {
-		return err
-	}
+	rows := make([]table.Row, 0, len(keys))
 	for _, key := range keys {
 		stats := summary.ByActor[key]
-		if _, err := fmt.Fprintf(out, "%-20s %5d  %7d  %6d  $%0.4f  %0.1fs\n",
-			key, stats.Calls, stats.Retries, stats.Stalls, stats.CostUSD, stats.TimeS); err != nil {
-			return err
-		}
+		rows = append(rows, table.Row{
+			key,
+			fmt.Sprintf("%d", stats.Calls),
+			fmt.Sprintf("%d", stats.Retries),
+			fmt.Sprintf("%d", stats.Stalls),
+			fmt.Sprintf("$%.4f", stats.CostUSD),
+			fmt.Sprintf("%.1fs", stats.TimeS),
+		})
 	}
-	return nil
+	return renderTableView(cmd, tableViewSpec{
+		Title: "Run Summary By Actor",
+		Summary: []string{
+			fmt.Sprintf("Tasks: done=%d failed=%d retried=%d", summary.TasksDone, summary.TasksFailed, summary.TasksRetried),
+			fmt.Sprintf("Cost: $%.4f  Time: %.1fs  Signals: stalls=%d fallbacks=%d", summary.TotalCostUSD, summary.TotalTimeS, summary.Stalls, summary.Fallbacks),
+		},
+		Columns: []tableViewColumnSpec{
+			{Title: "Actor", MinWidth: 14, MaxWidth: 24},
+			{Title: "Calls", MinWidth: 7, MaxWidth: 7},
+			{Title: "Retries", MinWidth: 8, MaxWidth: 8},
+			{Title: "Stalls", MinWidth: 7, MaxWidth: 7},
+			{Title: "Cost", MinWidth: 10, MaxWidth: 10},
+			{Title: "Time", MinWidth: 8, MaxWidth: 8},
+		},
+		Rows: rows,
+		PlainRender: func() error {
+			if _, err := fmt.Fprintln(out, "\nActor                 Calls  Retries  Stalls   Cost       Time"); err != nil {
+				return err
+			}
+			for _, key := range keys {
+				stats := summary.ByActor[key]
+				if _, err := fmt.Fprintf(out, "%-20s %5d  %7d  %6d  $%0.4f  %0.1fs\n",
+					key, stats.Calls, stats.Retries, stats.Stalls, stats.CostUSD, stats.TimeS); err != nil {
+					return err
+				}
+			}
+			return nil
+		},
+	})
 }

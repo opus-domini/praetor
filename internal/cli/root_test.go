@@ -81,6 +81,10 @@ func TestMissingArgsShowsUsageAndError(t *testing.T) {
 		wantUsage string // expected in stdout (usage)
 		wantError string // expected in stderr (error message)
 	}{
+		{"plan edit", []string{"plan", "edit"}, "edit <slug>", "Error:"},
+		{"plan eval", []string{"plan", "eval"}, "eval <slug>", "Error:"},
+		{"plan export", []string{"plan", "export"}, "export <slug>", "Error:"},
+		{"plan diagnose", []string{"plan", "diagnose"}, "diagnose <slug>", "Error:"},
 		{"plan status", []string{"plan", "status"}, "status <slug>", "Error:"},
 		{"plan reset", []string{"plan", "reset"}, "reset <slug>", "Error:"},
 		{"plan resume", []string{"plan", "resume"}, "resume <slug>", "Error:"},

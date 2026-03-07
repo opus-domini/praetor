@@ -79,10 +79,9 @@ isolation protects the main branch from partial changes.`,
   praetor plan run my-feature --executor claude --reviewer claude
   praetor plan run my-feature --runner direct --max-transitions 200 --keep-last-runs 20
   praetor plan run my-feature --hook ./scripts/lint.sh --timeout 1h`,
-		Args: cobra.ExactArgs(1),
+		Args: planSlugArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cmd.SilenceUsage = true
-			slug := strings.TrimSpace(args[0])
 
 			absWorkdir := strings.TrimSpace(workdir)
 			projectRoot, err := workspace.ResolveProjectRoot(absWorkdir)
@@ -91,6 +90,10 @@ isolation protects the main branch from partial changes.`,
 			}
 
 			store, err := resolveStore(projectRoot)
+			if err != nil {
+				return err
+			}
+			slug, err := resolvePlanSlug(cmd, store, args, "run")
 			if err != nil {
 				return err
 			}
