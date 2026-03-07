@@ -16,15 +16,13 @@ import (
 func TestProbeCLIBinaryFound(t *testing.T) {
 	t.Parallel()
 
-	// Use a binary known to exist on every system.
-	binary := "sh"
-	if runtime.GOOS == "windows" {
-		binary = "cmd"
-	}
-
-	// Verify the binary is actually available.
-	if _, err := exec.LookPath(binary); err != nil {
-		t.Skipf("test binary %q not in PATH: %v", binary, err)
+	// Use a deterministic fake binary instead of relying on system shell
+	// semantics, which vary across CI environments.
+	dir := t.TempDir()
+	fakeBin := filepath.Join(dir, "probe-pass")
+	script := "#!/bin/sh\necho 'probe-pass version 1.0.0'\n"
+	if err := os.WriteFile(fakeBin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
 	}
 
 	prober := NewProber(WithTimeout(5 * time.Second))
@@ -32,9 +30,9 @@ func TestProbeCLIBinaryFound(t *testing.T) {
 		ID:          "test-shell",
 		DisplayName: "Test Shell",
 		Transport:   TransportCLI,
-		Binary:      binary,
+		Binary:      fakeBin,
 		VersionArgs: []string{"--version"},
-	}, binary)
+	}, fakeBin)
 
 	if result.Status != StatusPass {
 		t.Errorf("expected StatusPass, got %q: %s", result.Status, result.Detail)
