@@ -49,7 +49,7 @@ praetor plan run my-plan \
   --reviewer-prompt-chars 80000 \
   --plan-cost-budget-usd 5 \
   --task-cost-budget-usd 1 \
-  --max-parallel-tasks 2 \
+  --max-parallel-tasks 5 \
   --stall-enabled \
   --stall-window 3 \
   --stall-threshold 0.67
@@ -105,7 +105,8 @@ Canonical schema file: [`docs/schemas/plan.schema.json`](schemas/plan.schema.jso
     "generator": {
       "name": "praetor",
       "version": "0.15.0",
-      "prompt_hash": "sha256:4d2f..."
+      "prompt_hash": "sha256:4d2f...",
+      "brief_file": "20260227-103000-abc.md"
     }
   },
   "cognitive": {
@@ -132,7 +133,7 @@ Canonical schema file: [`docs/schemas/plan.schema.json`](schemas/plan.schema.jso
     "execution_policy": {
       "max_total_iterations": 200,
       "max_retries_per_task": 3,
-      "max_parallel_tasks": 2,
+      "max_parallel_tasks": 5,
       "timeout": "1h",
       "prompt_budget": {
         "executor_chars": 120000,
@@ -396,9 +397,23 @@ sequenceDiagram
     Pipeline->>State: Persist snapshot + events
 ```
 
+### Structured output enforcement
+
+When the adapter supports it, praetor enforces JSON schemas for all three pipeline roles:
+
+| Role | Schema | Required fields |
+|---|---|---|
+| **Planner** | Plan schema (name, settings, tasks) | `name`, `settings.agents.executor`, `settings.agents.reviewer`, `tasks[].id`, `tasks[].title`, `tasks[].acceptance` |
+| **Executor** | `{result, summary, tests?, gates?}` | `result` (PASS/FAIL), `summary` |
+| **Reviewer** | `{decision, reason, hints?}` | `decision` (PASS/FAIL), `reason` |
+
+Schema enforcement uses provider-native mechanisms (`claude --json-schema`, `codex exec --output-schema`) to guarantee structured output. The pipeline parsers (`ParseExecutorResult`, `ParseReviewDecision`, `ParseGateEvidence`) try JSON structured output first, then fall back to text parsing for non-schema-aware providers.
+
+The `structured_output` field from stream-json result events is prepended to the text output, giving the domain parsers a reliable JSON line to match before any free-form analysis text.
+
 ### Parallel wave execution
 
-When `max_parallel_tasks > 1`, the runner executes a dependency-ready wave concurrently, but still applies state transitions and merges in a single deterministic order.
+When `max_parallel_tasks > 1` (default: 5), the runner executes a dependency-ready wave concurrently, but still applies state transitions and merges in a single deterministic order.
 
 ```mermaid
 ---

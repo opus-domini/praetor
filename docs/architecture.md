@@ -268,6 +268,7 @@ This stream is consumed by `praetor plan diagnose`.
 Project data is isolated under `<praetor-home>/projects/<project-key>/`:
 
 - `plans/` plan files
+- `briefs/` persisted plan briefs (original input text)
 - `state/` mutable state
 - `feedback/` structured retry feedback logs
 - `locks/` run locks

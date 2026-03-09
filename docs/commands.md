@@ -8,7 +8,7 @@ Praetor generates shared agent commands that work across multiple AI coding agen
 praetor init
 ```
 
-`praetor init` detects installed agents, generates shared commands, and registers the MCP server — all in one step.
+In an interactive terminal, `praetor init` shows a checkbox menu to select which agents to install. In non-interactive mode (CI, pipes), it auto-detects agent directories and falls back to all supported agents.
 
 ## How it works
 
@@ -32,21 +32,20 @@ Updating one file updates all agents simultaneously. No drift between agent beha
 
 ## Built-in commands
 
-| Command | Description | Allowed Tools |
+| Command | Description | Key capabilities |
 |---|---|---|
-| `praetor-plan-create` | Create a structured execution plan from a brief or reusable template | Read, Glob, Grep, git |
-| `praetor-plan-run` | Execute an existing praetor plan with review, gates, and runtime policies | praetor CLI only |
-| `praetor-review-task` | Review executor output against criteria | Read, Grep, make test/lint |
-| `praetor-doctor` | Check agent provider health with structured environment diagnostics | praetor doctor |
-| `praetor-diagnose` | Debug a plan run with summary, actor, and cost diagnostics | praetor CLI, Read |
+| `praetor-plan-create` | Create a structured execution plan | All input modes (brief, file, stdin, template, wizard), `--dry-run`, `--no-agent`, full schema reference |
+| `praetor-plan-run` | Execute a plan through the pipeline | Agent selection, cost budgets, parallel tasks, isolation, `--no-review`, post-run diagnostics |
+| `praetor-review-task` | Review executor output against acceptance criteria | Structured JSON verdict (`{decision, reason, hints}`), quality gate checklist, actionable hints |
+| `praetor-doctor` | Check agent provider health | `--json` output, `--timeout`, install instructions per provider |
+| `praetor-diagnose` | Debug and evaluate plan runs | All diagnostic queries (errors, stalls, fallbacks, costs, summary, regressions), `plan eval`, `eval` |
 
-Operational notes:
+Each command includes:
 
-- `praetor-plan-create` can drive `praetor plan create --from-template <name>` when the request maps to a reusable plan scaffold.
-- `praetor-diagnose` can query `summary` to inspect actor-level retries, stalls, and cost distribution.
-- `praetor-doctor` surfaces binary paths, endpoint details, parsed versions, and hints from `checks[]`.
-
-Each command declares which tools the agent is allowed to use, implementing a **least-privilege model** for AI agents.
+- **Usage examples** with real CLI flags and options
+- **Key flags table** with defaults and descriptions
+- **Workflow steps** for the complete task lifecycle
+- **Allowed tools** declaration implementing a least-privilege model
 
 ## Customization
 
@@ -54,26 +53,26 @@ Override any command by editing its `.md` file in `.agents/commands/`. Running `
 
 ## Tool whitelisting pattern
 
-Each slash command specifies exactly which tools the agent can use:
+Each slash command specifies exactly which tools the agent is allowed to use:
 
 ```markdown
-## Allowed Tools
+## Allowed tools
 
-Read, Edit, Glob, Grep, Bash(make test), Bash(make lint)
+Read, Glob, Grep, Bash(praetor plan create *), Bash(praetor plan show *)
 ```
 
 This ensures:
-- A task command can only call MCP APIs
+- A plan-run command can only call praetor CLI tools
 - A review command can only read files and run tests
-- A plan command can analyze but not modify code
+- A plan-create command can analyze but not modify code directly
 
 ## Supported agents
 
-`praetor init` detects agent directories (`.claude/`, `.cursor/`, `.codex/`) present in the project. When none are found, it creates symlinks for all supported agents by default.
+`praetor init` supports three agent directories: `.claude/`, `.cursor/`, `.codex/`. In interactive mode, users select which agents to install via a checkbox TUI. In non-interactive mode, it auto-detects existing directories and falls back to all three.
 
 ## Implementation
 
 The commands package is implemented in `internal/commands/`:
 
 - `commands.go` — `Sync()`, `List()`, `DefaultCommands()`
-- `content.go` — Markdown content constants for each command
+- `content.go` — Markdown content for each command (plan-create, plan-run, review-task, doctor, diagnose)

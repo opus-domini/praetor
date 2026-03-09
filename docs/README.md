@@ -8,12 +8,15 @@
 
 `praetor` is a Go CLI that orchestrates AI agent providers through a single execution surface. It drives 9 agents (Claude, Codex, Copilot, Gemini, Kimi, LM Studio, OpenCode, OpenRouter, and Ollama) through CLI and REST transports, coordinated by an executor/reviewer pipeline with:
 
+- **Parallel execution** — dependency-aware concurrent task waves (default: 5 parallel)
+- **Structured output** — JSON schema enforcement for planner, executor, and reviewer
 - **Automatic fallback** — error-classified failover to alternate agents
 - **Middleware pipeline** — composable logging and metrics around every invocation
 - **Structured observability** — JSONL event stream for post-run analysis
 - **Intelligent routing** — automatic executor selection from available agents
 - **Worktree isolation** — each task runs in a dedicated git worktree
 - **Crash recovery** — transactional snapshots with atomic writes
+- **Brief persistence** — original plan briefs saved before agent generation
 
 ## Core documentation
 

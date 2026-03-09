@@ -42,7 +42,7 @@ It orchestrates 9 AI agent providers through a single execution surface with dep
 - **Stall detection** — sliding-window similarity detection with escalation (fallback agent → budget reduction → fail).
 - **Prompt budget** — character-level prompt truncation for executor and reviewer phases.
 - **Cost governance** — plan/task USD budgets with warnings, summaries, and optional hard enforcement.
-- **Parallel waves** — dependency-aware concurrent task execution with deterministic merge ordering and conflict requeue.
+- **Parallel waves** — dependency-aware concurrent task execution (default: 5 parallel) with deterministic merge ordering and conflict requeue.
 - **Intelligent routing** — live health-probe-based auto-selection when the preferred agent is unavailable.
 - **Quality gates** — required and optional gate enforcement in plan execution.
 - **Host-executed gates** — `tests`, `lint`, `standards` run locally with structured results and diagnostics.
@@ -100,7 +100,7 @@ make build
 ### Install praetor into your project
 
 ```bash
-# Detects agents, registers MCP server, creates shared commands
+# Interactive agent selector in TTY, auto-detect otherwise
 praetor init
 ```
 
@@ -128,7 +128,7 @@ praetor plan create --from-template feature \
 praetor plan run implement-jwt-auth-with-tests-and-docs
 ```
 
-### Run with cost and parallel guard rails
+### Run with cost guard rails
 
 ```bash
 praetor plan run my-plan \
@@ -137,7 +137,6 @@ praetor plan run my-plan \
   --reviewer claude \
   --plan-cost-budget-usd 5 \
   --task-cost-budget-usd 1 \
-  --max-parallel-tasks 2 \
   --max-retries 3 \
   --max-transitions 200
 ```
@@ -230,6 +229,7 @@ praetor exec --provider openrouter --model anthropic/claude-sonnet-4 "Review thi
 - Plans are identified by slug and stored in `<project>/plans/<slug>.json`.
 - Plan templates are resolved from `<project-root>/.praetor/templates/`, `<praetor-home>/templates/`, then builtin templates.
 - Builtin templates are software-engineering oriented: `feature`, `bug-fix`, `refactor`, `discovery`, `implementation`, `validation`, and `release`.
+- Plan briefs are persisted under `<project>/briefs/` before agent generation (never lost on failure).
 - Structured feedback and runtime artifacts live under `<project>/feedback/<slug>/` and `<project>/runtime/<run-id>/`.
 - Manifest discovery order: `praetor.yaml` > `praetor.yml` > `praetor.md`.
 
