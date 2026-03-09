@@ -39,8 +39,8 @@ func TestInitCreatesCommandsAndMCP(t *testing.T) {
 	if !strings.Contains(output, "Installing into") {
 		t.Error("missing banner")
 	}
-	if !strings.Contains(output, "Scanning project") {
-		t.Error("missing scan phase")
+	if !strings.Contains(output, "Selected agents") {
+		t.Error("missing selected agents")
 	}
 	if !strings.Contains(output, "Agent Commands") {
 		t.Error("missing agent commands step")
@@ -102,8 +102,8 @@ func TestInitDetectsExistingAgentDirs(t *testing.T) {
 
 	output := runInit(t, dir)
 
-	if !strings.Contains(output, "Detected agents: claude") {
-		t.Errorf("expected detection of claude, got:\n%s", output)
+	if !strings.Contains(output, "Selected agents: claude") {
+		t.Errorf("expected selection of claude, got:\n%s", output)
 	}
 
 	// Symlink should exist for claude.
@@ -125,8 +125,8 @@ func TestInitUsesDefaultsWhenNoAgentDirs(t *testing.T) {
 
 	output := runInit(t, dir)
 
-	if !strings.Contains(output, "No agent directories found") {
-		t.Errorf("expected defaults message, got:\n%s", output)
+	if !strings.Contains(output, "Selected agents:") {
+		t.Errorf("expected selected agents message, got:\n%s", output)
 	}
 
 	// All default agents should get symlinks.

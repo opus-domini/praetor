@@ -46,22 +46,28 @@ The command is idempotent — running it again updates everything safely.`,
 				}
 			}
 
+			// --- Interactive agent selection ---
+			var agents []string
+			if shouldUseInitSelector(cmd.InOrStdin(), cmd.OutOrStdout()) {
+				selected, err := runInitSelector(cmd.InOrStdin(), cmd.OutOrStdout(), projectRoot)
+				if err != nil {
+					return err
+				}
+				agents = selected
+			} else {
+				agents = detectAgents(projectRoot)
+				if len(agents) == 0 {
+					agents = commands.SupportedAgents
+				}
+			}
+
 			// Banner.
 			r.Banner("Praetor", fmt.Sprintf("Installing into %s", projectRoot))
 
 			// --- Scan phase ---
-			r.Dim("  Scanning project...")
-
-			agents := detectAgents(projectRoot)
 			mcpTargets := detectMCPTargets(projectRoot)
 
-			if len(agents) > 0 {
-				r.Info(fmt.Sprintf("Detected agents: %s", strings.Join(agents, ", ")))
-			} else {
-				r.Info(fmt.Sprintf("No agent directories found, using defaults: %s",
-					strings.Join(commands.SupportedAgents, ", ")))
-				agents = commands.SupportedAgents
-			}
+			r.Info(fmt.Sprintf("Selected agents: %s", strings.Join(agents, ", ")))
 
 			mcpLabels := make([]string, len(mcpTargets))
 			for i, t := range mcpTargets {
