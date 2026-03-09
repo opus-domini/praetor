@@ -234,16 +234,17 @@ func TestRunnerStopsImmediatelyOnCanceledContext(t *testing.T) {
 
 	runner := NewRunner(nilRuntime{})
 	_, err := runner.Run(ctx, discardSink{}, slug, domain.RunnerOptions{
-		ProjectHome:     projectHome,
-		Workdir:         tmpDir,
-		DefaultExecutor: domain.AgentCodex,
-		DefaultReviewer: domain.AgentNone,
-		MaxRetries:      3,
-		SkipReview:      true,
-		CodexBin:        mustExecutablePath(t),
-		ClaudeBin:       "__missing_claude_binary__",
-		TMUXSession:     "test-session",
-		Isolation:       domain.IsolationOff,
+		ProjectHome:      projectHome,
+		Workdir:          tmpDir,
+		DefaultExecutor:  domain.AgentCodex,
+		DefaultReviewer:  domain.AgentNone,
+		MaxRetries:       3,
+		MaxParallelTasks: 1,
+		SkipReview:       true,
+		CodexBin:         mustExecutablePath(t),
+		ClaudeBin:        "__missing_claude_binary__",
+		TMUXSession:      "test-session",
+		Isolation:        domain.IsolationOff,
 	})
 	if err == nil {
 		t.Fatal("expected canceled context error")
@@ -448,15 +449,16 @@ func TestRunnerKeepsTaskOpenWhenMergeFails(t *testing.T) {
 	runner := NewRunner(runtime)
 
 	_, err := runner.Run(context.Background(), discardSink{}, slug, domain.RunnerOptions{
-		ProjectHome:     projectHome,
-		Workdir:         tmpDir,
-		DefaultExecutor: domain.AgentCodex,
-		DefaultReviewer: domain.AgentNone,
-		MaxRetries:      3,
-		SkipReview:      true,
-		CodexBin:        mustExecutablePath(t),
-		ClaudeBin:       mustExecutablePath(t),
-		Isolation:       domain.IsolationWorktree,
+		ProjectHome:      projectHome,
+		Workdir:          tmpDir,
+		DefaultExecutor:  domain.AgentCodex,
+		DefaultReviewer:  domain.AgentNone,
+		MaxRetries:       3,
+		MaxParallelTasks: 1,
+		SkipReview:       true,
+		CodexBin:         mustExecutablePath(t),
+		ClaudeBin:        mustExecutablePath(t),
+		Isolation:        domain.IsolationWorktree,
 	})
 	if err == nil {
 		t.Fatal("expected merge conflict error")

@@ -136,7 +136,7 @@ Rules:
 | `max-iterations` | int | `0` | Maximum loop iterations (0 = unlimited) |
 | `max-transitions` | int | `0` | Maximum FSM state transitions (0 = unlimited) |
 | `keep-last-runs` | int | `20` | Keep only the most recent N runs (0 = no pruning) |
-| `max-parallel-tasks` | int | `1` | Maximum number of independent tasks to execute concurrently per wave |
+| `max-parallel-tasks` | int | `5` | Maximum number of independent tasks to execute concurrently per wave |
 | `timeout` | duration | `0s` | Run timeout (e.g. 30m, 2h); 0 = no timeout |
 | `plan-cost-budget-usd` | float | `0` | Plan-level cost budget in USD (0 = disabled) |
 | `task-cost-budget-usd` | float | `0` | Per-task cost budget in USD (0 = disabled) |

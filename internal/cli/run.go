@@ -335,7 +335,7 @@ isolation protects the main branch from partial changes.`,
 	cmd.Flags().IntVar(&maxIterations, "max-iterations", 0, "Maximum loop iterations (0 = unlimited)")
 	cmd.Flags().IntVar(&maxTransitions, "max-transitions", 0, "Maximum FSM state transitions (0 = unlimited)")
 	cmd.Flags().IntVar(&keepLastRuns, "keep-last-runs", 20, "Keep only the most recent N local runtime runs (0 = no pruning)")
-	cmd.Flags().IntVar(&maxParallelTasks, "max-parallel-tasks", 1, "Maximum number of independent tasks to execute in parallel per wave")
+	cmd.Flags().IntVar(&maxParallelTasks, "max-parallel-tasks", 5, "Maximum number of independent tasks to execute in parallel per wave")
 	cmd.Flags().BoolVar(&noReview, "no-review", false, "Skip the reviewer gate and auto-approve executor outputs")
 	cmd.Flags().BoolVar(&force, "force", false, "Override an existing plan lock")
 	cmd.Flags().StringVar(&codexBin, "codex-bin", "codex", "Codex binary path or name")

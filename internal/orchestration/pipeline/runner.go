@@ -745,7 +745,7 @@ func normalizeRunnerOptions(options domain.RunnerOptions) (domain.RunnerOptions,
 		normalized.ReviewerPromptChars = 80000
 	}
 	if normalized.MaxParallelTasks <= 0 {
-		normalized.MaxParallelTasks = 1
+		normalized.MaxParallelTasks = 5
 	}
 	if normalized.PlanCostBudgetCents < 0 {
 		return domain.RunnerOptions{}, errors.New("plan cost budget cannot be negative")
