@@ -87,4 +87,38 @@ func TestClaudeExecutePipelineUsesStreamJSON(t *testing.T) {
 	if commandRunner.spec.Stdin == "" {
 		t.Error("pipeline should pass prompt via stdin")
 	}
+	if !strings.Contains(args, "--json-schema") {
+		t.Error("pipeline execute should include --json-schema for structured output")
+	}
+}
+
+func TestClaudeReviewUsesSchemaAndStreamJSON(t *testing.T) {
+	t.Parallel()
+
+	commandRunner := &claudeCaptureRunner{result: runner.CommandResult{
+		Stdout: `{"type":"result","result":"PASS|all good","cost_usd":0.003,"structured_output":{"decision":"PASS","reason":"all good"}}`,
+	}}
+	provider := NewClaudeCLI("claude", commandRunner)
+
+	resp, err := provider.Review(context.Background(), agent.ReviewRequest{
+		Prompt:  "review this",
+		Workdir: ".",
+	})
+	if err != nil {
+		t.Fatalf("review returned error: %v", err)
+	}
+
+	args := strings.Join(commandRunner.spec.Args, " ")
+	if !strings.Contains(args, "stream-json") {
+		t.Error("review should use stream-json output format")
+	}
+	if !strings.Contains(args, "--json-schema") {
+		t.Error("review should include --json-schema for structured output")
+	}
+	if !strings.Contains(args, "--dangerously-skip-permissions") {
+		t.Error("review should include --dangerously-skip-permissions")
+	}
+	if resp.Output == "" {
+		t.Error("review should return non-empty output")
+	}
 }

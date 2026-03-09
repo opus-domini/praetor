@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"encoding/json"
 	"regexp"
 	"strings"
 )
@@ -22,8 +23,42 @@ const (
 	ParseErrorNonRecoverable ParseErrorClass = "non_recoverable"
 )
 
-// ParseExecutorResult parses the RESULT line from executor output.
+// executorStructuredOutput is the JSON schema for executor structured output.
+type executorStructuredOutput struct {
+	Result  string `json:"result"`
+	Summary string `json:"summary"`
+}
+
+// ParseExecutorResult parses executor output, trying JSON structured output first,
+// then falling back to the text-based RESULT: line format.
 func ParseExecutorResult(output string) ExecutorResult {
+	if result := parseExecutorJSON(output); result != ExecutorResultUnknown {
+		return result
+	}
+	return parseExecutorText(output)
+}
+
+func parseExecutorJSON(output string) ExecutorResult {
+	for _, line := range strings.Split(output, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || line[0] != '{' {
+			continue
+		}
+		var s executorStructuredOutput
+		if json.Unmarshal([]byte(line), &s) != nil {
+			continue
+		}
+		switch strings.ToUpper(strings.TrimSpace(s.Result)) {
+		case "PASS":
+			return ExecutorResultPass
+		case "FAIL":
+			return ExecutorResultFail
+		}
+	}
+	return ExecutorResultUnknown
+}
+
+func parseExecutorText(output string) ExecutorResult {
 	for _, line := range strings.Split(output, "\n") {
 		trimmed := strings.TrimSpace(strings.TrimSuffix(line, "\r"))
 		upper := strings.ToUpper(trimmed)
@@ -49,10 +84,62 @@ type ReviewDecision struct {
 	Hints  []string
 }
 
-// ParseReviewDecision parses reviewer output in PASS|reason or FAIL|reason|HINT:... format.
-// It scans all lines and uses the last PASS|... or FAIL|... line as the decision,
+// reviewerStructuredOutput is the JSON schema for reviewer structured output.
+type reviewerStructuredOutput struct {
+	Decision string   `json:"decision"`
+	Reason   string   `json:"reason"`
+	Hints    []string `json:"hints"`
+}
+
+// ParseReviewDecision parses reviewer output, trying JSON structured output first,
+// then falling back to the text-based PASS|reason or FAIL|reason|HINT:... format.
+// For text mode, it scans all lines and uses the last PASS|... or FAIL|... line,
 // allowing reviewers to emit analysis text before the final verdict.
 func ParseReviewDecision(output string) ReviewDecision {
+	if d := parseReviewJSON(output); d != nil {
+		return *d
+	}
+	return parseReviewText(output)
+}
+
+func parseReviewJSON(output string) *ReviewDecision {
+	for _, line := range strings.Split(output, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || line[0] != '{' {
+			continue
+		}
+		var s reviewerStructuredOutput
+		if json.Unmarshal([]byte(line), &s) != nil {
+			continue
+		}
+		decision := strings.ToUpper(strings.TrimSpace(s.Decision))
+		reason := strings.TrimSpace(s.Reason)
+		switch decision {
+		case "PASS":
+			if reason == "" {
+				reason = "review passed"
+			}
+			return &ReviewDecision{Pass: true, Reason: reason}
+		case "FAIL":
+			if reason == "" {
+				reason = "review failed"
+			}
+			hints := make([]string, 0, len(s.Hints))
+			for _, h := range s.Hints {
+				if h = strings.TrimSpace(h); h != "" {
+					hints = append(hints, h)
+				}
+			}
+			if len(hints) == 0 {
+				hints = append(hints, reason)
+			}
+			return &ReviewDecision{Pass: false, Reason: reason, Hints: hints}
+		}
+	}
+	return nil
+}
+
+func parseReviewText(output string) ReviewDecision {
 	var last *ReviewDecision
 	for _, line := range strings.Split(output, "\n") {
 		trimmed := strings.TrimSpace(strings.TrimSuffix(line, "\r"))
@@ -132,8 +219,60 @@ type GateResult struct {
 
 var gateLinePattern = regexp.MustCompile(`^-\s*([A-Za-z0-9_.-]+):\s*(PASS|FAIL)(.*)$`)
 
-// ParseGateEvidence parses a GATES block from executor output.
+// executorGatesOutput matches the gates field from executor structured output.
+type executorGatesOutput struct {
+	Tests     string `json:"tests"`
+	Lint      string `json:"lint"`
+	Standards string `json:"standards"`
+}
+
+// executorFullStructuredOutput combines result + gates for gate extraction.
+type executorFullStructuredOutput struct {
+	Result string               `json:"result"`
+	Gates  *executorGatesOutput `json:"gates,omitempty"`
+}
+
+// ParseGateEvidence parses gate evidence from executor output,
+// trying JSON structured output first, then text-based GATES: block.
 func ParseGateEvidence(output string) map[string]GateResult {
+	if gates := parseGateJSON(output); len(gates) > 0 {
+		return gates
+	}
+	return parseGateText(output)
+}
+
+func parseGateJSON(output string) map[string]GateResult {
+	for _, line := range strings.Split(output, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || line[0] != '{' {
+			continue
+		}
+		var s executorFullStructuredOutput
+		if json.Unmarshal([]byte(line), &s) != nil {
+			continue
+		}
+		if s.Gates == nil {
+			continue
+		}
+		results := make(map[string]GateResult)
+		for _, entry := range []struct{ name, status string }{
+			{"tests", s.Gates.Tests},
+			{"lint", s.Gates.Lint},
+			{"standards", s.Gates.Standards},
+		} {
+			status := strings.ToUpper(strings.TrimSpace(entry.status))
+			if status == "PASS" || status == "FAIL" {
+				results[entry.name] = GateResult{Name: entry.name, Status: status}
+			}
+		}
+		if len(results) > 0 {
+			return results
+		}
+	}
+	return nil
+}
+
+func parseGateText(output string) map[string]GateResult {
 	results := make(map[string]GateResult)
 	lines := strings.Split(output, "\n")
 	inBlock := false

@@ -39,7 +39,8 @@ const plannerOutputSchemaJSON = `{
           "properties": {
             "name": {"type": "string"},
             "version": {"type": "string"},
-            "prompt_hash": {"type": "string"}
+            "prompt_hash": {"type": "string"},
+            "brief_file": {"type": "string"}
           }
         }
       }

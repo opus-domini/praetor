@@ -83,7 +83,7 @@ func (a *ClaudeCLI) Execute(ctx context.Context, req agent.ExecuteRequest) (agen
 	if req.OneShot {
 		return a.executeOneShot(ctx, req)
 	}
-	resp, err := a.run(ctx, req.Workdir, req.Model, req.SystemPrompt, req.Prompt, req.RunDir, req.OutputPrefix, req.TaskLabel)
+	resp, err := a.run(ctx, req.Workdir, req.Model, req.SystemPrompt, req.Prompt, req.RunDir, req.OutputPrefix, req.TaskLabel, executorOutputSchema())
 	if err != nil {
 		return agent.ExecuteResponse{}, err
 	}
@@ -137,7 +137,7 @@ func (a *ClaudeCLI) executeOneShot(ctx context.Context, req agent.ExecuteRequest
 }
 
 func (a *ClaudeCLI) Review(ctx context.Context, req agent.ReviewRequest) (agent.ReviewResponse, error) {
-	resp, err := a.run(ctx, req.Workdir, req.Model, req.SystemPrompt, req.Prompt, req.RunDir, req.OutputPrefix, req.TaskLabel)
+	resp, err := a.run(ctx, req.Workdir, req.Model, req.SystemPrompt, req.Prompt, req.RunDir, req.OutputPrefix, req.TaskLabel, reviewerOutputSchema())
 	if err != nil {
 		return agent.ReviewResponse{}, err
 	}
@@ -152,13 +152,16 @@ func (a *ClaudeCLI) Review(ctx context.Context, req agent.ReviewRequest) (agent.
 	}, nil
 }
 
-func (a *ClaudeCLI) run(ctx context.Context, workdir, model, systemPrompt, prompt, runDir, outputPrefix, taskLabel string) (agent.PlanResponse, error) {
+func (a *ClaudeCLI) run(ctx context.Context, workdir, model, systemPrompt, prompt, runDir, outputPrefix, taskLabel, jsonSchema string) (agent.PlanResponse, error) {
 	start := time.Now()
 	args := []string{a.Binary, "-p",
 		"--dangerously-skip-permissions",
 		"--no-session-persistence",
 		"--verbose",
 		"--output-format", "stream-json",
+	}
+	if jsonSchema = strings.TrimSpace(jsonSchema); jsonSchema != "" {
+		args = append(args, "--json-schema", jsonSchema)
 	}
 	if model = strings.TrimSpace(model); model != "" {
 		args = append(args, "--model", model)
@@ -182,11 +185,15 @@ func (a *ClaudeCLI) run(ctx context.Context, workdir, model, systemPrompt, promp
 	if result.ExitCode != 0 {
 		return agent.PlanResponse{DurationS: time.Since(start).Seconds()}, fmt.Errorf("claude exit code %d: %s", result.ExitCode, TailText(result.Stderr, 20))
 	}
-	output, cost := parseStreamOutput(result.Stdout)
+	sr := parseStreamResult(result.Stdout)
+	output := sr.Output
+	if sr.StructuredOutput != "" {
+		output = sr.StructuredOutput + "\n" + output
+	}
 	return agent.PlanResponse{
 		Output:    output,
 		Model:     model,
-		CostUSD:   cost,
+		CostUSD:   sr.CostUSD,
 		DurationS: time.Since(start).Seconds(),
 		Strategy:  result.Strategy,
 	}, nil
@@ -342,18 +349,32 @@ type claudeParsed struct {
 	CostUSD float64
 }
 
+// streamResult holds parsed data from a stream-json result event.
+type streamResult struct {
+	Output           string
+	CostUSD          float64
+	StructuredOutput string
+}
+
 // parseStreamOutput parses JSONL from `claude -p --output-format stream-json`.
-// Used by run() for the plan pipeline.
+// When --json-schema is used, the result event contains a structured_output field
+// with the validated JSON object.
 func parseStreamOutput(stdout string) (string, float64) {
+	r := parseStreamResult(stdout)
+	return r.Output, r.CostUSD
+}
+
+func parseStreamResult(stdout string) streamResult {
 	stdout = strings.TrimSpace(stdout)
 	if stdout == "" {
-		return "", 0
+		return streamResult{}
 	}
 	type streamEvent struct {
-		Type    string  `json:"type"`
-		Result  string  `json:"result,omitempty"`
-		CostUSD float64 `json:"cost_usd,omitempty"`
-		Message struct {
+		Type             string          `json:"type"`
+		Result           string          `json:"result,omitempty"`
+		CostUSD          float64         `json:"cost_usd,omitempty"`
+		StructuredOutput json.RawMessage `json:"structured_output,omitempty"`
+		Message          struct {
 			Content []struct {
 				Type string `json:"type"`
 				Text string `json:"text"`
@@ -384,17 +405,23 @@ func parseStreamOutput(stdout string) (string, float64) {
 		}
 	}
 	if lastResult != nil {
+		structured := ""
+		if len(lastResult.StructuredOutput) > 0 &&
+			string(lastResult.StructuredOutput) != "null" &&
+			json.Valid(lastResult.StructuredOutput) {
+			structured = string(lastResult.StructuredOutput)
+		}
 		result := strings.TrimSpace(lastResult.Result)
 		if result != "" {
-			return result, lastResult.CostUSD
+			return streamResult{Output: result, CostUSD: lastResult.CostUSD, StructuredOutput: structured}
 		}
 		if len(assistantText) > 0 {
-			return strings.Join(assistantText, "\n"), lastResult.CostUSD
+			return streamResult{Output: strings.Join(assistantText, "\n"), CostUSD: lastResult.CostUSD, StructuredOutput: structured}
 		}
-		return "", lastResult.CostUSD
+		return streamResult{CostUSD: lastResult.CostUSD, StructuredOutput: structured}
 	}
 	if len(assistantText) > 0 {
-		return strings.Join(assistantText, "\n"), 0
+		return streamResult{Output: strings.Join(assistantText, "\n")}
 	}
-	return stdout, 0
+	return streamResult{Output: stdout}
 }
