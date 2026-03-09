@@ -2,10 +2,11 @@ package mcp
 
 import (
 	"github.com/opus-domini/praetor/internal/config"
+	"github.com/opus-domini/praetor/internal/workspace"
 )
 
 func registerConfigTools(s *Server) {
-	s.tools.register("config_show", "Show resolved configuration",
+	s.tools.register("config_show", "Show resolved configuration with source annotations",
 		objectSchema(map[string]any{
 			"project_dir": stringProp("Project directory (defaults to current)"),
 		}, nil),
@@ -13,6 +14,9 @@ func registerConfigTools(s *Server) {
 			projectDir := argString(args, "project_dir")
 			if projectDir == "" {
 				projectDir = s.projectDir
+			}
+			if resolved, err := workspace.ResolveProjectRoot(projectDir); err == nil {
+				projectDir = resolved
 			}
 			resolved, _, err := config.LoadResolved(projectDir)
 			if err != nil {

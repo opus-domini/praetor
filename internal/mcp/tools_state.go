@@ -76,10 +76,10 @@ func registerStateTools(s *Server) {
 		},
 	)
 
-	s.tools.register("plan_diagnose", "Get diagnostics for a plan run (errors, stalls, fallbacks, costs, summary)",
+	s.tools.register("plan_diagnose", "Get diagnostics for a plan run including event analysis, cost breakdown, and actor statistics",
 		objectSchema(map[string]any{
 			"slug":        stringProp("Plan slug"),
-			"query":       stringProp("Diagnostic query: errors, stalls, fallbacks, costs, summary, all (default: all)"),
+			"query":       stringProp("Diagnostic query: errors, stalls, fallbacks, costs, summary, or all (default: all). Note: 'regressions' is only available via CLI"),
 			"project_dir": stringProp("Project directory (defaults to current)"),
 		}, []string{"slug"}),
 		func(args map[string]any) ([]contentBlock, error) {

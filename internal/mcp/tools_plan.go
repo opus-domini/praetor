@@ -65,7 +65,7 @@ func registerPlanTools(s *Server) {
 		},
 	)
 
-	s.tools.register("plan_create", "Create a new plan from a name and optional tasks",
+	s.tools.register("plan_create", "Create a new skeleton plan file from a name (use plan_show to inspect, then edit the file at the returned path)",
 		objectSchema(map[string]any{
 			"name":        stringProp("Plan name"),
 			"project_dir": stringProp("Project directory (defaults to current)"),
