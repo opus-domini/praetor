@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.1.2](https://github.com/opus-domini/praetor/compare/v0.1.1...v0.1.2) (2026-03-09)
+
+
+### Features
+
+* **mcp:** add exec and plan_run tools for agent action capability ([d89cc1c](https://github.com/opus-domini/praetor/commit/d89cc1cb733470fcccb836b778da86bc096b1b9a))
+
+
+### Bug Fixes
+
+* **mcp:** doctor respects config overrides and improve tool descriptions ([a1417f9](https://github.com/opus-domini/praetor/commit/a1417f98701ccdc4a090ab8d235f1b99123ecac3))
+
 ## [0.1.1](https://github.com/opus-domini/praetor/compare/v0.1.0...v0.1.1) (2026-03-09)
 
 
