@@ -3,6 +3,8 @@ package mcp
 import (
 	"fmt"
 	"os"
+	"os/exec"
+	"strings"
 
 	"github.com/opus-domini/praetor/internal/domain"
 	"github.com/opus-domini/praetor/internal/state"
@@ -108,6 +110,80 @@ func registerPlanTools(s *Server) {
 				return nil, fmt.Errorf("reset plan: %w", err)
 			}
 			return textContent("Plan state reset successfully"), nil
+		},
+	)
+
+	s.tools.register("plan_run", "Start plan execution in the background. Monitor progress with plan_status and plan_events",
+		objectSchema(map[string]any{
+			"slug":        stringProp("Plan slug"),
+			"executor":    stringProp("Executor agent (default: from plan settings or config)"),
+			"reviewer":    stringProp("Reviewer agent (default: from plan settings or config)"),
+			"runner":      stringProp("Runner mode: direct, tmux, or pty (default: direct)"),
+			"no_review":   boolProp("Skip the review phase"),
+			"project_dir": stringProp("Project directory (defaults to current)"),
+		}, []string{"slug"}),
+		func(args map[string]any) ([]contentBlock, error) {
+			slug := strings.TrimSpace(argString(args, "slug"))
+			if slug == "" {
+				return nil, fmt.Errorf("slug is required")
+			}
+
+			// Verify the plan exists before launching.
+			store, err := resolveStore(s.projectDir, argString(args, "project_dir"))
+			if err != nil {
+				return nil, err
+			}
+			if _, err := domain.LoadPlan(store.PlanFile(slug)); err != nil {
+				return nil, fmt.Errorf("load plan: %w", err)
+			}
+
+			// Resolve the praetor binary.
+			binary, err := os.Executable()
+			if err != nil {
+				binary = "praetor"
+			}
+
+			// Build command arguments.
+			cmdArgs := []string{"plan", "run", slug, "--runner", "direct"}
+			if executor := strings.TrimSpace(argString(args, "executor")); executor != "" {
+				cmdArgs = append(cmdArgs, "--executor", executor)
+			}
+			if reviewer := strings.TrimSpace(argString(args, "reviewer")); reviewer != "" {
+				cmdArgs = append(cmdArgs, "--reviewer", reviewer)
+			}
+			if runner := strings.TrimSpace(argString(args, "runner")); runner != "" {
+				// Override the default "direct" if explicitly provided.
+				cmdArgs[4] = runner
+			}
+			if argBool(args, "no_review") {
+				cmdArgs = append(cmdArgs, "--no-review")
+			}
+
+			// Resolve workdir for the subprocess.
+			workdir := s.projectDir
+			if workdir == "" {
+				workdir, _ = os.Getwd()
+			}
+
+			cmd := exec.Command(binary, cmdArgs...)
+			cmd.Dir = workdir
+			cmd.Stdin = nil
+			cmd.Stdout = nil
+			cmd.Stderr = nil
+
+			if err := cmd.Start(); err != nil {
+				return nil, fmt.Errorf("start plan run: %w", err)
+			}
+
+			// Release the process so it runs independently.
+			go func() { _ = cmd.Wait() }()
+
+			return jsonContent(map[string]any{
+				"slug":    slug,
+				"pid":     cmd.Process.Pid,
+				"status":  "started",
+				"message": "Plan execution started in background. Use plan_status to monitor progress and plan_events to stream execution events.",
+			})
 		},
 	)
 }

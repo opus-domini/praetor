@@ -96,3 +96,17 @@ func stringProp(description string) map[string]any {
 func intProp(description string) map[string]any {
 	return map[string]any{"type": "integer", "description": description}
 }
+
+func boolProp(description string) map[string]any {
+	return map[string]any{"type": "boolean", "description": description}
+}
+
+// Helper to get a bool from args.
+func argBool(args map[string]any, key string) bool {
+	if v, ok := args[key]; ok {
+		if b, ok := v.(bool); ok {
+			return b
+		}
+	}
+	return false
+}

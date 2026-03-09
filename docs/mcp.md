@@ -79,8 +79,11 @@ sequenceDiagram
 | `plan_list` | List all plans for the current project | - |
 | `plan_show` | Show a plan's full JSON content | `slug` |
 | `plan_status` | Get detailed status for a plan | `slug` |
-| `plan_create` | Create a new plan from a name | `name` |
+| `plan_create` | Create a new skeleton plan file | `name` |
+| `plan_run` | Start plan execution in the background | `slug` |
 | `plan_reset` | Reset a plan's runtime state | `slug` |
+
+`plan_run` launches the orchestration pipeline as a background subprocess and returns immediately with the process PID. It defaults to `--runner direct` for non-interactive use. Optional parameters: `executor`, `reviewer`, `runner`, `no_review`. Monitor progress with `plan_status` and `plan_events`.
 
 ### State and diagnostics
 
@@ -89,7 +92,7 @@ sequenceDiagram
 | `plan_events` | Get execution events from a plan run | `slug` |
 | `plan_diagnose` | Get diagnostics, summary, actor analysis, and performance for the latest run | `slug` |
 
-The `plan_diagnose` tool accepts a `query` parameter: `errors`, `stalls`, `fallbacks`, `costs`, `summary`, or `all` (default).
+The `plan_diagnose` tool accepts a `query` parameter: `errors`, `stalls`, `fallbacks`, `costs`, `summary`, or `all` (default). Note: the `regressions` query available in the CLI is not supported via MCP.
 
 The response includes:
 
@@ -110,9 +113,12 @@ The response includes:
 
 | Tool | Description | Required params |
 |---|---|---|
-| `doctor` | Check availability of all AI agent providers and return structured health checks | - |
+| `doctor` | Check availability of all AI agent providers | - |
+| `exec` | Run a single prompt against an agent provider | `prompt` |
 
-`doctor` returns one `ProbeResult` per provider with `status`, `transport`, `version`, `path`, `detail`, and `checks[]` entries that include remediation hints when available.
+`doctor` returns one `ProbeResult` per provider with `status`, `transport`, `version`, `path`, `detail`, and `checks[]` entries that include remediation hints when available. It respects config overrides for binary paths and REST endpoints.
+
+`exec` dispatches a prompt to any provider and returns structured output including the response text, model used, cost, and duration. Optional parameters: `provider` (default: codex), `model`. Config overrides for binary paths, REST endpoints, and API keys are loaded automatically.
 
 ### Tool call dispatch
 
@@ -155,7 +161,9 @@ The server also exposes MCP resources for passive data access:
 {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"claude-code","version":"1.0"}}}
 {"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"plan_list","arguments":{}}}
 {"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"doctor","arguments":{}}}
-{"jsonrpc":"2.0","id":4,"method":"resources/read","params":{"uri":"praetor://config"}}
+{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"exec","arguments":{"prompt":"Explain this module","provider":"claude"}}}
+{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"plan_run","arguments":{"slug":"auth-flow","executor":"claude"}}}
+{"jsonrpc":"2.0","id":6,"method":"resources/read","params":{"uri":"praetor://config"}}
 ```
 
 ### Typical session flow
@@ -184,9 +192,20 @@ sequenceDiagram
     Client->>Server: tools/call (plan_status, slug: "auth-flow")
     Server->>Client: task states, progress, run outcome
 
+    Note over Client, Server: Execution phase
+    Client->>Server: tools/call (plan_run, slug: "auth-flow")
+    Server->>Client: {slug, pid, status: "started"}
+
+    Client->>Server: tools/call (plan_status, slug: "auth-flow")
+    Server->>Client: task states, progress, run outcome
+
     Note over Client, Server: Diagnostics phase
     Client->>Server: tools/call (plan_diagnose, slug: "auth-flow", query: "summary")
     Server->>Client: summary, run_summary, actor_analysis, performance
+
+    Note over Client, Server: Single prompt dispatch
+    Client->>Server: tools/call (exec, prompt: "Explain this module", provider: "claude")
+    Server->>Client: {output, provider, model, cost_usd, duration_s}
 
     Client->>Server: tools/call (doctor)
     Server->>Client: structured ProbeResult array
@@ -202,7 +221,7 @@ The MCP server is implemented in `internal/mcp/` using only Go stdlib:
 - `tools_plan.go` — Plan management tools
 - `tools_state.go` — State and diagnostics tools
 - `tools_config.go` — Configuration tools
-- `tools_exec.go` — Execution tools (doctor)
+- `tools_exec.go` — Execution tools (doctor, exec)
 - `resources.go` — MCP resource definitions
 
 ### Component architecture
@@ -230,6 +249,9 @@ flowchart TD
     StateTools --> DL
     ConfigTools --> CR[config.LoadResolved]
     ExecTools --> AP[agent.Prober]
+    ExecTools --> AR[agent.Registry]
+
+    PlanTools --> SP[subprocess: praetor plan run]
     ResHandlers --> DL
     ResHandlers --> SS
     ResHandlers --> CR
