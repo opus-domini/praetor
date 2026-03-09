@@ -50,7 +50,10 @@ type ReviewDecision struct {
 }
 
 // ParseReviewDecision parses reviewer output in PASS|reason or FAIL|reason|HINT:... format.
+// It scans all lines and uses the last PASS|... or FAIL|... line as the decision,
+// allowing reviewers to emit analysis text before the final verdict.
 func ParseReviewDecision(output string) ReviewDecision {
+	var last *ReviewDecision
 	for _, line := range strings.Split(output, "\n") {
 		trimmed := strings.TrimSpace(strings.TrimSuffix(line, "\r"))
 		if trimmed == "" {
@@ -59,6 +62,13 @@ func ParseReviewDecision(output string) ReviewDecision {
 
 		parts := strings.Split(trimmed, "|")
 		decision := strings.ToUpper(strings.TrimSpace(parts[0]))
+
+		switch decision {
+		case "PASS", "FAIL":
+		default:
+			continue
+		}
+
 		reason := ""
 		hints := make([]string, 0)
 		for _, part := range parts[1:] {
@@ -85,7 +95,7 @@ func ParseReviewDecision(output string) ReviewDecision {
 			if reason == "" {
 				reason = "review passed"
 			}
-			return ReviewDecision{Pass: true, Reason: reason}
+			last = &ReviewDecision{Pass: true, Reason: reason}
 		case "FAIL":
 			if reason == "" {
 				reason = "review failed"
@@ -93,13 +103,17 @@ func ParseReviewDecision(output string) ReviewDecision {
 			if len(hints) == 0 {
 				hints = append(hints, reason)
 			}
-			return ReviewDecision{Pass: false, Reason: reason, Hints: hints}
-		default:
-			return ReviewDecision{Pass: false, Reason: "reviewer output must use PASS|... or FAIL|..."}
+			last = &ReviewDecision{Pass: false, Reason: reason, Hints: hints}
 		}
 	}
 
-	return ReviewDecision{Pass: false, Reason: "reviewer output was empty"}
+	if last != nil {
+		return *last
+	}
+	if strings.TrimSpace(output) == "" {
+		return ReviewDecision{Pass: false, Reason: "reviewer output was empty"}
+	}
+	return ReviewDecision{Pass: false, Reason: "reviewer output must use PASS|... or FAIL|..."}
 }
 
 // IsReviewerDecisionParseFailure reports whether the reviewer output failed the contract parser.

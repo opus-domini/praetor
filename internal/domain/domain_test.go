@@ -665,13 +665,53 @@ func TestParseReviewDecisionLowercasePass(t *testing.T) {
 
 func TestParseReviewDecisionMultiline(t *testing.T) {
 	t.Parallel()
-	// Parser takes the first non-empty line
+	// Parser uses the last PASS/FAIL line as the decision
 	d := ParseReviewDecision("\n\nFAIL|missing tests\nextra noise")
 	if d.Pass {
 		t.Fatal("ParseReviewDecision(multiline FAIL) Pass = true, want false")
 	}
 	if d.Reason != "missing tests" {
 		t.Fatalf("Reason = %q, want %q", d.Reason, "missing tests")
+	}
+}
+
+func TestParseReviewDecisionAnalysisBeforeVerdict(t *testing.T) {
+	t.Parallel()
+	// Real-world scenario: reviewer emits analysis text before PASS|... verdict
+	output := "All acceptance criteria verified:\n\n1. Function consolidated\n2. Duplicates removed\n3. Call-sites updated\n4. Tests pass\n\nPASS|All criteria met."
+	d := ParseReviewDecision(output)
+	if !d.Pass {
+		t.Fatal("expected Pass = true for analysis + PASS verdict")
+	}
+	if d.Reason != "All criteria met." {
+		t.Fatalf("Reason = %q, want %q", d.Reason, "All criteria met.")
+	}
+}
+
+func TestParseReviewDecisionAnalysisBeforeFail(t *testing.T) {
+	t.Parallel()
+	output := "Checked all files.\nSome issues found.\n\nFAIL|missing test coverage|HINT:add tests for edge cases"
+	d := ParseReviewDecision(output)
+	if d.Pass {
+		t.Fatal("expected Pass = false")
+	}
+	if d.Reason != "missing test coverage" {
+		t.Fatalf("Reason = %q, want %q", d.Reason, "missing test coverage")
+	}
+	if len(d.Hints) != 1 || d.Hints[0] != "add tests for edge cases" {
+		t.Fatalf("unexpected hints: %+v", d.Hints)
+	}
+}
+
+func TestParseReviewDecisionNoVerdict(t *testing.T) {
+	t.Parallel()
+	// No PASS or FAIL line — should be a parse failure
+	d := ParseReviewDecision("All checks passed, looks great!")
+	if d.Pass {
+		t.Fatal("expected Pass = false for output without PASS/FAIL verdict")
+	}
+	if !IsReviewerDecisionParseFailure(d) {
+		t.Fatal("expected parse failure for missing verdict")
 	}
 }
 
