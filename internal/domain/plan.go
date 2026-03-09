@@ -131,6 +131,18 @@ func WriteJSONFile(path string, value any) error {
 	return nil
 }
 
+// WriteTextFile atomically writes text content to a file using tmp+rename.
+func WriteTextFile(path, content string) error {
+	tmpFile := path + ".tmp"
+	if err := os.WriteFile(tmpFile, []byte(content), 0o644); err != nil {
+		return fmt.Errorf("write tmp file %s: %w", tmpFile, err)
+	}
+	if err := os.Rename(tmpFile, path); err != nil {
+		return fmt.Errorf("rename tmp file %s: %w", path, err)
+	}
+	return nil
+}
+
 // SanitizePathToken replaces path-unsafe characters with hyphens.
 func SanitizePathToken(value string) string {
 	value = strings.TrimSpace(value)

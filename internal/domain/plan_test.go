@@ -445,3 +445,51 @@ func TestValidatePlanRejectsInvalidPerTaskAgent(t *testing.T) {
 		t.Fatalf("expected agents.executor error, got: %v", err)
 	}
 }
+
+func TestWriteTextFileAtomicWrite(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "brief.md")
+	content := "This is a test brief."
+
+	if err := WriteTextFile(path, content); err != nil {
+		t.Fatalf("WriteTextFile: %v", err)
+	}
+
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read written file: %v", err)
+	}
+	if string(got) != content {
+		t.Fatalf("expected %q, got %q", content, string(got))
+	}
+
+	// Verify no residual .tmp file
+	tmpPath := path + ".tmp"
+	if _, err := os.Stat(tmpPath); err == nil {
+		t.Fatal("residual .tmp file should not exist after atomic write")
+	}
+}
+
+func TestWriteTextFileOverwrite(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "brief.md")
+
+	if err := WriteTextFile(path, "first"); err != nil {
+		t.Fatalf("first write: %v", err)
+	}
+	if err := WriteTextFile(path, "second"); err != nil {
+		t.Fatalf("second write: %v", err)
+	}
+
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if string(got) != "second" {
+		t.Fatalf("expected %q, got %q", "second", string(got))
+	}
+}

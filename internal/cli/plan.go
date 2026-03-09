@@ -3,6 +3,7 @@ package cli
 import (
 	"bufio"
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -109,6 +110,7 @@ func newPlanCreateCmd() *cobra.Command {
 			reviewerExplicit := cmd.Flags().Changed("reviewer")
 			plan := domain.Plan{}
 			brief := ""
+			briefFilename := ""
 			wizardUsed := false
 			if shouldUsePlanCreateWizard(args, fromFile, fromStdin, fromTemplate, noAgent, cmd.InOrStdin(), out) {
 				wizardResult, wizardErr := runPlanCreateWizard(cmd.Context(), cmd.InOrStdin(), out, agents, cfg)
@@ -125,6 +127,9 @@ func newPlanCreateCmd() *cobra.Command {
 				default:
 					render.Warn(fmt.Sprintf("Interactive wizard unavailable (%v). Falling back to plain brief input.", wizardErr))
 				}
+			}
+			if wizardUsed && brief != "" && !dryRun {
+				briefFilename = saveBriefFile(store, brief, render)
 			}
 			if strings.TrimSpace(fromTemplate) != "" {
 				if strings.TrimSpace(fromFile) != "" || fromStdin {
@@ -154,6 +159,9 @@ func newPlanCreateCmd() *cobra.Command {
 						if strings.TrimSpace(vars["Description"]) == "" {
 							vars["Description"] = brief
 						}
+						if briefFilename == "" && !dryRun {
+							briefFilename = saveBriefFile(store, brief, render)
+						}
 					}
 				}
 
@@ -175,6 +183,9 @@ func newPlanCreateCmd() *cobra.Command {
 						return err
 					}
 				}
+				if briefFilename == "" && !dryRun {
+					briefFilename = saveBriefFile(store, brief, render)
+				}
 				render.Info("Using template mode (--no-agent).")
 				plan = buildNoAgentPlanTemplate(brief, string(agents.Planner), effectivePlannerModel, string(agents.Executor), string(agents.Reviewer))
 			} else {
@@ -183,6 +194,9 @@ func newPlanCreateCmd() *cobra.Command {
 					if err != nil {
 						return err
 					}
+				}
+				if briefFilename == "" && !dryRun {
+					briefFilename = saveBriefFile(store, brief, render)
 				}
 				plannerModelLabel := strings.TrimSpace(effectivePlannerModel)
 				if plannerModelLabel == "" {
@@ -228,6 +242,7 @@ func newPlanCreateCmd() *cobra.Command {
 				ForceExecutor: executorExplicit || wizardUsed,
 				ReviewerAgent: agents.Reviewer,
 				ForceReviewer: reviewerExplicit || wizardUsed,
+				BriefFile:     briefFilename,
 			}); err != nil {
 				return err
 			}
@@ -1483,6 +1498,41 @@ type planFinalizeInput struct {
 	ForceExecutor bool
 	ReviewerAgent domain.Agent
 	ForceReviewer bool
+	BriefFile     string
+}
+
+// saveBriefFile persists the brief text under the store's briefs/ directory.
+// Returns the filename on success, or "" on error (with a warning emitted).
+func saveBriefFile(store *localstate.Store, brief string, render *Renderer) string {
+	brief = strings.TrimSpace(brief)
+	if brief == "" {
+		return ""
+	}
+	now := time.Now().UTC()
+	suffix, err := randomSuffix(3)
+	if err != nil {
+		render.Warn(fmt.Sprintf("Failed to generate brief filename: %v", err))
+		return ""
+	}
+	filename := now.Format("20060102-150405") + "-" + suffix + ".md"
+	path := store.BriefFile(filename)
+	if err := domain.WriteTextFile(path, brief); err != nil {
+		render.Warn(fmt.Sprintf("Failed to save brief file: %v", err))
+		return ""
+	}
+	return filename
+}
+
+func randomSuffix(n int) (string, error) {
+	const letters = "abcdefghijklmnopqrstuvwxyz"
+	b := make([]byte, n)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	for i := range b {
+		b[i] = letters[b[i]%byte(len(letters))]
+	}
+	return string(b), nil
 }
 
 type planExportSummary struct {
@@ -1953,6 +2003,9 @@ func finalizePlanMetadata(plan *domain.Plan, in planFinalizeInput) error {
 	if strings.TrimSpace(plan.Meta.Generator.PromptHash) == "" && strings.TrimSpace(in.Brief) != "" {
 		sum := sha256.Sum256([]byte(strings.TrimSpace(in.Brief)))
 		plan.Meta.Generator.PromptHash = "sha256:" + hex.EncodeToString(sum[:])
+	}
+	if strings.TrimSpace(plan.Meta.Generator.BriefFile) == "" && strings.TrimSpace(in.BriefFile) != "" {
+		plan.Meta.Generator.BriefFile = strings.TrimSpace(in.BriefFile)
 	}
 
 	if in.ForcePlanner && domain.NormalizeAgent(in.PlannerAgent) != "" {

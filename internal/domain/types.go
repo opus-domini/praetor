@@ -76,6 +76,7 @@ type PlanGenerator struct {
 	Name       string `json:"name,omitempty"`
 	Version    string `json:"version,omitempty"`
 	PromptHash string `json:"prompt_hash,omitempty"`
+	BriefFile  string `json:"brief_file,omitempty"`
 }
 
 type PlanSettings struct {

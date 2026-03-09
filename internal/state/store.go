@@ -49,6 +49,7 @@ func NewStore(root string) *Store {
 // Init ensures all required state directories exist.
 func (s *Store) Init() error {
 	dirs := []string{
+		s.BriefsDir(),
 		s.CheckpointsDir(),
 		s.CostsDir(),
 		s.FeedbackDir(),
@@ -66,6 +67,15 @@ func (s *Store) Init() error {
 		}
 	}
 	return nil
+}
+
+func (s *Store) BriefsDir() string {
+	return filepath.Join(s.Root, "briefs")
+}
+
+// BriefFile returns the full path for a brief filename.
+func (s *Store) BriefFile(filename string) string {
+	return filepath.Join(s.BriefsDir(), filename)
 }
 
 func (s *Store) CheckpointsDir() string {
