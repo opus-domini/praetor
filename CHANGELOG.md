@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.1.3](https://github.com/opus-domini/praetor/compare/v0.1.2...v0.1.3) (2026-03-10)
+
+
+### Bug Fixes
+
+* strip agent nesting-detection env vars from spawned processes ([af94301](https://github.com/opus-domini/praetor/commit/af943016f21121bbeaa1996cf8028a6077637712))
+
+
+### Refactors
+
+* centralize agent nesting env vars in domain.CleanAgentEnv ([a6a4217](https://github.com/opus-domini/praetor/commit/a6a4217fdc20ad5718c11125e4b15e67c4ce5fb0))
+
 ## [0.1.2](https://github.com/opus-domini/praetor/compare/v0.1.1...v0.1.2) (2026-03-09)
 
 
