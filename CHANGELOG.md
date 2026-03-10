@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.4](https://github.com/opus-domini/praetor/compare/v0.1.3...v0.1.4) (2026-03-10)
+
+
+### Features
+
+* **commands:** add praetor-workflow command with end-to-end guide ([279a060](https://github.com/opus-domini/praetor/commit/279a060d37f2fa2d6c69381854c0392cc996e3bf))
+
 ## [0.1.3](https://github.com/opus-domini/praetor/compare/v0.1.2...v0.1.3) (2026-03-10)
 
 
