@@ -224,7 +224,7 @@ praetor exec --provider openrouter --model anthropic/claude-sonnet-4 "Review thi
 
 - Config file: `$PRAETOR_CONFIG` > `<praetor-home>/config.toml` (TOML format).
 - Config cascade: built-in defaults < global config < project section < plan settings < CLI flags.
-- Home directory: `$PRAETOR_HOME` > `$XDG_CONFIG_HOME/praetor` > `~/.config/praetor`.
+- Home directory: `$PRAETOR_HOME` > `$XDG_CONFIG_HOME/praetor` > `~/.praetor`.
 - All state is isolated per git project under `<home>/projects/<project-key>/`.
 - Plans are identified by slug and stored in `<project>/plans/<slug>.json`.
 - Plan templates are resolved from `<project-root>/.praetor/templates/`, `<praetor-home>/templates/`, then builtin templates.

@@ -11,7 +11,7 @@ defaults < global config < project section
 The config file is resolved in this order:
 
 1. `$PRAETOR_CONFIG` environment variable (if set)
-2. `<praetor-home>/config.toml` (default: `~/.config/praetor/config.toml`)
+2. `<praetor-home>/config.toml` (default: `~/.praetor/config.toml`)
 
 ```bash
 # Check the resolved path

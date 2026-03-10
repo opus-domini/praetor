@@ -37,7 +37,7 @@ func NewStore(root string) *Store {
 		} else {
 			homeDir, homeErr := os.UserHomeDir()
 			if homeErr == nil {
-				root = filepath.Join(homeDir, ".config", "praetor", "projects", "default")
+				root = filepath.Join(homeDir, ".praetor", "projects", "default")
 			} else {
 				root = filepath.Join(".", ".praetor")
 			}

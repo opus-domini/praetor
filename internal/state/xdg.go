@@ -9,7 +9,7 @@ import (
 )
 
 // DefaultHome returns the praetor home directory.
-// Resolution: $PRAETOR_HOME > $XDG_CONFIG_HOME/praetor > ~/.config/praetor
+// Resolution: $PRAETOR_HOME > $XDG_CONFIG_HOME/praetor > ~/.praetor
 func DefaultHome() (string, error) {
 	if home := strings.TrimSpace(os.Getenv("PRAETOR_HOME")); home != "" {
 		return home, nil
@@ -17,11 +17,11 @@ func DefaultHome() (string, error) {
 	if xdg := strings.TrimSpace(os.Getenv("XDG_CONFIG_HOME")); xdg != "" {
 		return filepath.Join(xdg, "praetor"), nil
 	}
-	base, err := os.UserConfigDir()
+	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(base, "praetor"), nil
+	return filepath.Join(home, ".praetor"), nil
 }
 
 // DefaultConfigFile returns the full path to config.toml.

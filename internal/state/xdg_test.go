@@ -42,8 +42,8 @@ func TestDefaultHomeFallback(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasSuffix(home, filepath.Join("praetor")) {
-		t.Fatalf("expected path ending in praetor, got %s", home)
+	if !strings.HasSuffix(home, ".praetor") {
+		t.Fatalf("expected path ending in .praetor, got %s", home)
 	}
 }
 

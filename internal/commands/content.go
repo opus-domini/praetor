@@ -487,7 +487,7 @@ When investigating failures:
 ## Run artifacts
 
 Run artifacts are stored at:
-` + "`~/.config/praetor/projects/<project-key>/runtime/<run-id>/`" + `
+` + "`~/.praetor/projects/<project-key>/runtime/<run-id>/`" + `
 
 - ` + "`events.jsonl`" + ` — full event stream
 - ` + "`diagnostics/performance.jsonl`" + ` — performance metrics

@@ -10,7 +10,7 @@ import (
 
 // NewRootCmd creates the praetor CLI root command.
 func NewRootCmd() *cobra.Command {
-	homePath := "~/.config/praetor"
+	homePath := "~/.praetor"
 	if resolved, err := localstate.DefaultHome(); err == nil {
 		homePath = resolved
 	}
