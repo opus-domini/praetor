@@ -261,6 +261,166 @@ Each agent shows:
 Bash(praetor doctor), Bash(praetor doctor --json)
 `
 
+const workflowContent = `# Workflow
+
+End-to-end guide for orchestrating work with praetor — from plan creation through execution, monitoring, and diagnostics.
+
+## Phase 1 — Preparation
+
+Before creating a plan, check which agents are available:
+
+` + "```bash" + `
+praetor doctor
+` + "```" + `
+
+## Phase 2 — Plan creation
+
+Create a plan from a brief describing the objective. The planner agent generates a structured plan with tasks, dependencies, and acceptance criteria.
+
+` + "```bash" + `
+# From a text brief (planner agent generates the plan)
+praetor plan create "Implement JWT auth with refresh tokens"
+
+# From a file with detailed requirements
+praetor plan create --from-file brief.md
+
+# Interactive wizard — choose planner, executor, reviewer interactively
+praetor plan create
+
+# From a reusable template
+praetor plan create --from-template feature --var name="user-profiles"
+
+# Quick skeleton without calling the planner agent
+praetor plan create --no-agent "Add pagination to list endpoints"
+` + "```" + `
+
+After creation, review and optionally edit:
+
+` + "```bash" + `
+praetor plan show <slug>       # inspect the JSON
+praetor plan edit <slug>       # open in $EDITOR
+` + "```" + `
+
+## Phase 3 — Execution
+
+Run the plan. Each task goes through an executor agent, then an independent reviewer agent that gates promotion. Failed tasks retry with structured feedback.
+
+` + "```bash" + `
+# Run with defaults (tmux runner, worktree isolation, 5 parallel tasks)
+praetor plan run <slug>
+
+# Run with specific agents
+praetor plan run <slug> --executor claude --reviewer codex
+
+# Run without review gate (faster, less safe)
+praetor plan run <slug> --no-review
+
+# Run with cost budgets
+praetor plan run <slug> --plan-cost-budget-usd 5.00 --task-cost-budget-usd 1.00
+
+# Run with fallback agents for resilience
+praetor plan run <slug> --fallback-on-transient ollama --fallback-on-auth openrouter
+
+# Run with direct runner (no tmux, good for CI/scripts)
+praetor plan run <slug> --runner direct
+` + "```" + `
+
+## Phase 4 — Monitoring
+
+While a plan runs, check progress with status and events:
+
+` + "```bash" + `
+# High-level progress (done/failed/active/total)
+praetor plan status <slug>
+
+# Verbose status with per-task detail
+praetor plan status <slug> --verbose
+
+# List all plans and their current state
+praetor plan list
+` + "```" + `
+
+## Phase 5 — Diagnostics (if needed)
+
+When tasks fail or costs seem high, diagnose the run:
+
+` + "```bash" + `
+# Full diagnostics
+praetor plan diagnose <slug>
+
+# Targeted queries
+praetor plan diagnose <slug> --query errors      # what failed and why
+praetor plan diagnose <slug> --query stalls       # stuck retry loops
+praetor plan diagnose <slug> --query fallbacks    # agent fallback events
+praetor plan diagnose <slug> --query costs        # cost breakdown per actor
+praetor plan diagnose <slug> --query summary      # high-level run summary
+
+# Evaluate execution quality
+praetor plan eval <slug>
+praetor eval                                       # project-level aggregate
+` + "```" + `
+
+## Phase 6 — Recovery
+
+If a run was interrupted or needs a fresh start:
+
+` + "```bash" + `
+# Resume from the latest valid snapshot
+praetor plan resume <slug>
+
+# Reset all state and re-run from scratch
+praetor plan reset <slug>
+praetor plan run <slug>
+` + "```" + `
+
+## MCP integration
+
+When praetor is configured as an MCP server (via ` + "`praetor init`" + ` or ` + "`.mcp.json`" + `), all phases above are available as MCP tools. This enables any MCP-aware agent to orchestrate plans programmatically.
+
+### MCP tool mapping
+
+| Phase | CLI command | MCP tool |
+|---|---|---|
+| Preparation | ` + "`praetor doctor`" + ` | ` + "`doctor`" + ` |
+| Plan creation | ` + "`praetor plan create`" + ` | ` + "`plan_create`" + ` (skeleton only) |
+| Inspect plan | ` + "`praetor plan show <slug>`" + ` | ` + "`plan_show`" + ` |
+| Execution | ` + "`praetor plan run <slug>`" + ` | ` + "`plan_run`" + ` (background) |
+| Monitoring | ` + "`praetor plan status <slug>`" + ` | ` + "`plan_status`" + ` |
+| Event stream | — | ` + "`plan_events`" + ` |
+| Diagnostics | ` + "`praetor plan diagnose <slug>`" + ` | ` + "`plan_diagnose`" + ` |
+| Config | ` + "`praetor config show`" + ` | ` + "`config_show`" + ` |
+| Single prompt | ` + "`praetor exec`" + ` | ` + "`exec`" + ` |
+
+### MCP workflow example
+
+` + "```" + `
+1. Call doctor to verify agent availability
+2. Call plan_create with a name → get slug and path
+3. Edit the plan file at the returned path (add tasks, acceptance criteria)
+4. Call plan_show to verify the plan looks correct
+5. Call plan_run with the slug → execution starts in background
+6. Poll plan_status periodically to monitor progress
+7. Call plan_events to stream execution events in real time
+8. On completion, call plan_diagnose for a summary
+` + "```" + `
+
+### MCP resources
+
+These resources provide passive data access without tool calls:
+
+| Resource URI | Description |
+|---|---|
+| ` + "`praetor://plans`" + ` | List of all plans |
+| ` + "`praetor://plans/{slug}`" + ` | Full plan JSON |
+| ` + "`praetor://plans/{slug}/state`" + ` | Current execution state |
+| ` + "`praetor://config`" + ` | Resolved configuration |
+| ` + "`praetor://agents`" + ` | Agent health status |
+
+## Allowed tools
+
+Read, Glob, Grep, Bash(praetor *)
+`
+
 const diagnoseContent = `# Diagnose
 
 Inspect and debug a praetor plan run to understand failures, costs, and performance.

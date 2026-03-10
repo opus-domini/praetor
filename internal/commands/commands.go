@@ -29,6 +29,7 @@ var defaultCommandDefinitions = []commandDefinition{
 	{BaseName: "review-task", Content: reviewTaskContent},
 	{BaseName: "doctor", Content: doctorContent},
 	{BaseName: "diagnose", Content: diagnoseContent},
+	{BaseName: "workflow", Content: workflowContent},
 }
 
 // DefaultCommands returns the built-in command set.

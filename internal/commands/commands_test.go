@@ -21,8 +21,8 @@ func TestSyncCreatesCommandsAndSymlinks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read commands dir: %v", err)
 	}
-	if len(entries) != 5 {
-		t.Fatalf("expected 5 commands, got %d", len(entries))
+	if len(entries) != 6 {
+		t.Fatalf("expected 6 commands, got %d", len(entries))
 	}
 	for _, entry := range entries {
 		name := entry.Name()
@@ -59,8 +59,8 @@ func TestSyncIsIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
-	if len(names) != 5 {
-		t.Fatalf("expected 5 commands, got %d", len(names))
+	if len(names) != 6 {
+		t.Fatalf("expected 6 commands, got %d", len(names))
 	}
 	for _, name := range names {
 		if !strings.HasPrefix(name, "praetor-") {
