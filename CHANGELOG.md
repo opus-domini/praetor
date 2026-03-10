@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.5](https://github.com/opus-domini/praetor/compare/v0.1.4...v0.1.5) (2026-03-10)
+
+
+### Refactors
+
+* move praetor home from ~/.config/praetor to ~/.praetor ([00aea44](https://github.com/opus-domini/praetor/commit/00aea449dcd232a301307324c29c57dbfc2003b4))
+
 ## [0.1.4](https://github.com/opus-domini/praetor/compare/v0.1.3...v0.1.4) (2026-03-10)
 
 
