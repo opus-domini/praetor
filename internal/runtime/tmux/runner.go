@@ -251,8 +251,8 @@ _exit=1
 trap 'printf "%%s" "$_exit" > %s; tmux wait-for -S %s' EXIT
 set -euo pipefail
 
-# Allow nested agent invocations from within Claude Code sessions.
-unset CLAUDECODE
+# Strip nesting-detection variables so spawned agents start normally.
+unset CLAUDECODE CLAUDE_CODE CODEX_SANDBOX
 
 printf '\033[1;34m▸ %%s\033[0m\n' %s
 printf '\033[2m  dir: %%s\033[0m\n\n' %s
