@@ -12,6 +12,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/opus-domini/praetor/internal/domain"
 )
 
 // StreamSource identifies where a stream event originated.
@@ -112,7 +114,7 @@ func (s *scriptSession) Start(ctx context.Context, spec CommandSpec) error {
 	if strings.TrimSpace(spec.Dir) != "" {
 		cmd.Dir = spec.Dir
 	}
-	cmd.Env = cleanEnv(spec.Env)
+	cmd.Env = domain.CleanAgentEnv(spec.Env)
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -331,32 +333,4 @@ func shellQuote(value string) string {
 		return "''"
 	}
 	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
-}
-
-// nestingEnvVars lists environment variables set by AI agent CLI tools to detect
-// nested sessions. Praetor must strip these so spawned agents don't refuse to start.
-var nestingEnvVars = []string{
-	"CLAUDECODE",
-	"CLAUDE_CODE",
-	"CODEX_SANDBOX",
-}
-
-// cleanEnv returns os.Environ() with nesting-detection variables removed and
-// any spec-level overrides appended.
-func cleanEnv(specEnv []string) []string {
-	base := os.Environ()
-	cleaned := make([]string, 0, len(base)+len(specEnv))
-	for _, entry := range base {
-		skip := false
-		for _, prefix := range nestingEnvVars {
-			if strings.HasPrefix(entry, prefix+"=") {
-				skip = true
-				break
-			}
-		}
-		if !skip {
-			cleaned = append(cleaned, entry)
-		}
-	}
-	return append(cleaned, specEnv...)
 }

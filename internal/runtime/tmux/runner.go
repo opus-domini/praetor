@@ -252,7 +252,7 @@ trap 'printf "%%s" "$_exit" > %s; tmux wait-for -S %s' EXIT
 set -euo pipefail
 
 # Strip nesting-detection variables so spawned agents start normally.
-unset CLAUDECODE CLAUDE_CODE CODEX_SANDBOX
+unset %s
 
 printf '\033[1;34m▸ %%s\033[0m\n' %s
 printf '\033[2m  dir: %%s\033[0m\n\n' %s
@@ -263,6 +263,7 @@ printf '\033[2m  dir: %%s\033[0m\n\n' %s
   2> >(tee %s >&2) | tee %s%s
 _exit="${PIPESTATUS[0]}"
 `, ShellQuote(exitFile), ShellQuote(channel),
+		strings.Join(domain.AgentNestingEnvVars, " "),
 		ShellQuote(banner), ShellQuote(dir),
 		envLines,
 		ShellQuote(dir),

@@ -3,10 +3,10 @@ package runner
 import (
 	"context"
 	"errors"
-	"os"
 	"os/exec"
 	"strings"
 
+	"github.com/opus-domini/praetor/internal/domain"
 	ptyruntime "github.com/opus-domini/praetor/internal/runtime/pty"
 )
 
@@ -95,7 +95,7 @@ func runWithoutPTY(ctx context.Context, spec CommandSpec) (CommandResult, error)
 	if strings.TrimSpace(spec.Dir) != "" {
 		cmd.Dir = spec.Dir
 	}
-	cmd.Env = cleanEnv(spec.Env)
+	cmd.Env = domain.CleanAgentEnv(spec.Env)
 	if strings.TrimSpace(spec.Stdin) != "" {
 		cmd.Stdin = strings.NewReader(spec.Stdin)
 	}
@@ -153,34 +153,6 @@ func shouldFallbackToPTY(result CommandResult, err error) bool {
 		}
 	}
 	return false
-}
-
-// nestingEnvVars lists environment variables set by AI agent CLI tools to detect
-// nested sessions. Praetor must strip these so spawned agents don't refuse to start.
-var nestingEnvVars = []string{
-	"CLAUDECODE",    // Claude Code nesting detection
-	"CLAUDE_CODE",   // alternate form
-	"CODEX_SANDBOX", // Codex sandbox marker
-}
-
-// cleanEnv returns os.Environ() with nesting-detection variables removed and
-// any spec-level overrides appended.
-func cleanEnv(specEnv []string) []string {
-	base := os.Environ()
-	cleaned := make([]string, 0, len(base)+len(specEnv))
-	for _, entry := range base {
-		skip := false
-		for _, prefix := range nestingEnvVars {
-			if strings.HasPrefix(entry, prefix+"=") {
-				skip = true
-				break
-			}
-		}
-		if !skip {
-			cleaned = append(cleaned, entry)
-		}
-	}
-	return append(cleaned, specEnv...)
 }
 
 func runWithPTY(ctx context.Context, spec CommandSpec) (CommandResult, error) {

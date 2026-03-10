@@ -167,7 +167,7 @@ func registerPlanTools(s *Server) {
 
 			cmd := exec.Command(binary, cmdArgs...)
 			cmd.Dir = workdir
-			cmd.Env = cleanNestingEnv()
+			cmd.Env = domain.CleanAgentEnv(nil)
 			cmd.Stdin = nil
 			cmd.Stdout = nil
 			cmd.Stderr = nil
@@ -187,27 +187,6 @@ func registerPlanTools(s *Server) {
 			})
 		},
 	)
-}
-
-// cleanNestingEnv returns os.Environ() with agent nesting-detection variables
-// removed so spawned praetor subprocesses can invoke agents normally.
-func cleanNestingEnv() []string {
-	nestingVars := []string{"CLAUDECODE", "CLAUDE_CODE", "CODEX_SANDBOX"}
-	base := os.Environ()
-	cleaned := make([]string, 0, len(base))
-	for _, entry := range base {
-		skip := false
-		for _, prefix := range nestingVars {
-			if strings.HasPrefix(entry, prefix+"=") {
-				skip = true
-				break
-			}
-		}
-		if !skip {
-			cleaned = append(cleaned, entry)
-		}
-	}
-	return cleaned
 }
 
 func resolveStore(defaultDir, overrideDir string) (*state.Store, error) {
